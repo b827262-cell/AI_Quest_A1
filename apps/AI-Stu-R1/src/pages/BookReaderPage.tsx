@@ -288,7 +288,7 @@ export function BookReaderPage() {
   const readerMainRef = useRef<HTMLDivElement>(null);
   const actionBarRef = useRef<HTMLDivElement>(null);
   const pageJumpInputRef = useRef<HTMLInputElement>(null);
-  const touchZoneRef = useRef<HTMLElement>(null);
+  const touchZoneRef = useRef<HTMLDivElement>(null);
   const touchStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const mobileNoticeTimerRef = useRef<number | null>(null);
   const isMobile = viewportWidth <= 768;
@@ -349,24 +349,31 @@ export function BookReaderPage() {
       }
       return;
     }
-    const vv = window.visualViewport;
-    if (!vv) {
+    const rootStyle = root.style;
+    const visualViewport = window.visualViewport;
+
+    if (!visualViewport) {
       root.style.setProperty("--reader-keyboard-bottom", "0px");
       root.style.setProperty("--reader-visual-height", `${window.innerHeight}px`);
       return;
     }
+
     function updateKeyboardMetrics() {
-      const keyboardBottom = Math.max(0, Math.round(window.innerHeight - vv.height));
-      root.style.setProperty("--reader-keyboard-bottom", `${keyboardBottom}px`);
-      root.style.setProperty("--reader-visual-height", `${Math.round(vv.height)}px`);
+      const activeViewport = window.visualViewport;
+      if (!activeViewport) return;
+
+      const keyboardBottom = Math.max(0, Math.round(window.innerHeight - activeViewport.height));
+      rootStyle.setProperty("--reader-keyboard-bottom", `${keyboardBottom}px`);
+      rootStyle.setProperty("--reader-visual-height", `${Math.round(activeViewport.height)}px`);
     }
+
     updateKeyboardMetrics();
-    vv.addEventListener("resize", updateKeyboardMetrics);
-    vv.addEventListener("scroll", updateKeyboardMetrics);
+    visualViewport.addEventListener("resize", updateKeyboardMetrics);
+    visualViewport.addEventListener("scroll", updateKeyboardMetrics);
     window.addEventListener("orientationchange", updateKeyboardMetrics);
     return () => {
-      vv.removeEventListener("resize", updateKeyboardMetrics);
-      vv.removeEventListener("scroll", updateKeyboardMetrics);
+      visualViewport.removeEventListener("resize", updateKeyboardMetrics);
+      visualViewport.removeEventListener("scroll", updateKeyboardMetrics);
       window.removeEventListener("orientationchange", updateKeyboardMetrics);
     };
   }, [isMobile]);
@@ -766,7 +773,7 @@ export function BookReaderPage() {
   }
 
   function toggleMobilePageJumpBar() {
-    if (!book.pdfFileId) return;
+    if (!book?.pdfFileId) return;
     setShowPageJumpBar((current) => !current);
     setShowMobileControls(true);
   }
@@ -831,7 +838,7 @@ export function BookReaderPage() {
   }
 
   function onPdfTouchZonePointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (!isMobile || !book.pdfFileId) return;
+    if (!isMobile || !book?.pdfFileId) return;
     if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
     const target = event.target;
     if (!(target instanceof Element)) return;
@@ -850,7 +857,6 @@ export function BookReaderPage() {
     if (hasIgnoredMobileTouchTarget(target) || hasSelectedText()) {
       return;
     }
-    if (event.pointerType === "mouse" && event.button !== 0) return;
     touchStartRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -863,7 +869,7 @@ export function BookReaderPage() {
     const start = touchStartRef.current;
     touchStartRef.current = null;
 
-    if (!isMobile || !zone || !start || !book.pdfFileId) return;
+    if (!isMobile || !zone || !start || !book?.pdfFileId) return;
     if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
     if (performance.now() - start.t > MOBILE_TOUCH_TAP_DURATION) return;
     const diffX = Math.abs(event.clientX - start.x);
