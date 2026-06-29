@@ -704,14 +704,19 @@ a { color: var(--primary); text-decoration: none; }
 }
 .reader-main > * { min-height: 0; }
 
-/* TOC and right (AI / Notes) panes carry explicit widths; PDF flexes to fill. */
+/* TOC and right (AI / Notes / Progress) panes carry explicit widths; PDF flexes to fill. */
 .reader-toc { flex: 0 0 auto; }
-.reader-chat-col, .reader-notes-col { flex: 0 0 auto; }
+.reader-chat-col, .reader-notes-col, .reader-progress-col { flex: 0 0 auto; }
 .reader-pdf-col { flex: 1 1 0; min-width: 480px; }
 .reader-notes-col {
   background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 14px;
   box-shadow: 0 10px 26px rgba(20, 34, 53, 0.06);
   display: flex; flex-direction: column; overflow-y: auto; padding: 14px;
+}
+.reader-progress-col {
+  background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 10px 26px rgba(20, 34, 53, 0.06);
+  display: flex; flex-direction: column; overflow-y: auto;
 }
 
 /* Draggable split handle between panes. */
@@ -949,7 +954,7 @@ body.reader-resizing { cursor: col-resize; user-select: none; }
   .reader-main { flex-direction: column; height: auto; overflow: visible; }
   /* Stack panes; drag handles and explicit widths do not apply on mobile. */
   .reader-split { display: none; }
-  .reader-toc, .reader-viewport, .reader-pdf-col, .reader-chat-col {
+  .reader-toc, .reader-viewport, .reader-pdf-col, .reader-chat-col, .reader-progress-col {
     height: auto; width: auto !important; flex: 0 0 auto;
   }
   .reader-pdf-col { min-width: 0; }
@@ -989,7 +994,8 @@ body.reader-resizing { cursor: col-resize; user-select: none; }
   .reader-toc,
   .reader-viewport,
   .reader-pdf-col,
-  .reader-chat-col {
+  .reader-chat-col,
+  .reader-progress-col {
     height: auto;
     width: auto !important;
     flex: 0 0 auto;
@@ -1270,6 +1276,67 @@ body.reader-resizing { cursor: col-resize; user-select: none; }
 .pdf-select-info { font-size: 13px; color: var(--text); }
 .pdf-select-info.muted { color: var(--muted); }
 
+/* ── Progress Panel ─────────────────────────────────────────────────────── */
+.progress-panel {
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 14px; min-height: 0;
+}
+.progress-panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.progress-panel-head h4 { margin: 0; }
+.progress-panel-status { margin: 0; padding: 8px 0; }
+.progress-panel-error { display: flex; flex-direction: column; gap: 8px; }
+.progress-panel-body { display: flex; flex-direction: column; gap: 14px; }
+
+/* Progress bar */
+.progress-bar-wrap {
+  display: flex; align-items: center; gap: 10px;
+}
+.progress-bar-track {
+  flex: 1; height: 10px; border-radius: 99px;
+  background: var(--border); overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%; border-radius: 99px;
+  background: linear-gradient(90deg, var(--primary), var(--primary-2));
+  transition: width 0.5s ease;
+}
+.progress-bar-pct {
+  font-size: 13px; font-weight: 700; color: var(--primary);
+  min-width: 38px; text-align: right;
+}
+
+/* Stats table */
+.progress-stats {
+  margin: 0; display: flex; flex-direction: column; gap: 8px;
+}
+.progress-stat-row {
+  display: flex; align-items: baseline; gap: 8px;
+}
+.progress-stat-row dt {
+  font-size: 12px; color: var(--muted);
+  min-width: 76px; flex-shrink: 0;
+}
+.progress-stat-row dd {
+  margin: 0; font-size: 13px; font-weight: 500; color: var(--text);
+}
+.progress-stat-chapter {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
+}
+
+/* Inline success notice */
+.progress-notice {
+  margin: 0; padding: 8px 12px; border-radius: 10px;
+  background: #f0fdf4; color: #166534;
+  border: 1px solid #bbf7d0; font-size: 13px;
+}
+
+/* Action buttons */
+.progress-actions {
+  display: flex; flex-direction: column; gap: 8px;
+}
+
 /* Body state when a mobile reader panel is open. */
 body.reader-mobile-overlay-open {
   overflow: hidden;
@@ -1366,7 +1433,7 @@ body.reader-mobile-overlay-open {
 }
 .reader-mobile-action-buttons {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
 }
 .reader-mobile-page-controls {
@@ -1512,6 +1579,8 @@ body.reader-reading-mobile {
   .pdf-toolbar .tool-ratio { display: none; }
   /* Hide full-width toggle — not meaningful on mobile */
   .pdf-toolbar .tool-btn[title="切換閱讀器滿版 / 一般寬度"] { display: none; }
+  /* Progress toggle hidden in toolbar on mobile — use the bottom action bar "進度" button */
+  .pdf-toolbar .progress-toggle-btn { display: none; }
   /* Compact toolbar padding */
   .pdf-toolbar { padding: 7px 8px; gap: 6px; margin-bottom: 8px; }
 }

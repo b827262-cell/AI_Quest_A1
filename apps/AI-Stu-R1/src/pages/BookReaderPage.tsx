@@ -23,6 +23,7 @@ import {
 import { ProtectedPdfViewer } from "../components/ProtectedPdfViewer";
 import { ChatPanel } from "../components/ChatPanel";
 import { SmartNotesPanel } from "../components/SmartNotesPanel";
+import { ProgressPanel } from "../components/ProgressPanel";
 import { TabPlaceholder } from "../components/TabPlaceholder";
 
 const QUICK_PROMPTS = [
@@ -71,7 +72,7 @@ const MOBILE_TOUCH_IGNORE_SELECTOR = [
   ".reader-note-panel",
   ".text-selection-toolbar"
 ].join(", ");
-type MobileReaderPanel = "toc" | "ai" | "notes";
+type MobileReaderPanel = "toc" | "ai" | "notes" | "progress";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -244,9 +245,9 @@ export function BookReaderPage() {
   const [selectedOutlineId, setSelectedOutlineId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ReaderTabKey>("smart-book");
   const [collapsed, setCollapsed] = useState(false);
-  // The right column shows the AI Q&A panel, the Smart Notes panel, or nothing.
-  // These are mutually exclusive so the PDF grows when both are collapsed.
-  const [rightPanel, setRightPanel] = useState<"ai" | "notes" | null>("ai");
+  // The right column shows the AI Q&A, Smart Notes, or Progress panel — mutually
+  // exclusive so the PDF grows when all are collapsed.
+  const [rightPanel, setRightPanel] = useState<"ai" | "notes" | "progress" | null>("ai");
   const [tocWidth, setTocWidth] = useState(() =>
     readStoredWidth(TOC_WIDTH_KEY, TOC_DEFAULT, TOC_MIN, TOC_MAX)
   );
@@ -284,6 +285,7 @@ export function BookReaderPage() {
   );
   const [mobilePanel, setMobilePanel] = useState<MobileReaderPanel | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
   const outerLayoutRef = useRef<HTMLDivElement>(null);
   const readerMainRef = useRef<HTMLDivElement>(null);
   const actionBarRef = useRef<HTMLDivElement>(null);
@@ -603,6 +605,29 @@ export function BookReaderPage() {
     };
   }, [bookId, book?.pdfFileId]);
 
+  // Debounced auto-save: record page_view 1.5s after each page change.
+  // Fire-and-forget — errors are intentionally suppressed so a backend hiccup
+  // never disrupts reading. Chapter is inferred server-side from the page number.
+  useEffect(() => {
+    if (!pdfSessionId || !book?.pdfFileId) return;
+    if (autoSaveTimerRef.current != null) window.clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      void studentClient
+        .saveBookProgress(
+          bookId,
+          { page: pdfPage, eventType: "page_view", source: "auto_page_change" },
+          pdfSessionId
+        )
+        .catch(() => { /* intentionally silent */ });
+    }, 1500);
+    return () => {
+      if (autoSaveTimerRef.current != null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [pdfPage, pdfSessionId, book?.pdfFileId, bookId]);
+
   if (loading) return <p className="muted reader-state">載入中…</p>;
   if (error) return <p className="error-text reader-state">{error}</p>;
   if (!book) return <p className="muted reader-state">找不到這本書。</p>;
@@ -634,6 +659,7 @@ export function BookReaderPage() {
   const isMobileChatOpen = isMobile ? mobilePanel === "ai" : false;
   const isMobileNotesOpen = isMobile ? mobilePanel === "notes" : false;
   const isMobileTocOpen = isMobile ? mobilePanel === "toc" : false;
+  const isMobileProgressOpen = isMobile ? mobilePanel === "progress" : false;
 
   function openMobilePanel(panel: MobileReaderPanel) {
     if (!isMobile) return;
@@ -993,6 +1019,17 @@ export function BookReaderPage() {
     revealAiPanelWithPrefill(null);
   }
 
+  // Toggle the reading progress panel (desktop right column or mobile sheet).
+  function toggleProgress() {
+    if (isMobile) {
+      setMobilePanel((p) => (p === "progress" ? null : "progress"));
+      setShowMobileControls(true);
+      setShowPageJumpBar(false);
+    } else {
+      setRightPanel((p) => (p === "progress" ? null : "progress"));
+    }
+  }
+
   return (
     <div
       ref={outerLayoutRef}
@@ -1072,6 +1109,8 @@ export function BookReaderPage() {
               onAskAi={scrollToChat}
               selectedText={selectedText}
               onAddToNotes={onToolbarAddToNotes}
+              progressOpen={isMobile ? isMobileProgressOpen : rightPanel === "progress"}
+              onToggleProgress={toggleProgress}
             />
 
             {selectionMode && (
@@ -1243,6 +1282,25 @@ export function BookReaderPage() {
                   />
                 </div>
               )}
+              {!isMobile && rightPanel === "progress" && (
+                <div className="reader-progress-col" style={{ width: aiWidth }}>
+                  {pdfSessionId ? (
+                    <ProgressPanel
+                      bookId={bookId}
+                      sessionId={pdfSessionId}
+                      pdfPage={book.pdfFileId ? pdfPage : null}
+                      pageCount={pageCount}
+                      chapterId={safeActiveChapter}
+                      chapterTitle={activeChapterTitle}
+                      onCollapse={() => setRightPanel(null)}
+                    />
+                  ) : (
+                    <p className="muted progress-panel-status">
+                      等待閱讀工作階段建立中…
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {isMobileTocOpen ? (
@@ -1331,6 +1389,45 @@ export function BookReaderPage() {
                       refreshKey={notesRefreshKey}
                       compact
                     />
+                  </div>
+                </aside>
+              </div>
+            ) : null}
+
+            {isMobileProgressOpen ? (
+              <div className="reader-mobile-overlay" onClick={closeMobilePanel}>
+                <aside
+                  className="reader-mobile-sheet reader-mobile-progress"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="閱讀進度"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="reader-mobile-sheet-head">
+                    <h4>閱讀進度</h4>
+                    <button
+                      type="button"
+                      className="reader-mobile-close"
+                      onClick={closeMobilePanel}
+                    >
+                      關閉
+                    </button>
+                  </div>
+                  <div className="reader-mobile-sheet-body">
+                    {pdfSessionId ? (
+                      <ProgressPanel
+                        bookId={bookId}
+                        sessionId={pdfSessionId}
+                        pdfPage={book.pdfFileId ? pdfPage : null}
+                        pageCount={pageCount}
+                        chapterId={safeActiveChapter}
+                        chapterTitle={activeChapterTitle}
+                      />
+                    ) : (
+                      <p className="muted progress-panel-status">
+                        等待閱讀工作階段建立中…
+                      </p>
+                    )}
                   </div>
                 </aside>
               </div>
@@ -1426,6 +1523,13 @@ export function BookReaderPage() {
               onClick={() => openMobilePanel("notes")}
             >
               筆記
+            </button>
+            <button
+              type="button"
+              className={`reader-mobile-action-btn ${isMobileProgressOpen ? "active" : ""}`}
+              onClick={toggleProgress}
+            >
+              進度
             </button>
           </div>
         </div>

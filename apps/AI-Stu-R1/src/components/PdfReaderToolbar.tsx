@@ -60,7 +60,9 @@ export function PdfReaderToolbar({
   onNextPage,
   onAskAi,
   selectedText,
-  onAddToNotes
+  onAddToNotes,
+  progressOpen,
+  onToggleProgress
 }: {
   outlineNodes: ReaderOutlineNode[];
   activeNodeId: string | null;
@@ -89,6 +91,10 @@ export function PdfReaderToolbar({
   selectedText?: string;
   /** Called when the user clicks Add-to-Notes. Parent decides to save selection or open notes panel. */
   onAddToNotes: () => void;
+  /** Whether the progress panel is currently open. */
+  progressOpen: boolean;
+  /** Toggle the reading progress panel. */
+  onToggleProgress: () => void;
 }) {
   const hasPdf = page != null;
   const atFirst = page == null || page <= 1;
@@ -260,13 +266,13 @@ export function PdfReaderToolbar({
         知識點
       </button>
 
-      {/* TODO: Reading Progress — needs progress persistence endpoint
-          Planned: POST /api/student/books/:bookId/progress { page, chapterId } */}
+      {/* Reading progress toggle — opens the progress panel / bottom sheet */}
       <button
         type="button"
-        className="tool-btn tool-btn-placeholder"
-        disabled
-        title="進度記錄：即將推出（需後端進度 API）"
+        className={`tool-btn progress-toggle-btn ${progressOpen ? "active" : ""}`}
+        onClick={onToggleProgress}
+        title="閱讀進度：標記本頁 / 章完成，查看完成百分比"
+        disabled={!hasPdf}
       >
         進度
       </button>

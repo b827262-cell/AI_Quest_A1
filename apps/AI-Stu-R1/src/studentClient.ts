@@ -27,11 +27,52 @@ export interface ChatResponse {
   messages: ChatMessage[];
 }
 
+export type ReaderProgressEventType = "page_view" | "page_complete" | "chapter_complete" | "note_captured";
+export type ReaderActionType = "current_page" | "current_chapter" | "note_captured";
+
+export interface ReaderProgressSummary {
+  bookId: string;
+  currentPage: number | null;
+  currentChapterId: string | null;
+  completedPagesCount: number;
+  completedChapterIds: string[];
+  completionPercentage: number | null;
+  updatedAt: string | null;
+}
+
+export interface SaveReaderProgressPayload {
+  page?: number;
+  chapterId?: string;
+  eventType?: ReaderProgressEventType;
+  source?: string;
+}
+
+export interface CompleteReaderActionPayload {
+  actionType: ReaderActionType;
+  page?: number;
+  chapterId?: string;
+  source?: string;
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
     ...init
   });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error || `${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as T;
+}
+
+async function httpWithSession<T>(path: string, sessionId: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers as HeadersInit | undefined);
+  headers.set("X-Student-Session-Id", sessionId);
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(data.error || `${res.status} ${res.statusText}`);
@@ -111,5 +152,28 @@ export const studentClient = {
   deleteNote: (bookId: string, noteId: string) =>
     http<{ deleted: boolean }>(`/api/student/books/${bookId}/notes/${noteId}`, {
       method: "DELETE"
-    })
+    }),
+
+  getBookProgressSummary: (bookId: string, sessionId: string) =>
+    httpWithSession<ReaderProgressSummary>(`/api/student/books/${bookId}/progress-summary`, sessionId),
+
+  saveBookProgress: (bookId: string, payload: SaveReaderProgressPayload, sessionId: string) =>
+    httpWithSession<ReaderProgressSummary>(
+      `/api/student/books/${bookId}/progress`,
+      sessionId,
+      {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }
+    ),
+
+  completeReaderAction: (bookId: string, payload: CompleteReaderActionPayload, sessionId: string) =>
+    httpWithSession<ReaderProgressSummary>(
+      `/api/student/books/${bookId}/reader-actions/complete`,
+      sessionId,
+      {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }
+    )
 };
