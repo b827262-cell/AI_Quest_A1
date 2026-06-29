@@ -1,10 +1,10 @@
 import type { Book, BookContent } from "@ai-smartbook/schema";
-import type { StudentBookDetail, StudentDataSource } from "./dataSource";
+import type { StudentBookDetail, StudentBookPdfFile, StudentDataSource } from "./dataSource";
 
 /**
  * Data source for the `remote-api` runtime mode. It proxies the admin
- * (AI-adm-D1) API. This is a thin placeholder for a future deployment where
- * the student frontend talks to a central server instead of a local SQLite.
+ * (AI-adm-D1) student API so the returned book shape matches the student UI
+ * contract, including pdfFileId/pdfFileName.
  */
 export class RemoteDataSource implements StudentDataSource {
   private readonly baseUrl: string;
@@ -21,13 +21,14 @@ export class RemoteDataSource implements StudentDataSource {
   }
 
   async listBooks(): Promise<Book[]> {
-    const data = await this.get<{ books: Book[] }>("/api/admin/books");
+    const data = await this.get<{ books: Book[] }>("/api/student/books");
     return data.books.filter((b) => b.status === "published");
   }
 
   async getBook(bookId: string): Promise<StudentBookDetail | null> {
     try {
-      return await this.get<StudentBookDetail>(`/api/admin/books/${bookId}`);
+      const data = await this.get<{ book: StudentBookDetail }>(`/api/student/books/${bookId}`);
+      return data.book;
     } catch {
       return null;
     }
@@ -35,8 +36,14 @@ export class RemoteDataSource implements StudentDataSource {
 
   async getContents(bookId: string): Promise<BookContent[]> {
     const data = await this.get<{ contents: BookContent[] }>(
-      `/api/admin/books/${bookId}/contents`
+      `/api/student/books/${bookId}/contents`
     );
     return data.contents;
+  }
+
+  async getPdfFile(_bookId: string, _fileId: string): Promise<StudentBookPdfFile | null> {
+    // Remote PDF streaming is handled by the central admin/student API. The
+    // local standalone server cannot safely map a remote file id to a disk path.
+    return null;
   }
 }
