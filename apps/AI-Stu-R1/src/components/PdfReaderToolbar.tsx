@@ -62,7 +62,9 @@ export function PdfReaderToolbar({
   selectedText,
   onAddToNotes,
   progressOpen,
-  onToggleProgress
+  onToggleProgress,
+  gridOpen,
+  onToggleGrid
 }: {
   outlineNodes: ReaderOutlineNode[];
   activeNodeId: string | null;
@@ -95,6 +97,10 @@ export function PdfReaderToolbar({
   progressOpen: boolean;
   /** Toggle the reading progress panel. */
   onToggleProgress: () => void;
+  /** Whether the 5×5 learning grid panel is currently open. */
+  gridOpen: boolean;
+  /** Toggle the 5×5 learning grid panel. */
+  onToggleGrid: () => void;
 }) {
   const hasPdf = page != null;
   const atFirst = page == null || page <= 1;
@@ -264,6 +270,17 @@ export function PdfReaderToolbar({
         title="知識點：即將推出（需後端知識點 API）"
       >
         知識點
+      </button>
+
+      {/* 5×5 Learning Grid — visual overview of knowledge point completion */}
+      <button
+        type="button"
+        className={`tool-btn grid-toggle-btn${gridOpen ? " active" : ""}`}
+        onClick={onToggleGrid}
+        title="5×5 學習格：視覺化知識點掌握進度"
+        disabled={!hasPdf}
+      >
+        5×5
       </button>
 
       {/* Reading progress toggle — opens the progress panel / bottom sheet */}

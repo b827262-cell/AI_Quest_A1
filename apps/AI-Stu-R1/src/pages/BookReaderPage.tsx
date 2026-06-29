@@ -24,6 +24,7 @@ import { ProtectedPdfViewer } from "../components/ProtectedPdfViewer";
 import { ChatPanel } from "../components/ChatPanel";
 import { SmartNotesPanel } from "../components/SmartNotesPanel";
 import { ProgressPanel } from "../components/ProgressPanel";
+import { LearningGridPanel } from "../components/LearningGridPanel";
 import { TabPlaceholder } from "../components/TabPlaceholder";
 
 const QUICK_PROMPTS = [
@@ -72,7 +73,7 @@ const MOBILE_TOUCH_IGNORE_SELECTOR = [
   ".reader-note-panel",
   ".text-selection-toolbar"
 ].join(", ");
-type MobileReaderPanel = "toc" | "ai" | "notes" | "progress";
+type MobileReaderPanel = "toc" | "ai" | "notes" | "progress" | "grid";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -247,7 +248,7 @@ export function BookReaderPage() {
   const [collapsed, setCollapsed] = useState(false);
   // The right column shows the AI Q&A, Smart Notes, or Progress panel — mutually
   // exclusive so the PDF grows when all are collapsed.
-  const [rightPanel, setRightPanel] = useState<"ai" | "notes" | "progress" | null>("ai");
+  const [rightPanel, setRightPanel] = useState<"ai" | "notes" | "progress" | "grid" | null>("ai");
   const [tocWidth, setTocWidth] = useState(() =>
     readStoredWidth(TOC_WIDTH_KEY, TOC_DEFAULT, TOC_MIN, TOC_MAX)
   );
@@ -660,6 +661,7 @@ export function BookReaderPage() {
   const isMobileNotesOpen = isMobile ? mobilePanel === "notes" : false;
   const isMobileTocOpen = isMobile ? mobilePanel === "toc" : false;
   const isMobileProgressOpen = isMobile ? mobilePanel === "progress" : false;
+  const isMobileGridOpen = isMobile ? mobilePanel === "grid" : false;
 
   function openMobilePanel(panel: MobileReaderPanel) {
     if (!isMobile) return;
@@ -1030,6 +1032,17 @@ export function BookReaderPage() {
     }
   }
 
+  // Toggle the 5×5 learning grid panel (desktop right column or mobile sheet).
+  function toggleGrid() {
+    if (isMobile) {
+      setMobilePanel((p) => (p === "grid" ? null : "grid"));
+      setShowMobileControls(true);
+      setShowPageJumpBar(false);
+    } else {
+      setRightPanel((p) => (p === "grid" ? null : "grid"));
+    }
+  }
+
   return (
     <div
       ref={outerLayoutRef}
@@ -1111,6 +1124,8 @@ export function BookReaderPage() {
               onAddToNotes={onToolbarAddToNotes}
               progressOpen={isMobile ? isMobileProgressOpen : rightPanel === "progress"}
               onToggleProgress={toggleProgress}
+              gridOpen={isMobile ? isMobileGridOpen : rightPanel === "grid"}
+              onToggleGrid={toggleGrid}
             />
 
             {selectionMode && (
@@ -1301,6 +1316,24 @@ export function BookReaderPage() {
                   )}
                 </div>
               )}
+              {!isMobile && rightPanel === "grid" && (
+                <div className="reader-grid-col" style={{ width: aiWidth }}>
+                  {pdfSessionId ? (
+                    <LearningGridPanel
+                      bookId={bookId}
+                      sessionId={pdfSessionId}
+                      chapterId={safeActiveChapter}
+                      chapterTitle={activeChapterTitle}
+                      onJumpToPage={jumpToPage}
+                      onCollapse={() => setRightPanel(null)}
+                    />
+                  ) : (
+                    <p className="muted learning-grid-status">
+                      等待閱讀工作階段建立中…
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {isMobileTocOpen ? (
@@ -1432,6 +1465,47 @@ export function BookReaderPage() {
                 </aside>
               </div>
             ) : null}
+
+            {isMobileGridOpen ? (
+              <div className="reader-mobile-overlay" onClick={closeMobilePanel}>
+                <aside
+                  className="reader-mobile-sheet reader-mobile-grid"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="5×5 學習格"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="reader-mobile-sheet-head">
+                    <h4>5×5 學習格</h4>
+                    <button
+                      type="button"
+                      className="reader-mobile-close"
+                      onClick={closeMobilePanel}
+                    >
+                      關閉
+                    </button>
+                  </div>
+                  <div className="reader-mobile-sheet-body">
+                    {pdfSessionId ? (
+                      <LearningGridPanel
+                        bookId={bookId}
+                        sessionId={pdfSessionId}
+                        chapterId={safeActiveChapter}
+                        chapterTitle={activeChapterTitle}
+                        onJumpToPage={(page) => {
+                          jumpToPage(page);
+                          closeMobilePanel();
+                        }}
+                      />
+                    ) : (
+                      <p className="muted learning-grid-status">
+                        等待閱讀工作階段建立中…
+                      </p>
+                    )}
+                  </div>
+                </aside>
+              </div>
+            ) : null}
           </>
         ) : (
           <TabPlaceholder label={READER_TABS.find((t) => t.key === activeTab)?.label ?? ""} />
@@ -1530,6 +1604,13 @@ export function BookReaderPage() {
               onClick={toggleProgress}
             >
               進度
+            </button>
+            <button
+              type="button"
+              className={`reader-mobile-action-btn ${isMobileGridOpen ? "active" : ""}`}
+              onClick={toggleGrid}
+            >
+              5×5
             </button>
           </div>
         </div>
