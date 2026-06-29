@@ -2432,7 +2432,7 @@ app.post("/api/student/books/:bookId/reader-actions/complete", (req, res) => {
     source: parsed.data.source?.trim() || READER_PROGRESS_SOURCE_DEFAULT,
     eventType:
       parsed.data.actionType === "current_page"
-        ? "page_view"
+        ? "page_complete"
         : parsed.data.actionType === "current_chapter"
           ? "chapter_complete"
           : "note_captured"
