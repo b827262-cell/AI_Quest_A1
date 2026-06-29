@@ -8,6 +8,8 @@ export interface StudentRuntimeConfig {
   publicDir: string;
   readonlyMode: boolean;
   chatMode: StudentChatMode;
+  /** Root directory containing per-book PDF uploads. */
+  uploadDir: string;
   /** Base URL of the admin API, used only in remote-api mode. */
   remoteApiBaseUrl?: string;
 }
@@ -22,6 +24,7 @@ export function loadStudentRuntimeConfig(
     publicDir: env.STU_PUBLIC_DIR || "/opt/AI-Stu-R1/dist",
     readonlyMode: env.STU_READONLY_MODE !== "false",
     chatMode: (env.STU_CHAT_MODE as StudentChatMode) || "keyword",
+    uploadDir: env.STU_UPLOAD_DIR || env.UPLOAD_DIR || "/opt/AI-Stu-R1/uploads/books",
     remoteApiBaseUrl: env.STU_REMOTE_API_BASE_URL || undefined
   };
 }
