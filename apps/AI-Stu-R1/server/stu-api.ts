@@ -1,15 +1,21 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import express, { type Response } from "express";
+import { randomUUID } from "node:crypto";
+import { basename, isAbsolute, resolve } from "node:path";
+import express, { type Request, type Response } from "express";
 import {
   loadStudentRuntimeConfig,
   createDataSource,
   keywordChat,
+  type StudentBookPdfFile,
   type StudentDataSource
 } from "@ai-smartbook/student-runtime";
-import { chatRequestSchema } from "@ai-smartbook/schema";
+import { studentChatRequestSchema } from "@ai-smartbook/schema";
 
 const config = loadStudentRuntimeConfig();
+
+type PdfSession = { id: string; bookId: string; lastSeenAt: number };
+const pdfSessions = new Map<string, PdfSession>();
+const PDF_SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 8;
 
 // Build the data source defensively: a missing/unopenable SQLite file (e.g.
 // the student.db has not been synced yet) must not crash the server. We keep
@@ -36,6 +42,64 @@ function requireDataSource(res: Response): StudentDataSource | null {
     return null;
   }
   return dataSource;
+}
+
+function cleanupPdfSessions(): void {
+  const now = Date.now();
+  for (const [id, session] of pdfSessions) {
+    if (now - session.lastSeenAt > PDF_SESSION_MAX_AGE_MS) pdfSessions.delete(id);
+  }
+}
+
+function createPdfSession(bookId: string): PdfSession {
+  cleanupPdfSessions();
+  const session = { id: `stu-${randomUUID()}`, bookId, lastSeenAt: Date.now() };
+  pdfSessions.set(session.id, session);
+  return session;
+}
+
+function resolvePdfSession(req: Request, bookId: string): PdfSession | null {
+  cleanupPdfSessions();
+  const raw = req.header("X-Student-Session-Id") || "";
+  const session = pdfSessions.get(raw);
+  if (!session || session.bookId !== bookId) return null;
+  session.lastSeenAt = Date.now();
+  return session;
+}
+
+function isPdfFile(file: StudentBookPdfFile): boolean {
+  return (
+    file.role === "source_document" &&
+    (file.fileType === "application/pdf" || file.fileName.toLowerCase().endsWith(".pdf"))
+  );
+}
+
+function candidatePdfPaths(file: StudentBookPdfFile): string[] {
+  const candidates = new Set<string>();
+  const stored = file.filePath;
+  const normalized = stored.replace(/\\/g, "/");
+  const safeBaseName = basename(normalized);
+
+  if (isAbsolute(stored)) candidates.add(stored);
+  candidates.add(resolve(stored));
+  candidates.add(resolve(config.uploadDir, file.bookId, safeBaseName));
+
+  const marker = `/uploads/books/${file.bookId}/`;
+  const markerIndex = normalized.lastIndexOf(marker);
+  if (markerIndex >= 0) {
+    const relativeTail = normalized.slice(markerIndex + marker.length);
+    candidates.add(resolve(config.uploadDir, file.bookId, relativeTail));
+  }
+
+  return [...candidates];
+}
+
+function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null; checkedPaths: string[] } {
+  const checkedPaths = candidatePdfPaths(file);
+  for (const path of checkedPaths) {
+    if (existsSync(path)) return { path, checkedPaths };
+  }
+  return { path: null, checkedPaths };
 }
 
 const app = express();
@@ -76,19 +140,90 @@ app.get("/api/student/books/:bookId/contents", async (req, res) => {
   }
 });
 
+app.post("/api/student/books/:bookId/session", async (req, res) => {
+  const ds = requireDataSource(res);
+  if (!ds) return;
+  const bookId = String(req.params.bookId);
+  try {
+    const book = await ds.getBook(bookId);
+    if (!book) return res.status(404).json({ error: "book not found" });
+
+    const requested = typeof req.body?.sessionId === "string" ? req.body.sessionId.trim() : "";
+    const existing = requested ? pdfSessions.get(requested) : null;
+    if (existing && existing.bookId === bookId) {
+      existing.lastSeenAt = Date.now();
+      return res.json({ sessionId: existing.id });
+    }
+
+    const session = createPdfSession(bookId);
+    res.json({ sessionId: session.id });
+  } catch (err) {
+    res.status(503).json({ error: "failed to create reader session", detail: String(err) });
+  }
+});
+
+app.get("/api/student/books/:bookId/files/:fileId/pdf-view", async (req, res) => {
+  const ds = requireDataSource(res);
+  if (!ds) return;
+  const bookId = String(req.params.bookId);
+  const fileId = String(req.params.fileId);
+
+  try {
+    const book = await ds.getBook(bookId);
+    if (!book) return res.status(404).json({ error: "book not found" });
+
+    if (!resolvePdfSession(req, bookId)) return res.status(401).json({ error: "invalid session" });
+
+    const file = await ds.getPdfFile(bookId, fileId);
+    if (!file) return res.status(404).json({ error: "file not found" });
+    if (!isPdfFile(file)) return res.status(400).json({ error: "file is not a PDF source document" });
+
+    const resolved = resolveExistingPdfPath(file);
+    if (!resolved.path) {
+      return res.status(404).json({
+        error: "PDF file not found on disk",
+        fileId: file.id,
+        fileName: file.fileName,
+        filePath: file.filePath,
+        uploadDir: config.uploadDir,
+        checkedPaths: resolved.checkedPaths
+      });
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'inline; filename="reader.pdf"');
+    res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.sendFile(resolved.path);
+  } catch (err) {
+    res.status(503).json({ error: "failed to stream pdf", detail: String(err) });
+  }
+});
+
 app.post("/api/student/books/:bookId/chat", async (req, res) => {
   const ds = requireDataSource(res);
   if (!ds) return;
-  const parsed = chatRequestSchema.safeParse(req.body);
+  const parsed = studentChatRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+  const question = parsed.data.message ?? parsed.data.question ?? "";
+  if (!question.trim()) return res.status(400).json({ error: "message is required" });
 
   try {
     const bookId = String(req.params.bookId);
     const contents = await ds.getContents(bookId);
 
     // 1GB sqlite-api mode uses local keyword retrieval — no external AI call.
-    const { answer, matchedContentIds } = keywordChat(parsed.data.question, contents);
-    res.json({ answer, matchedContentIds, chatMode: config.chatMode });
+    const { answer, matchedContentIds } = keywordChat(question, contents);
+    const sessionId = parsed.data.sessionId || `chat-${bookId}`;
+    res.json({
+      sessionId,
+      answer,
+      matchedContentIds,
+      chatMode: config.chatMode,
+      messages: []
+    });
   } catch (err) {
     res.status(503).json({ error: "failed to answer chat", detail: String(err) });
   }
