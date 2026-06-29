@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import type { Book, BookChapter, BookContent } from "@ai-smartbook/schema";
-import type { StudentBookDetail, StudentDataSource } from "./dataSource";
+import type { StudentBookDetail, StudentBookPdfFile, StudentDataSource } from "./dataSource";
 
 interface BookRow {
   id: string;
@@ -24,6 +24,8 @@ interface ChapterRow {
   order_index: number;
   page_start: number | null;
   page_end: number | null;
+  level?: number | null;
+  source?: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -37,6 +39,17 @@ interface ContentRow {
   page_number: number | null;
   content_text: string;
   order_index: number;
+  created_at: string;
+}
+
+interface BookFileRow {
+  id: string;
+  book_id: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+  file_size: number;
+  role: string;
   created_at: string;
 }
 
@@ -63,8 +76,8 @@ function toChapter(r: ChapterRow): BookChapter {
     orderIndex: r.order_index,
     pageStart: r.page_start,
     pageEnd: r.page_end,
-    level: 0,
-    source: "manual",
+    level: r.level ?? 0,
+    source: (r.source ?? "manual") as BookChapter["source"],
     status: r.status as BookChapter["status"],
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -81,6 +94,18 @@ function toContent(r: ContentRow): BookContent {
     contentText: r.content_text,
     orderIndex: r.order_index,
     createdAt: r.created_at
+  };
+}
+
+function toPdfFile(r: BookFileRow): StudentBookPdfFile {
+  return {
+    id: r.id,
+    bookId: r.book_id,
+    fileName: r.file_name,
+    filePath: r.file_path,
+    fileType: r.file_type,
+    fileSize: r.file_size,
+    role: r.role
   };
 }
 
@@ -112,6 +137,21 @@ export class SqliteDataSource implements StudentDataSource {
     }
   }
 
+  private findPrimaryPdfFile(bookId: string): StudentBookPdfFile | null {
+    const row = this.db
+      .prepare(
+        `SELECT *
+         FROM book_files
+         WHERE book_id = ?
+           AND role = 'source_document'
+           AND (file_type = 'application/pdf' OR lower(file_name) LIKE '%.pdf')
+         ORDER BY created_at DESC
+         LIMIT 1`
+      )
+      .get(bookId) as BookFileRow | undefined;
+    return row ? toPdfFile(row) : null;
+  }
+
   async listBooks(): Promise<Book[]> {
     const rows = this.db
       .prepare("SELECT * FROM books WHERE status = 'published' ORDER BY created_at DESC")
@@ -129,7 +169,13 @@ export class SqliteDataSource implements StudentDataSource {
         .prepare("SELECT * FROM book_chapters WHERE book_id = ? ORDER BY order_index ASC")
         .all(bookId) as ChapterRow[]
     ).map(toChapter);
-    return { ...toBook(row), chapters };
+    const pdfFile = this.findPrimaryPdfFile(bookId);
+    return {
+      ...toBook(row),
+      chapters,
+      pdfFileId: pdfFile?.id ?? null,
+      pdfFileName: pdfFile?.fileName ?? null
+    };
   }
 
   async getContents(bookId: string): Promise<BookContent[]> {
@@ -137,6 +183,21 @@ export class SqliteDataSource implements StudentDataSource {
       .prepare("SELECT * FROM book_contents WHERE book_id = ? ORDER BY order_index ASC")
       .all(bookId) as ContentRow[];
     return rows.map(toContent);
+  }
+
+  async getPdfFile(bookId: string, fileId: string): Promise<StudentBookPdfFile | null> {
+    const row = this.db
+      .prepare(
+        `SELECT *
+         FROM book_files
+         WHERE id = ?
+           AND book_id = ?
+           AND role = 'source_document'
+           AND (file_type = 'application/pdf' OR lower(file_name) LIKE '%.pdf')
+         LIMIT 1`
+      )
+      .get(fileId, bookId) as BookFileRow | undefined;
+    return row ? toPdfFile(row) : null;
   }
 
   close(): void {
