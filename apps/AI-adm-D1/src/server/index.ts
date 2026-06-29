@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { resolve } from "node:path";
 import express, { type Request, type Response } from "express";
 import multer from "multer";
+import { z } from "zod";
 import { getDb, createRepositories, runMigrations, resolveDbPath } from "@ai-smartbook/db";
 import { createAiProvider } from "@ai-smartbook/ai";
 import {
@@ -67,11 +68,49 @@ const repos = createRepositories(db);
 const ai = createAiProvider();
 const ctx: BookCoreContext = { repos, ai };
 
-const UPLOAD_ROOT = resolve(process.env.UPLOAD_DIR || "./uploads/books");
+const UPLOAD_ROOT = resolve(process.env.UPLOAD_DIR || resolve("./uploads", "books"));
 const JSON_INDEX_ROLE = "json_index" as const;
 const READER_TOC_ROLE = "reader_toc" as const;
 const READER_TOC_SCHEMA_VERSION = "smartbook-reader-toc-v1";
 const READER_TOC_SOURCE = "manual_admin_import" as const;
+const READER_PROGRESS_SETTING_PREFIX = "reader-progress-v1";
+const READER_PROGRESS_SOURCE_DEFAULT = "reader_toolbar";
+
+const readerProgressRequestSchema = z.object({
+  page: z.number().int().positive().optional(),
+  chapterId: z.string().trim().min(1).optional(),
+  eventType: z
+    .enum(["page_view", "page_complete", "chapter_complete", "note_captured"])
+    .default("page_view"),
+  source: z.string().trim().min(1).max(64).optional()
+});
+
+const readerActionCompleteRequestSchema = z.object({
+  page: z.number().int().positive().optional(),
+  chapterId: z.string().trim().min(1).optional(),
+  actionType: z.enum(["current_page", "current_chapter", "note_captured"]),
+  source: z.string().trim().min(1).max(64).optional()
+});
+
+type ReaderProgressEventType = z.infer<typeof readerProgressRequestSchema>["eventType"];
+type ReaderProgressState = {
+  currentPage: number | null;
+  currentChapterId: string | null;
+  completedPages: number[];
+  completedChapters: string[];
+  updatedAt: string | null;
+  lastEventType: ReaderProgressEventType | null;
+};
+
+type ReaderProgressSummary = {
+  bookId: string;
+  currentPage: number | null;
+  currentChapterId: string | null;
+  completedPagesCount: number;
+  completedChapterIds: string[];
+  completionPercentage: number | null;
+  updatedAt: string | null;
+};
 
 function decodeUploadFileName(name: string): string {
   try {
@@ -922,18 +961,218 @@ function findPrimaryPdfSourceFile(bookId: string): BookFile | null {
   );
 }
 
+function toPositiveInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function dedupeSortedNumbers(values: Array<number | null | undefined>): number[] {
+  const set = new Set<number>();
+  for (const value of values) {
+    const n = toPositiveInt(value);
+    if (n !== null) set.add(n);
+  }
+  return [...set].sort((a, b) => a - b);
+}
+
+function distinctStringValues(values: Array<string | null | undefined>): string[] {
+  const set = new Set<string>();
+  for (const value of values) {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) set.add(trimmed);
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+function progressSettingKey(bookId: string, sessionId: string) {
+  return `${READER_PROGRESS_SETTING_PREFIX}:${bookId}:${sessionId}`;
+}
+
+function readReaderProgressState(bookId: string, sessionId: string): ReaderProgressState {
+  const raw = repos.settings.get(progressSettingKey(bookId, sessionId));
+  if (!raw) {
+    return {
+      currentPage: null,
+      currentChapterId: null,
+      completedPages: [],
+      completedChapters: [],
+      updatedAt: null,
+      lastEventType: null
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<ReaderProgressState>;
+    return {
+      currentPage: toPositiveInt(parsed.currentPage),
+      currentChapterId:
+        typeof parsed.currentChapterId === "string" && parsed.currentChapterId.trim()
+          ? parsed.currentChapterId.trim()
+          : null,
+      completedPages: dedupeSortedNumbers(Array.isArray(parsed.completedPages) ? parsed.completedPages : []),
+      completedChapters: distinctStringValues(Array.isArray(parsed.completedChapters) ? parsed.completedChapters : []),
+      updatedAt: typeof parsed.updatedAt === "string" && parsed.updatedAt.trim() ? parsed.updatedAt : null,
+      lastEventType:
+        parsed.lastEventType === "page_view" ||
+        parsed.lastEventType === "page_complete" ||
+        parsed.lastEventType === "chapter_complete" ||
+        parsed.lastEventType === "note_captured"
+          ? parsed.lastEventType
+          : null
+    };
+  } catch {
+    return {
+      currentPage: null,
+      currentChapterId: null,
+      completedPages: [],
+      completedChapters: [],
+      updatedAt: null,
+      lastEventType: null
+    };
+  }
+}
+
+function writeReaderProgressState(bookId: string, sessionId: string, state: ReaderProgressState): void {
+  repos.settings.set(progressSettingKey(bookId, sessionId), JSON.stringify(state));
+}
+
+function getChapterByIdOrNull(bookId: string, chapterId: string | null): { id: string } | null {
+  if (!chapterId) return null;
+  const chapter = repos.chapters.findById(chapterId);
+  return chapter && chapter.bookId === bookId ? { id: chapter.id } : null;
+}
+
+function inferChapterByPage(bookId: string, page: number | null): string | null {
+  if (!page) return null;
+  for (const chapter of repos.chapters.findByBookId(bookId)) {
+    if (!chapter.pageStart || !chapter.pageEnd) continue;
+    if (page >= chapter.pageStart && page <= chapter.pageEnd) return chapter.id;
+  }
+  return null;
+}
+
+function markCompletedPages(state: ReaderProgressState, pages: number[]): ReaderProgressState {
+  return {
+    ...state,
+    completedPages: dedupeSortedNumbers([...state.completedPages, ...pages]),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function markChapterComplete(
+  bookId: string,
+  state: ReaderProgressState,
+  chapterId: string,
+  currentPage: number | null
+): ReaderProgressState {
+  const chapter = repos.chapters.findById(chapterId);
+  if (!chapter || chapter.bookId !== bookId) return state;
+  const nextChapters = distinctStringValues([...state.completedChapters, chapter.id]);
+  const completedPages = [...state.completedPages];
+
+  if (typeof chapter.pageStart === "number" && typeof chapter.pageEnd === "number") {
+    const start = Math.max(1, Math.min(chapter.pageStart, chapter.pageEnd));
+    const end = Math.max(chapter.pageStart, chapter.pageEnd);
+    for (let page = start; page <= end; page += 1) {
+      completedPages.push(page);
+    }
+  }
+
+  return {
+    ...state,
+    currentChapterId: chapter.id,
+    currentPage: currentPage || state.currentPage,
+    completedPages: dedupeSortedNumbers(completedPages),
+    completedChapters: nextChapters,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function estimateTotalPages(bookId: string): number | null {
+  const pages = repos.contents
+    .findByBookId(bookId)
+    .map((c) => c.pageNumber)
+    .map(toPositiveInt)
+    .filter((p): p is number => p !== null);
+
+  const chapterEnds = repos
+    .chapters
+    .findByBookId(bookId)
+    .map((c) => toPositiveInt(c.pageEnd))
+    .filter((p): p is number => p !== null);
+
+  const all = [...pages, ...chapterEnds];
+  if (all.length === 0) return null;
+  return Math.max(...all);
+}
+
+function summarizeReaderProgress(book: { id: string }, sessionId: string): ReaderProgressSummary {
+  const state = readReaderProgressState(book.id, sessionId);
+  const completedCount = state.completedPages.length;
+  const inferredChapter = state.currentPage ? inferChapterByPage(book.id, state.currentPage) : null;
+  const currentChapterId = state.currentChapterId || inferredChapter;
+  const totalPages = estimateTotalPages(book.id);
+  const completionPercentage =
+    totalPages && totalPages > 0 ? Math.round((completedCount / totalPages) * 100) : null;
+
+  return {
+    bookId: book.id,
+    currentPage: state.currentPage,
+    currentChapterId,
+    completedPagesCount: completedCount,
+    completedChapterIds: state.completedChapters,
+    completionPercentage,
+    updatedAt: state.updatedAt
+  };
+}
+
+function applyReaderProgressEvent(
+  book: { id: string },
+  state: ReaderProgressState,
+  event: z.infer<typeof readerProgressRequestSchema>
+): ReaderProgressState {
+  const chapter = getChapterByIdOrNull(book.id, event.chapterId || null);
+  if (event.eventType === "chapter_complete" && !chapter) {
+    return state;
+  }
+
+  const next: ReaderProgressState = {
+    ...state,
+    currentPage: toPositiveInt(event.page) ?? state.currentPage,
+    currentChapterId: chapter ? chapter.id : state.currentChapterId,
+    lastEventType: event.eventType,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (next.currentPage != null && !next.currentChapterId) {
+    next.currentChapterId = inferChapterByPage(book.id, next.currentPage);
+  }
+
+  if (event.eventType === "page_complete" && next.currentPage != null) {
+    return markCompletedPages(next, [next.currentPage]);
+  }
+
+  if (event.eventType === "note_captured" && next.currentPage != null) {
+    return markCompletedPages(next, [next.currentPage]);
+  }
+
+  if (event.eventType === "chapter_complete" && chapter) {
+    return markChapterComplete(book.id, next, chapter.id, next.currentPage);
+  }
+
+  return next;
+}
+
 function resolveStudentSessionId(req: Request): string | null {
-  const fromHeader = headerValue(req, "x-student-session-id").trim();
-  if (fromHeader) return fromHeader;
-  const fromQuery = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
-  return fromQuery || null;
+  return headerValue(req, "x-student-session-id").trim() || null;
 }
 
 function resolveStudentSession(
   req: Request,
   res: Response,
   bookId: string,
-  options: { allowCreate: boolean; title?: string; sessionIdOverride?: string | null }
+  options: { allowCreate: boolean; title?: string; sessionIdOverride?: string | null; requireSessionHeader?: boolean }
 ): { session: ChatSession; clientInfo: ClientInfo } | null {
   const sessionId = options.sessionIdOverride?.trim() || resolveStudentSessionId(req);
   const existingSession = sessionId ? repos.chat.findSessionById(sessionId) : null;
@@ -951,6 +1190,10 @@ function resolveStudentSession(
   const clientInfo = parseClientInfo(req);
   if (!existingSession) {
     if (!options.allowCreate) {
+      if (options.requireSessionHeader) {
+        fail(res, 401, "x-student-session-id is required");
+        return null;
+      }
       fail(res, 401, "student session is required");
       return null;
     }
@@ -1955,7 +2198,10 @@ app.get("/api/student/books/:bookId/files/:fileId/pdf-view", (req, res) => {
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
 
-  const resolved = resolveStudentSession(req, res, book.id, { allowCreate: false });
+  const resolved = resolveStudentSession(req, res, book.id, {
+    allowCreate: false,
+    requireSessionHeader: true
+  });
   if (!resolved) return;
 
   const file = repos.files.findById(String(req.params.fileId));
@@ -2099,6 +2345,106 @@ app.get("/api/student/books/:bookId/chat-sessions/:sessionId", (req, res) => {
   if (rejectIfBlocked(req, res, session)) return;
   repos.chat.updateSessionClientInfo(session.id, enrichSessionClientInfo(session, parseClientInfo(req)));
   res.json({ sessionId: session.id, messages: repos.chat.findMessages(session.id) });
+});
+
+app.get("/api/student/books/:bookId/progress-summary", (req, res) => {
+  const book = findPublishedBook(String(req.params.bookId));
+  if (!book) return fail(res, 404, "book not found");
+
+  const resolved = resolveStudentSession(req, res, book.id, {
+    allowCreate: false,
+    requireSessionHeader: true
+  });
+  if (!resolved) return;
+
+  res.json(summarizeReaderProgress(book, resolved.session.id));
+});
+
+app.post("/api/student/books/:bookId/progress", (req, res) => {
+  const book = findPublishedBook(String(req.params.bookId));
+  if (!book) return fail(res, 404, "book not found");
+
+  const resolved = resolveStudentSession(req, res, book.id, {
+    allowCreate: false,
+    requireSessionHeader: true
+  });
+  if (!resolved) return;
+
+  const parsed = readerProgressRequestSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+
+  if (
+    (parsed.data.eventType === "page_complete" ||
+      parsed.data.eventType === "note_captured") &&
+    !parsed.data.page
+  ) {
+    return fail(res, 400, "page is required for page_complete and note_captured");
+  }
+
+  if (parsed.data.eventType === "chapter_complete") {
+    const chapter = getChapterByIdOrNull(book.id, parsed.data.chapterId ?? null);
+    if (!chapter) {
+      return fail(res, 400, "chapter not found");
+    }
+  }
+
+  const current = readReaderProgressState(book.id, resolved.session.id);
+  const next = applyReaderProgressEvent(book, current, {
+    ...parsed.data,
+    source: parsed.data.source?.trim() || READER_PROGRESS_SOURCE_DEFAULT
+  });
+
+  writeReaderProgressState(book.id, resolved.session.id, next);
+  res.json(summarizeReaderProgress(book, resolved.session.id));
+});
+
+app.post("/api/student/books/:bookId/reader-actions/complete", (req, res) => {
+  const book = findPublishedBook(String(req.params.bookId));
+  if (!book) return fail(res, 404, "book not found");
+
+  const resolved = resolveStudentSession(req, res, book.id, {
+    allowCreate: false,
+    requireSessionHeader: true
+  });
+  if (!resolved) return;
+
+  const parsed = readerActionCompleteRequestSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+
+  if (parsed.data.actionType === "current_chapter" && !parsed.data.chapterId) {
+    return fail(res, 400, "chapterId is required for current_chapter");
+  }
+
+  if (parsed.data.actionType === "current_page" && !parsed.data.page) {
+    return fail(res, 400, "page is required for current_page");
+  }
+
+  if (parsed.data.chapterId) {
+    const chapter = getChapterByIdOrNull(book.id, parsed.data.chapterId);
+    if (!chapter) {
+      return fail(res, 400, "chapter not found");
+    }
+  }
+
+  const mappedEvent: z.infer<typeof readerProgressRequestSchema> = {
+    page: parsed.data.page,
+    chapterId: parsed.data.chapterId,
+    source: parsed.data.source?.trim() || READER_PROGRESS_SOURCE_DEFAULT,
+    eventType:
+      parsed.data.actionType === "current_page"
+        ? "page_view"
+        : parsed.data.actionType === "current_chapter"
+          ? "chapter_complete"
+          : "note_captured"
+  };
+
+  const current = readReaderProgressState(book.id, resolved.session.id);
+  if (mappedEvent.eventType === "chapter_complete" && !mappedEvent.chapterId) {
+    return fail(res, 400, "chapterId is required for current_chapter");
+  }
+  const next = applyReaderProgressEvent(book, current, mappedEvent);
+  writeReaderProgressState(book.id, resolved.session.id, next);
+  res.json(summarizeReaderProgress(book, resolved.session.id));
 });
 
 // ---- Admin dashboard / accounts ------------------------------------------
