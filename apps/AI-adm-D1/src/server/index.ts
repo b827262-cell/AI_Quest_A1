@@ -75,6 +75,8 @@ const READER_TOC_SCHEMA_VERSION = "smartbook-reader-toc-v1";
 const READER_TOC_SOURCE = "manual_admin_import" as const;
 const READER_PROGRESS_SETTING_PREFIX = "reader-progress-v1";
 const READER_PROGRESS_SOURCE_DEFAULT = "reader_toolbar";
+const READER_KNOWLEDGE_SETTING_PREFIX = "reader-knowledge-v1";
+const READER_KNOWLEDGE_DEFAULT_SUMMARY = "本章重點待整理";
 
 const readerProgressRequestSchema = z.object({
   page: z.number().int().positive().optional(),
@@ -110,6 +112,30 @@ type ReaderProgressSummary = {
   completedChapterIds: string[];
   completionPercentage: number | null;
   updatedAt: string | null;
+};
+
+type KnowledgePoint = {
+  id: string;
+  chapterId: string;
+  title: string;
+  summary: string;
+  sourcePageStart: number | null;
+  sourcePageEnd: number | null;
+  importance: "low" | "medium" | "high";
+  difficulty: "basic" | "intermediate" | "advanced";
+  status: "available" | "completed";
+};
+
+type KnowledgePointState = {
+  completedPointIds: string[];
+  updatedAt: string | null;
+};
+
+type KnowledgePointListResponse = {
+  bookId: string;
+  chapterId?: string | null;
+  points: KnowledgePoint[];
+  completedPointsCount: number;
 };
 
 function decodeUploadFileName(name: string): string {
@@ -987,6 +1013,86 @@ function distinctStringValues(values: Array<string | null | undefined>): string[
 
 function progressSettingKey(bookId: string, sessionId: string) {
   return `${READER_PROGRESS_SETTING_PREFIX}:${bookId}:${sessionId}`;
+}
+
+function knowledgeSettingKey(bookId: string, sessionId: string) {
+  return `${READER_KNOWLEDGE_SETTING_PREFIX}:${bookId}:${sessionId}`;
+}
+
+function readKnowledgePointState(bookId: string, sessionId: string): KnowledgePointState {
+  const raw = repos.settings.get(knowledgeSettingKey(bookId, sessionId));
+  if (!raw) {
+    return {
+      completedPointIds: [],
+      updatedAt: null
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<KnowledgePointState>;
+    return {
+      completedPointIds: distinctStringValues(Array.isArray(parsed.completedPointIds) ? parsed.completedPointIds : []),
+      updatedAt: typeof parsed.updatedAt === "string" && parsed.updatedAt.trim() ? parsed.updatedAt : null
+    };
+  } catch {
+    return {
+      completedPointIds: [],
+      updatedAt: null
+    };
+  }
+}
+
+function writeKnowledgePointState(bookId: string, sessionId: string, state: KnowledgePointState): void {
+  repos.settings.set(knowledgeSettingKey(bookId, sessionId), JSON.stringify(state));
+}
+
+function buildKnowledgePointsForBook(bookId: string): KnowledgePoint[] {
+  return repos.chapters.findByBookId(bookId).map((chapter) => ({
+    id: `kp_${chapter.id}`,
+    chapterId: chapter.id,
+    title: chapter.title,
+    summary: chapter.summary?.trim() || READER_KNOWLEDGE_DEFAULT_SUMMARY,
+    sourcePageStart: chapter.pageStart ?? null,
+    sourcePageEnd: chapter.pageEnd ?? null,
+    importance: "medium",
+    difficulty: "basic",
+    status: "available"
+  }));
+}
+
+function enrichKnowledgePointWithCompletion(
+  point: Omit<KnowledgePoint, "status">,
+  completedPointIds: string[]
+): KnowledgePoint {
+  return {
+    ...point,
+    status: completedPointIds.includes(point.id) ? "completed" : "available"
+  };
+}
+
+function getKnowledgePointsForBook(
+  bookId: string,
+  sessionId: string,
+  chapterId?: string | null
+): KnowledgePointListResponse {
+  const all = buildKnowledgePointsForBook(bookId);
+  const target = chapterId ? all.filter((point) => point.chapterId === chapterId) : all;
+  const state = readKnowledgePointState(bookId, sessionId);
+  const points = target.map((point) =>
+    enrichKnowledgePointWithCompletion(point, state.completedPointIds)
+  );
+  return {
+    bookId,
+    chapterId: chapterId ?? null,
+    points,
+    completedPointsCount: points.filter((point) => point.status === "completed").length
+  };
+}
+
+function getKnowledgePointById(bookId: string, pointId: string): KnowledgePoint | null {
+  const all = buildKnowledgePointsForBook(bookId);
+  const point = all.find((item) => item.id === pointId);
+  return point ?? null;
 }
 
 function readReaderProgressState(bookId: string, sessionId: string): ReaderProgressState {
@@ -2445,6 +2551,93 @@ app.post("/api/student/books/:bookId/reader-actions/complete", (req, res) => {
   const next = applyReaderProgressEvent(book, current, mappedEvent);
   writeReaderProgressState(book.id, resolved.session.id, next);
   res.json(summarizeReaderProgress(book, resolved.session.id));
+});
+
+app.get("/api/student/books/:bookId/knowledge-points", (req, res) => {
+  const book = findPublishedBook(String(req.params.bookId));
+  if (!book) return fail(res, 404, "book not found");
+
+  const resolved = resolveStudentSession(req, res, book.id, {
+    allowCreate: false,
+    requireSessionHeader: true
+  });
+  if (!resolved) return;
+
+  const chapterIdRaw = req.query.chapterId;
+  const chapterId =
+    typeof chapterIdRaw === "string" && chapterIdRaw.trim() ? chapterIdRaw.trim() : null;
+  if (chapterId) {
+    const chapter = getChapterByIdOrNull(book.id, chapterId);
+    if (!chapter) {
+      return fail(res, 404, "chapter not found");
+    }
+  }
+
+  res.json(getKnowledgePointsForBook(book.id, resolved.session.id, chapterId));
+});
+
+app.get("/api/student/books/:bookId/chapters/:chapterId/knowledge-points", (req, res) => {
+  const book = findPublishedBook(String(req.params.bookId));
+  if (!book) return fail(res, 404, "book not found");
+
+  const resolved = resolveStudentSession(req, res, book.id, {
+    allowCreate: false,
+    requireSessionHeader: true
+  });
+  if (!resolved) return;
+
+  const chapter = getChapterByIdOrNull(book.id, String(req.params.chapterId));
+  if (!chapter) return fail(res, 404, "chapter not found");
+
+  res.json(getKnowledgePointsForBook(book.id, resolved.session.id, chapter.id));
+});
+
+app.get("/api/student/books/:bookId/knowledge-points/:pointId", (req, res) => {
+  const book = findPublishedBook(String(req.params.bookId));
+  if (!book) return fail(res, 404, "book not found");
+
+  const resolved = resolveStudentSession(req, res, book.id, {
+    allowCreate: false,
+    requireSessionHeader: true
+  });
+  if (!resolved) return;
+
+  const point = getKnowledgePointById(book.id, String(req.params.pointId));
+  if (!point) return fail(res, 404, "knowledge point not found");
+
+  const state = readKnowledgePointState(book.id, resolved.session.id);
+  res.json({
+    bookId: book.id,
+    point: enrichKnowledgePointWithCompletion(point, state.completedPointIds)
+  });
+});
+
+app.post("/api/student/books/:bookId/knowledge-points/:pointId/complete", (req, res) => {
+  const book = findPublishedBook(String(req.params.bookId));
+  if (!book) return fail(res, 404, "book not found");
+
+  const resolved = resolveStudentSession(req, res, book.id, {
+    allowCreate: false,
+    requireSessionHeader: true
+  });
+  if (!resolved) return;
+
+  const point = getKnowledgePointById(book.id, String(req.params.pointId));
+  if (!point) return fail(res, 404, "knowledge point not found");
+
+  const state = readKnowledgePointState(book.id, resolved.session.id);
+  const completedPointIds = distinctStringValues([...state.completedPointIds, point.id]);
+  writeKnowledgePointState(book.id, resolved.session.id, {
+    completedPointIds,
+    updatedAt: new Date().toISOString()
+  });
+
+  const points = getKnowledgePointsForBook(book.id, resolved.session.id);
+  res.json({
+    bookId: book.id,
+    point: enrichKnowledgePointWithCompletion(point, completedPointIds),
+    completedPointsCount: points.filter((item) => item.status === "completed").length
+  });
 });
 
 // ---- Admin dashboard / accounts ------------------------------------------

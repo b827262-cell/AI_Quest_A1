@@ -40,6 +40,24 @@ export interface ReaderProgressSummary {
   updatedAt: string | null;
 }
 
+export type KnowledgePointStatus = "available" | "completed";
+
+export type KnowledgePoint = {
+  id: string;
+  chapterId: string;
+  title: string;
+  summary: string;
+  sourcePageStart: number | null;
+  sourcePageEnd: number | null;
+  importance: "low" | "medium" | "high";
+  difficulty: "basic" | "intermediate" | "advanced";
+  status: KnowledgePointStatus;
+};
+
+export type KnowledgePointsQuery = {
+  chapterId?: string;
+};
+
 export interface SaveReaderProgressPayload {
   page?: number;
   chapterId?: string;
@@ -78,6 +96,17 @@ async function httpWithSession<T>(path: string, sessionId: string, init?: Reques
     throw new Error(data.error || `${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
+}
+
+async function httpWithOptionalSession<T>(
+  path: string,
+  sessionId: string | undefined,
+  init?: RequestInit
+): Promise<T> {
+  if (!sessionId) {
+    return http<T>(path, init);
+  }
+  return httpWithSession<T>(path, sessionId, init);
 }
 
 async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
@@ -175,5 +204,50 @@ export const studentClient = {
         method: "POST",
         body: JSON.stringify(payload)
       }
-    )
+    ),
+
+  getKnowledgePoints: (
+    bookId: string,
+    params?: KnowledgePointsQuery,
+    sessionId?: string
+  ) => {
+    const search = new URLSearchParams();
+    if (params?.chapterId?.trim()) {
+      search.set("chapterId", params.chapterId.trim());
+    }
+    const suffix = search.toString() ? `?${search}` : "";
+    return httpWithOptionalSession<{
+      bookId: string;
+      chapterId?: string | null;
+      points: KnowledgePoint[];
+      completedPointsCount: number;
+    }>(
+      `/api/student/books/${bookId}/knowledge-points${suffix}`,
+      sessionId
+    );
+  },
+
+  getChapterKnowledgePoints: (bookId: string, chapterId: string, sessionId?: string) =>
+    httpWithOptionalSession<{
+      bookId: string;
+      chapterId: string;
+      points: KnowledgePoint[];
+      completedPointsCount: number;
+    }>(`/api/student/books/${bookId}/chapters/${chapterId}/knowledge-points`, sessionId),
+
+  getKnowledgePoint: (bookId: string, pointId: string, sessionId?: string) =>
+    httpWithOptionalSession<{
+      bookId: string;
+      point: KnowledgePoint;
+    }>(`/api/student/books/${bookId}/knowledge-points/${pointId}`, sessionId),
+
+  completeKnowledgePoint: (bookId: string, pointId: string, sessionId: string) =>
+    httpWithSession<{
+      bookId: string;
+      point: KnowledgePoint;
+      completedPointsCount: number;
+    }>(`/api/student/books/${bookId}/knowledge-points/${pointId}/complete`, sessionId, {
+      method: "POST",
+      body: "{}"
+    })
 };
