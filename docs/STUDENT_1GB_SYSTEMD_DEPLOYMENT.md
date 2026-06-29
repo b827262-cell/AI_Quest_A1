@@ -1,34 +1,42 @@
 # AI-Stu-R1 1GB systemd Deployment
 
-The student frontend is the only thing that runs on the 1GB host.
+The 1GB student host now runs only the static SPA. All student/admin API paths are proxied to the E500 central API via Nginx.
 
-**Use:** Nginx · Node.js 22 · SQLite · systemd
-**Do not use:** PM2 · Docker · MySQL · Redis · Qdrant · Ollama · `pnpm dev` ·
-PDF parsing · full RAG (those all stay on the admin/build machine).
+Verification note:
+- Central API reachable at `http://100.76.46.86:4300`.
+- Using `http://e500:4321` is optional only when DNS/hosts maps `e500` to `100.76.46.86`.
 
-## Runtime modes (`STU_RUNTIME_MODE`)
+## Runtime direction (1GB production)
 
-- `static` — built-in demo data, no DB.
-- `sqlite-api` — read a synced `student.db`, keyword chat. **Default for 1GB.**
-- `remote-api` — proxy a central admin API (future).
+- `STU_RUNTIME_MODE=remote-api` only (no local `sqlite-api`).
+- No local `student.db` sync, no local PDF file serving, no local sqlite API runtime.
+- `/api/student/*`, `/api/appearance-settings`, `/api/uploads/*` are handled by Nginx proxy to E500.
 
-## Build (on the build machine, not the 1GB host)
+Legacy/local mode note:
+- `sqlite-api` with local `student.db` is kept for compatibility tests only and is deprecated for 1GB production.
+
+## Build (on the build machine)
 
 ```bash
 pnpm install
-pnpm --filter AI-Stu-R1 build         # -> apps/AI-Stu-R1/dist        (static SPA)
-pnpm --filter AI-Stu-R1 server:build  # -> apps/AI-Stu-R1/dist-server/stu-api.mjs (bundled)
+pnpm --filter AI-Stu-R1 build         # -> apps/AI-Stu-R1/dist (static SPA)
 ```
 
-`server:build` bundles the API + `@ai-smartbook/*` into one ESM file with
-esbuild, keeping `better-sqlite3` external (a native module installed on the host).
+`pnpm --filter AI-Stu-R1 server:build` is optional and only needed if you also want a local fallback API.
 
 ## Provision the 1GB host
 
 ```bash
-sudo mkdir -p /opt/AI-Stu-R1/{dist,dist-server,data}
-# ship dist/, dist-server/, and student.db (see deploy/scripts/sync-student-db.sh)
-cd /opt/AI-Stu-R1 && npm init -y && npm install better-sqlite3   # only native dep
+sudo mkdir -p /opt/AI-Stu-R1/dist
+sudo mkdir -p /opt/AI-Stu-R1/dist-server  # optional, for local fallback API only
+cd /opt/AI-Stu-R1
+```
+
+Ship only:
+- `apps/AI-Stu-R1/dist/`
+- optional `apps/AI-Stu-R1/dist-server/` (fallback only)
+
+```bash
 sudo bash deploy/scripts/install-student-systemd.sh
 ```
 
@@ -37,15 +45,18 @@ sudo bash deploy/scripts/install-student-systemd.sh
 ```bash
 NODE_ENV=production
 NODE_OPTIONS=--max-old-space-size=128
-STU_RUNTIME_MODE=sqlite-api
-STU_DB_PATH=/opt/AI-Stu-R1/data/student.db
-STU_API_PORT=4310
+STU_RUNTIME_MODE=remote-api
+STU_REMOTE_API_BASE_URL=http://100.76.46.86:4300
 STU_PUBLIC_DIR=/opt/AI-Stu-R1/dist
 STU_READONLY_MODE=true
 STU_CHAT_MODE=keyword
 ```
 
+Do not set `STU_DB_PATH` in the 1GB production profile.
+
 ## systemd guard rails (`deploy/systemd/ai-stu-r1.service`)
+
+Keep this service only if you intentionally keep a local stu-api fallback. Production static deployment does not need it for student API.
 
 - `ExecStart=/usr/bin/node /opt/AI-Stu-R1/dist-server/stu-api.mjs`
 - `EnvironmentFile=/etc/ai-stu-r1/student.env`
@@ -55,10 +66,14 @@ STU_CHAT_MODE=keyword
 
 ## Nginx (`deploy/nginx/ai-stu-r1.conf`)
 
-Serves `/opt/AI-Stu-R1/dist` and proxies `/api/student/` → `127.0.0.1:4310`.
+- Serves `/opt/AI-Stu-R1/dist` as SPA.
+- Proxies:
+  - `/api/student/*` → `http://100.76.46.86:4300/api/student/*`
+  - `/api/appearance-settings` → `http://100.76.46.86:4300/api/appearance-settings`
+  - `/api/uploads/*` → `http://100.76.46.86:4300/api/uploads/*`
+  - Explicitly deny `/uploads/books/*` (do not expose local PDFs directly).
 
 ## Scripts
 
-- `deploy/scripts/install-student-systemd.sh` — install + enable the unit.
-- `deploy/scripts/sync-student-db.sh` — build bundle + publish `student.db` + rsync.
-- `deploy/scripts/healthcheck-student.sh` — `curl /api/student/books`.
+- `deploy/scripts/install-student-systemd.sh` — install service files and (optional) enable stu-api service.
+- `deploy/scripts/healthcheck-student.sh` — local script remains targeted at local API; update it for your deployment target if used.
