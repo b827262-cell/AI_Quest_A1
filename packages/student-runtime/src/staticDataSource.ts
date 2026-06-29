@@ -1,5 +1,5 @@
 import type { Book, BookChapter, BookContent } from "@ai-smartbook/schema";
-import type { StudentBookDetail, StudentDataSource } from "./dataSource";
+import type { StudentBookDetail, StudentBookPdfFile, StudentDataSource } from "./dataSource";
 
 const now = "2026-01-01T00:00:00.000Z";
 
@@ -73,11 +73,15 @@ export class StaticDataSource implements StudentDataSource {
 
   async getBook(bookId: string): Promise<StudentBookDetail | null> {
     if (bookId !== DEMO_BOOK.id) return null;
-    return { ...DEMO_BOOK, chapters: DEMO_CHAPTERS };
+    return { ...DEMO_BOOK, chapters: DEMO_CHAPTERS, pdfFileId: null, pdfFileName: null };
   }
 
   async getContents(bookId: string): Promise<BookContent[]> {
     if (bookId !== DEMO_BOOK.id) return [];
     return DEMO_CONTENTS;
+  }
+
+  async getPdfFile(_bookId: string, _fileId: string): Promise<StudentBookPdfFile | null> {
+    return null;
   }
 }
