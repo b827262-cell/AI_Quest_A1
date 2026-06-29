@@ -754,6 +754,16 @@ export function BookReaderPage() {
     });
   }
 
+  // Toolbar "加入筆記" button: saves selected text if present, otherwise opens notes panel.
+  // TODO: When allowSaveSelectionToNote permission flag is added, gate this here.
+  function onToolbarAddToNotes() {
+    if (selectedText.trim()) {
+      void onSelectionToNote();
+    } else {
+      setPanelForContext("notes");
+    }
+  }
+
   function setMobileNoticeMessage(message: string, duration = MOBILE_NOTICE_DURATION) {
     if (!isMobile) return;
     setMobileNotice(message);
@@ -1060,6 +1070,8 @@ export function BookReaderPage() {
               onPrevPage={prevPage}
               onNextPage={nextPage}
               onAskAi={scrollToChat}
+              selectedText={selectedText}
+              onAddToNotes={onToolbarAddToNotes}
             />
 
             {selectionMode && (

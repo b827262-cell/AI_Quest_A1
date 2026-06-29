@@ -27,6 +27,13 @@ export const ZOOM_OPTIONS = [50, 75, 90, 100, 110, 125, 150, 175, 200];
  * state (chapter page jump, page step, render zoom, layout, collapse). The
  * ratio buttons are quick presets for the AI pane width; users can also drag
  * the split handles for fine control.
+ *
+ * DOWNLOAD / PRINT PROTECTION NOTE (best-effort only):
+ * - No native browser PDF toolbar is shown (PDF.js canvas render, not iframe).
+ * - @media print CSS hides this viewer during Ctrl+P (see styles.css).
+ * - Context menu is suppressed on the canvas area (see ProtectedPdfViewer).
+ * - These measures are best-effort: browser-level screenshots, DevTools,
+ *   and OS-level capture cannot be prevented by frontend code alone.
  */
 export function PdfReaderToolbar({
   outlineNodes,
@@ -51,7 +58,9 @@ export function PdfReaderToolbar({
   onJumpPage,
   onPrevPage,
   onNextPage,
-  onAskAi
+  onAskAi,
+  selectedText,
+  onAddToNotes
 }: {
   outlineNodes: ReaderOutlineNode[];
   activeNodeId: string | null;
@@ -76,10 +85,15 @@ export function PdfReaderToolbar({
   onPrevPage: () => void;
   onNextPage: () => void;
   onAskAi: () => void;
+  /** Currently selected PDF text; enables the Add-to-Notes toolbar button. */
+  selectedText?: string;
+  /** Called when the user clicks Add-to-Notes. Parent decides to save selection or open notes panel. */
+  onAddToNotes: () => void;
 }) {
   const hasPdf = page != null;
   const atFirst = page == null || page <= 1;
   const atLast = page == null || (pageCount != null && page >= pageCount);
+  const hasSelection = (selectedText ?? "").trim().length > 0;
   const [pageInput, setPageInput] = useState(page != null ? String(page) : "");
   const [pageError, setPageError] = useState("");
 
@@ -200,6 +214,61 @@ export function PdfReaderToolbar({
         title="智能筆記"
       >
         📝 {notesOpen ? "收合筆記" : "智能筆記"}
+      </button>
+
+      {/* Add-to-Notes: saves selected text as a note, or opens the notes panel */}
+      <button
+        type="button"
+        className={`tool-btn ${hasSelection ? "ask" : ""}`}
+        onClick={onAddToNotes}
+        title={
+          hasSelection
+            ? `將選取的 ${(selectedText ?? "").trim().length} 字加入筆記`
+            : "開啟智能筆記面板"
+        }
+      >
+        {hasSelection ? `加入筆記 (${(selectedText ?? "").trim().length}字)` : "加入筆記"}
+      </button>
+
+      {/*
+        ── Placeholder actions (not yet implemented) ──────────────────────────
+        These buttons are intentionally disabled until the backend endpoints
+        are available. DO NOT remove the disabled attribute without also
+        providing a working handler and a corresponding API route.
+      */}
+
+      {/* TODO: Screenshot Ask AI — needs backend vision/OCR endpoint
+          Planned: POST /api/student/books/:bookId/screenshot-ask
+          Accept a canvas/blob snapshot, run OCR, send to AI for explanation */}
+      <button
+        type="button"
+        className="tool-btn tool-btn-placeholder"
+        disabled
+        title="截圖問AI：即將推出（需後端 OCR / 視覺 API）"
+      >
+        截圖問AI
+      </button>
+
+      {/* TODO: Knowledge Points — needs endpoint to return chapter key concepts
+          Planned: GET /api/student/books/:bookId/chapters/:chapterId/knowledge-points */}
+      <button
+        type="button"
+        className="tool-btn tool-btn-placeholder"
+        disabled
+        title="知識點：即將推出（需後端知識點 API）"
+      >
+        知識點
+      </button>
+
+      {/* TODO: Reading Progress — needs progress persistence endpoint
+          Planned: POST /api/student/books/:bookId/progress { page, chapterId } */}
+      <button
+        type="button"
+        className="tool-btn tool-btn-placeholder"
+        disabled
+        title="進度記錄：即將推出（需後端進度 API）"
+      >
+        進度
       </button>
 
       <span className="tool-spacer" />

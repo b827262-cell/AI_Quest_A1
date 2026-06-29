@@ -887,6 +887,16 @@ body.reader-resizing { cursor: col-resize; user-select: none; }
   color: #b91c1c;
 }
 .tool-btn:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--border); color: var(--muted); }
+/* Placeholder toolbar buttons: coming-soon features — visually distinct with a dashed border. */
+.tool-btn-placeholder {
+  border-style: dashed;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tool-btn-placeholder:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 
 /* Sticky-note modal */
 .note-modal-backdrop {
@@ -1463,6 +1473,47 @@ body.reader-mobile-overlay-open {
 }
 body.reader-reading-mobile {
   overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DOWNLOAD / PRINT PROTECTION (best-effort)
+   Hiding the reader during browser print (Ctrl+P) is the primary
+   defence. This cannot prevent: OS screenshots, DevTools canvas
+   capture, or browser extensions. See also ProtectedPdfViewer.tsx.
+   ═══════════════════════════════════════════════════════════════════ */
+@media print {
+  .reader-outer-layout,
+  .pdf-canvas-frame,
+  .pdf-canvas-scroll,
+  .pdf-canvas,
+  .pdf-canvas-snapshot,
+  .student-pdf-watermark {
+    display: none !important;
+  }
+  body::after {
+    content: "此內容受版權保護，不允許列印。";
+    display: block;
+    padding: 40px;
+    font-size: 18px;
+    text-align: center;
+  }
+}
+
+/* ── Mobile toolbar: hide non-essential items to keep the toolbar slim ─────
+   Placeholder / ratio / full-width controls are omitted on mobile since the
+   bottom action bar already provides the primary navigation.
+   This keeps the in-flow toolbar height low so the fixed PDF viewport
+   (--mobile-reader-top) is measured accurately.
+   ──────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Hide placeholder (coming-soon) buttons — they don't work on mobile yet */
+  .pdf-toolbar .tool-btn-placeholder { display: none; }
+  /* Hide layout-ratio preset buttons — not useful on single-column mobile */
+  .pdf-toolbar .tool-ratio { display: none; }
+  /* Hide full-width toggle — not meaningful on mobile */
+  .pdf-toolbar .tool-btn[title="切換閱讀器滿版 / 一般寬度"] { display: none; }
+  /* Compact toolbar padding */
+  .pdf-toolbar { padding: 7px 8px; gap: 6px; margin-bottom: 8px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════

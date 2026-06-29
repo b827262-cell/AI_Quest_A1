@@ -247,8 +247,20 @@ export function ProtectedPdfViewer({
     onSelectedText?.((window.getSelection()?.toString() ?? "").trim());
   }
 
+  // BEST-EFFORT download / print protection:
+  // - Suppressing the right-click context menu prevents the most common "Save image as"
+  //   path on the canvas, but cannot stop: DevTools, OS screenshot, browser extensions.
+  // - @media print in styles.css hides this viewer during Ctrl+P.
+  // - Raw PDF bytes are never exposed as a /uploads URL; they come through the
+  //   protected blob API and exist only in-memory in this component.
+  // None of these measures are a full DRM solution — they reduce casual leakage only.
+  function suppressContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+  }
+
   return (
-    <div className="pdf-canvas-frame" ref={containerRef}>
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+    <div className="pdf-canvas-frame" ref={containerRef} onContextMenu={suppressContextMenu} role="img" aria-label="Protected PDF page">
       <div className="pdf-canvas-scroll">
         {status === "loading" && (
           <p className="muted pdf-canvas-status">Rendering protected PDF…</p>
