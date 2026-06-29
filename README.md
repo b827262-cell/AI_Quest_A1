@@ -292,3 +292,22 @@ Source SHA:     5d2070da2c2d41d60c653e40f06ebac081f3af1d
 New repo:       b827262-cell/AI-SmartBook-R1-PR4
 Default branch: main
 ```
+
+## Option A Deployment Baseline
+
+This repository has converged to **Option A** for 1GB student host production deployment:
+
+* **Static Assets Only**: The 1GB student node serves only static frontend SPA assets.
+* **No Database**: No active `student.db` or sqlite-api runs as part of the production path on the 1GB host.
+* **No PDF Assets**: No raw PDF books are stored on the 1GB host.
+* **Centralized API proxy**: Nginx on the 1GB host proxies all API requests directly to the E500 central API:
+  - `/api/student/*` -> Proxied to E500 (`http://e500:4321`)
+  - `/api/appearance-settings` -> Proxied to E500 (`http://e500:4321`)
+  - `/api/uploads/*` -> Proxied to E500 (`http://e500:4321`)
+* **Strict Security Guard**: Nginx explicitly denies or returns `404` for `/uploads/books/*`. Students must authenticate and obtain a valid session ID, then stream PDFs securely via the `pdf-view` API endpoint.
+
+### E500 Runtime Fixes (2026-06-29)
+The central database (`book_files`) paths were corrected to eliminate legacy references to other local paths (e.g. `AI-SmartBook-R1` and `AI-SmartBook-R2`). The current status is:
+* DB paths are fully updated to point to `/home/b827262/project/AI-SmartBook-R1-PR4/uploads/books/`.
+* 100% of recorded PDF documents physically exist and pass filesystem integrity checks.
+

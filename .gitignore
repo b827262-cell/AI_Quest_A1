@@ -13,6 +13,10 @@ tmp_*.json
 .DS_Store
 data/*.db
 data/*.sqlite
+data/*.db.bak.*
+data/*.sqlite.bak.*
+data/*.db-*
+data/*.sqlite-*
 *.db
 *.sqlite
 *.sqlite3
