@@ -2632,11 +2632,11 @@ app.post("/api/student/books/:bookId/knowledge-points/:pointId/complete", (req, 
     updatedAt: new Date().toISOString()
   });
 
-  const points = getKnowledgePointsForBook(book.id, resolved.session.id);
+  const knowledgePointList = getKnowledgePointsForBook(book.id, resolved.session.id);
   res.json({
     bookId: book.id,
     point: enrichKnowledgePointWithCompletion(point, completedPointIds),
-    completedPointsCount: points.filter((item) => item.status === "completed").length
+    completedPointsCount: knowledgePointList.completedPointsCount
   });
 });
 
