@@ -1,10 +1,55 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import express, { type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
-import { getDb, createRepositories, runMigrations, resolveDbPath } from "@ai-smartbook/db";
-import { createAiProvider } from "@ai-smartbook/ai";
+import { getDb, createRepositories, runMigrations, AiProviderIdentityConflictError } from "@ai-smartbook/db";
+import {
+  createAiProvider,
+  AiGatewayError,
+  resolveGuestAskRetentionDays,
+  redactSensitiveText,
+  selectGuestSystemPrompt,
+  classifyCredentialVerification,
+  healthForCredentialVerification,
+  validateCredentialActivation,
+  validateQwenEndpoint,
+  type ProviderBillingMode,
+  type StoredCredentialUsageScope,
+} from "@ai-smartbook/ai";
+import {
+  hmacVisitorIp,
+  resolveGuestAskIpHmacSecret,
+  generateRecoveryToken,
+  digestRecoveryToken
+} from "@ai-smartbook/ai/server";
+import { buildGateway } from "./ai/gateway-instance";
+import { makeAnalyticsService, todayTaipei } from "./ai/analytics-service";
+import { createAdminAuthMiddleware } from "./ai/admin-auth";
+import { createAdminOriginMiddleware } from "./ai/admin-origin";
+import { EvaluationServiceError, makeEvaluationService } from "./ai/evaluation-service";
+import { LiveEvaluationServiceError, makeLiveEvaluationService } from "./ai/live-evaluation-service";
+import { EvaluationGovernanceError, makeEvaluationGovernanceService } from "./ai/evaluation-governance-service";
+import { PilotServiceError, makePilotService } from "./ai/pilot-service";
+import { loadRootEnv } from "./env";
+import { isValidDateOnly, parseAnalyticsRange as parseAnalyticsDateRange } from "./ai/analytics-query";
+import {
+  createAiBudgetPolicyInputSchema,
+  updateAiBudgetPolicyInputSchema,
+  upsertAiProviderConfigInputSchema,
+  createAiCredentialInputSchema,
+  updateAiCredentialInputSchema,
+  createAiCredentialModelQuotaInputSchema,
+  updateAiCredentialModelQuotaInputSchema,
+  createAiTokenPoolInputSchema,
+  updateAiTokenPoolInputSchema,
+  upsertAiLogicalModelInputSchema,
+  updateAiLogicalModelInputSchema,
+  updateAiModelDailyLimitInputSchema
+} from "@ai-smartbook/schema";
+import { encryptCredential, credentialFingerprint, maskCredential } from "./ai/credential-crypto";
+import { CredentialBackedProvider, defaultModelForManagedProvider } from "./ai/credential-provider";
 import {
   parsePdfToContents,
   splitBookIntoChapters,
@@ -47,6 +92,10 @@ import {
   createSmartBookNoteInputSchema,
   updateSmartBookNoteInputSchema,
   DEFAULT_APPEARANCE,
+  DEFAULT_SITE_CONFIG,
+  publicSiteConfigSchema,
+  siteConfigSchema,
+  siteConfigUpdateSchema,
   type AiJobType,
   type BookFile,
   type BookAiJob,
@@ -59,6 +108,12 @@ import {
   type StoredJsonIndexSummary
 } from "@ai-smartbook/schema";
 
+// Resolve the repository-root .env independently of the caller's cwd. Values
+// already injected by the shell or deployment manager always win.
+const rootEnv = loadRootEnv();
+console.log(`ADMIN_API_TOKEN: ${rootEnv.adminTokenConfigured ? "configured" : "missing"}`);
+console.log(`AI_CREDENTIAL_ENCRYPTION_KEY: ${rootEnv.credentialEncryptionKeyConfigured ? "configured" : "missing"}`);
+
 const { db, sqlite } = getDb();
 // Ensure the admin schema exists on the resolved DB path. This is idempotent
 // and keeps `pnpm --filter AI-adm-D1 server:dev` working even before a manual
@@ -67,6 +122,50 @@ runMigrations(sqlite);
 const repos = createRepositories(db);
 const ai = createAiProvider();
 const ctx: BookCoreContext = { repos, ai };
+
+// Phase 2 AI Gateway (router + providers + budget + logging). Bootstrapped
+// from env; always constructs even with no API keys (providers report
+// unavailable and routing falls back to mock).
+const { gateway: aiGateway, config: gatewayConfig } = buildGateway(repos);
+// Dedicated HMAC secret for guest-ask IP identification (quota/risk signal
+// only — recovery is authorized by a per-answer recovery token, never by IP).
+// Production fails closed without GUEST_ASK_IP_HMAC_SECRET.
+const guestAskIpHmacSecret = resolveGuestAskIpHmacSecret();
+// Guest answer retention in days (clamped to [1, 90]); expired answers are
+// purged on startup and opportunistically after new answer creation.
+const guestAskRetentionDays = resolveGuestAskRetentionDays();
+// Startup cleanup of expired guest answers. Best-effort: a failure logs but
+// does not block serving questions (not a data-safety fail-closed path).
+try {
+  const { deleted } = repos.guestAskAnswers.cleanupExpired(new Date().toISOString());
+  if (deleted > 0) {
+    console.log(`[guest-ask] startup cleanup removed ${deleted} expired answer(s)`);
+  }
+} catch (err) {
+  console.warn("[guest-ask] startup cleanup failed", err instanceof Error ? err.message : err);
+}
+const analytics = makeAnalyticsService(repos, {
+  dailyTokenLimit: gatewayConfig.dailyTokenLimit,
+  dailyCostLimitUsd: gatewayConfig.dailyCostLimitUsd
+});
+const evaluationService = makeEvaluationService(repos, (action, targetId, metadata) => {
+  repos.aiProviders.audit(action, "ai_evaluation_run", targetId, metadata);
+});
+const liveEvaluationService = makeLiveEvaluationService(repos, (action, targetId, metadata) => {
+  repos.aiProviders.audit(action, "ai_evaluation_live", targetId, metadata);
+});
+const evaluationGovernanceService = makeEvaluationGovernanceService(repos, evaluationService, (action, targetId, metadata) => {
+  repos.aiProviders.audit(action, "ai_evaluation_governance", targetId, metadata);
+});
+const pilotService = makePilotService(repos, liveEvaluationService, (action, targetId, metadata) => {
+  repos.aiProviders.audit(action, "ai_multi_model_pilot", targetId, metadata);
+});
+// Scheduler execution is an explicit server-side opt-in. It only invokes the
+// governance service's Fixture/Mock branch; Live is never accepted there.
+if (process.env.AI_EVALUATION_SCHEDULER_ENABLED === "true") {
+  const timer = setInterval(() => { void evaluationGovernanceService.runDue(new Date(), "scheduler"); }, 60_000);
+  timer.unref();
+}
 
 const UPLOAD_ROOT = resolve(process.env.UPLOAD_DIR || resolve("./uploads", "books"));
 const JSON_INDEX_ROLE = "json_index" as const;
@@ -205,11 +304,126 @@ const appearanceUpload = multer({
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+app.use("/api/admin", createAdminOriginMiddleware());
 // Serve uploaded appearance images read-only (rides the /api proxy in both apps).
 app.use("/api/uploads/appearance", express.static(APPEARANCE_UPLOAD_DIR));
+// Security boundary: every current and future admin route is protected here.
+// Public and student routes are mounted outside this prefix and are unaffected.
+app.use("/api/admin", createAdminAuthMiddleware());
 
 function fail(res: Response, status: number, message: string) {
   res.status(status).json({ error: message });
+}
+
+function publicEvaluationRun(row: {
+  id: string;
+  datasetId: string;
+  datasetVersion: number;
+  executionMode: string;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  totalCases: number;
+  passedCases: number;
+  failedCases: number;
+  passRate: number;
+  averageScore: number;
+  averageDurationMs: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  totalModelCalls: number;
+  averageModelCalls: number;
+  totalInputTokens: number | null;
+  totalOutputTokens: number | null;
+  totalTokens: number | null;
+  conflictRate: number;
+  unresolvedRate: number;
+  baselineRunId: string | null;
+  regressionIssueCount: number;
+  trafficClass?: string;
+  maxTokenBudget?: number | null;
+  consumedTokens?: number;
+  dailyBudgetSnapshot?: number | null;
+  evaluationPoolId?: string | null;
+  cancelRequestedAt?: string | null;
+  cancelledAt?: string | null;
+  preflightId?: string | null;
+  logicalModelIdsJson?: string | null;
+  providerIdsJson?: string | null;
+  createdAt: string;
+}) {
+  return {
+    id: row.id, datasetId: row.datasetId, datasetVersion: row.datasetVersion, executionMode: row.executionMode, status: row.status,
+    startedAt: row.startedAt, completedAt: row.completedAt, totalCases: row.totalCases, passedCases: row.passedCases, failedCases: row.failedCases,
+    passRate: row.passRate, averageScore: row.averageScore, averageDurationMs: row.averageDurationMs, p50DurationMs: row.p50DurationMs, p95DurationMs: row.p95DurationMs,
+    totalModelCalls: row.totalModelCalls, averageModelCalls: row.averageModelCalls, totalInputTokens: row.totalInputTokens, totalOutputTokens: row.totalOutputTokens, totalTokens: row.totalTokens,
+    conflictRate: row.conflictRate, unresolvedRate: row.unresolvedRate, baselineRunId: row.baselineRunId, regressionIssueCount: row.regressionIssueCount,
+    trafficClass: row.trafficClass, maxTokenBudget: row.maxTokenBudget, consumedTokens: row.consumedTokens, dailyBudgetSnapshot: row.dailyBudgetSnapshot,
+    evaluationPoolId: row.evaluationPoolId, cancelRequestedAt: row.cancelRequestedAt, cancelledAt: row.cancelledAt, preflightId: row.preflightId,
+    logicalModelIds: row.logicalModelIdsJson ? JSON.parse(row.logicalModelIdsJson) : [], providerIds: row.providerIdsJson ? JSON.parse(row.providerIdsJson) : [], createdAt: row.createdAt
+  };
+}
+
+function evaluationError(res: Response, error: unknown) {
+  if (error instanceof EvaluationServiceError) return res.status(error.status).json({ error: error.message, code: error.code });
+  return res.status(500).json({ error: "evaluation request failed", code: "evaluation_failed" });
+}
+
+function liveEvaluationError(res: Response, error: unknown) {
+  if (error instanceof LiveEvaluationServiceError) return res.status(error.status).json({ error: error.message, code: error.code });
+  return res.status(500).json({ error: "live evaluation request failed", code: "live_evaluation_failed" });
+}
+
+function evaluationGovernanceError(res: Response, error: unknown) {
+  if (error instanceof EvaluationGovernanceError) return res.status(error.status).json({ error: error.message, code: error.code });
+  return res.status(500).json({ error: "evaluation governance request failed", code: "evaluation_governance_failed" });
+}
+
+function pilotServiceError(res: Response, error: unknown) {
+  if (error instanceof PilotServiceError) return res.status(error.status).json({ error: error.message, code: error.code });
+  return res.status(500).json({ error: "pilot request failed", code: "pilot_failed" });
+}
+
+function providerValidationFailure(res: Response, error: z.ZodError) {
+  const fields = Object.fromEntries(error.issues.map((issue) => [
+    issue.path.join(".") || "provider",
+    "欄位格式不正確"
+  ]));
+  return res.status(422).json({
+    error: "Provider 欄位格式不正確",
+    code: "validation_error",
+    fields
+  });
+}
+
+function providerFailure(res: Response, status: number, code: string, message: string) {
+  return res.status(status).json({ error: message, code });
+}
+
+function credentialValidationFailure(res: Response, error: z.ZodError, extraFields?: Record<string, string>) {
+  const fields = Object.fromEntries(error.issues.map((issue) => [
+    issue.path.join(".") || "credential",
+    "欄位格式不正確"
+  ]));
+  return res.status(422).json({
+    error: "Credential 欄位格式不正確",
+    message: "Credential 欄位格式不正確",
+    code: "validation_error",
+    fieldErrors: { ...fields, ...extraFields }
+  });
+}
+
+function credentialFailure(res: Response, status: number, code: string, message: string, fieldErrors?: Record<string, string>) {
+  return res.status(status).json({
+    error: message,
+    message,
+    code,
+    ...(fieldErrors ? { fieldErrors } : {})
+  });
+}
+
+function isUniqueCredentialStorageError(error: unknown): boolean {
+  return error instanceof Error && /unique|constraint/i.test(error.message);
 }
 
 function isPdfBookFile(file: BookFile): boolean {
@@ -638,6 +852,24 @@ function normalizePreviewRowsForApply(rows: ChapterPreviewRow[]): ChapterPreview
 }
 
 const APPEARANCE_KEY = "appearance";
+const SITE_CONFIG_KEY = "site-config";
+
+const guestAskRequestSchema = z.object({
+  question: z.string().trim().min(1).max(2000),
+  category: z
+    .enum(["auto", "programming", "math", "humanities", "cybersecurity", "教材問答"])
+    .default("auto"),
+  sourceType: z.enum(["manual", "image", "file"]).default("manual"),
+  providerPreference: z.enum(["auto", "openai", "gemini", "kimi", "qwen", "zai"]).default("auto")
+});
+
+const guestFeedbackRequestSchema = z.object({
+  requestId: z.string().trim().min(1).max(100),
+  helpful: z.boolean()
+});
+
+type GuestUsage = { day: string; count: number; lastAt: number };
+const guestUsageByIp = new Map<string, GuestUsage>();
 
 /** Load appearance settings merged over defaults (never throws / never blank). */
 function loadAppearance() {
@@ -648,6 +880,112 @@ function loadAppearance() {
   } catch {
     return DEFAULT_APPEARANCE;
   }
+}
+
+/** Load public homepage settings from the shared settings table. */
+function loadSiteConfig() {
+  const raw = repos.settings.get(SITE_CONFIG_KEY);
+  if (!raw) return DEFAULT_SITE_CONFIG;
+  try {
+    return siteConfigSchema.parse({ ...DEFAULT_SITE_CONFIG, ...JSON.parse(raw) });
+  } catch {
+    return DEFAULT_SITE_CONFIG;
+  }
+}
+
+function getPublicSiteConfig() {
+  return publicSiteConfigSchema.parse(loadSiteConfig());
+}
+
+function requireAdminAccess(req: Request, res: Response): boolean {
+  // Kept as a defence-in-depth guard for the newer handlers. The canonical
+  // policy is the `/api/admin` middleware registered above.
+  const expected = String(process.env.ADMIN_API_TOKEN || "").trim();
+  if (!expected) {
+    if (process.env.NODE_ENV === "production") {
+      fail(res, 503, "admin API authentication is not configured");
+      return false;
+    }
+    if (process.env.ADMIN_ALLOW_INSECURE_DEV === "true") return true;
+    fail(res, 401, "admin authentication required");
+    return false;
+  }
+  const candidate = (req.header("x-admin-token") || "").trim() ||
+    (req.header("authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  if (candidate !== expected) {
+    fail(res, 401, "admin authentication required");
+    return false;
+  }
+  return true;
+}
+
+/** Stable non-secret actor identifier for audit/preflight binding. */
+function adminActorId(req: Request): string {
+  const candidate = (req.header("x-admin-token") || req.header("authorization") || "").trim();
+  return `admin:${createHash("sha256").update(candidate).digest("hex").slice(0, 24)}`;
+}
+
+function guestDayKey(): string {
+  return todayTaipei();
+}
+
+function guestIdentity(req: Request): string {
+  return resolveClientIp(req).ip || "anonymous";
+}
+
+/** Map a routed subject back to the legacy `displayRole` label for guest-ask. */
+function guestDisplayRoleForSubject(
+  subject: "math" | "science" | "programming" | "language" | "humanities" | "general" | "unknown"
+): string {
+  switch (subject) {
+    case "math":
+      return "數學助教";
+    case "programming":
+      return "程式設計助教";
+    case "science":
+      return "自然助教";
+    case "language":
+      return "語文助教";
+    case "humanities":
+      return "文科助教";
+    default:
+      return "AI-SmartBook 學習助教";
+  }
+}
+
+function guestSystemPrompt(category: string, question: string): string {
+  // Graph-theory and programming questions get specialised prompts; the base
+  // guest prompt applies otherwise (spec §1).
+  return selectGuestSystemPrompt(question, category);
+}
+
+function guestFailureMessage(error: AiGatewayError): string {
+  switch (error.failureKind) {
+    case "provider_timeout":
+    case "gateway_timeout":
+      return "AI 回答逾時，尚未完成產生，請重新產生。";
+    case "provider_rate_limit":
+      return "目前 AI 使用量較高，請稍後再試。";
+    case "token_length":
+      return "回答內容超過目前可處理範圍，請把問題拆成較小段後再試。";
+    default:
+      return error.publicMessage;
+  }
+}
+
+function publicCompletion(completion: {
+  complete: boolean;
+  requestedItems: string[];
+  coveredItems: string[];
+}) {
+  // Provider finish reasons and parser diagnostics stay in the server-side
+  // diagnostics log. The browser only needs to know whether a retry is needed
+  // and which requested items were covered.
+  return {
+    complete: completion.complete,
+    requestedItems: completion.requestedItems,
+    coveredItems: completion.coveredItems
+  };
 }
 
 function tokenizeQuestion(question: string): string[] {
@@ -1395,19 +1733,19 @@ async function runJob<T>(
     bookId,
     jobType,
     status: "running",
-    inputJson: JSON.stringify(input ?? {})
+    inputJson: redactSensitiveText(JSON.stringify(input ?? {}))
   });
   try {
     const result = await fn();
     const updated = repos.aiJobs.update(job.id, {
       status: "success",
-      outputJson: JSON.stringify(result)
+      outputJson: redactSensitiveText(JSON.stringify(result))
     });
     return { job: updated ?? job, result };
   } catch (err) {
     repos.aiJobs.update(job.id, {
       status: "failed",
-      errorMessage: err instanceof Error ? err.message : String(err)
+      errorMessage: "AI job failed"
     });
     throw err;
   }
@@ -1512,7 +1850,7 @@ app.delete("/api/admin/books/:bookId/files/:fileId", (req, res) => {
     }
     deleteStoredBookFile(file);
   } catch (err) {
-    return fail(res, 500, err instanceof Error ? err.message : "delete file failed");
+    return fail(res, 500, "delete file failed");
   }
 
   res.json({ deleted: true });
@@ -1530,7 +1868,7 @@ app.post("/api/admin/books/:bookId/files/:fileId/parse-content", async (req, res
     res.json({ ...result, fileId: file.id });
   } catch (err) {
     repos.files.updateParseStatus(file.id, "failed");
-    fail(res, 500, err instanceof Error ? err.message : "parse content failed");
+    fail(res, 500, "parse content failed");
   }
 });
 
@@ -1574,7 +1912,7 @@ app.post("/api/admin/books/:bookId/files/:fileId/outline-preview", async (req, r
     res.json({ parsed, pageCount, rows });
   } catch (err) {
     repos.files.updateParseStatus(file.id, "failed");
-    fail(res, 500, err instanceof Error ? err.message : "outline preview failed");
+    fail(res, 500, "outline preview failed");
   }
 });
 
@@ -1604,7 +1942,7 @@ app.post("/api/admin/books/:bookId/files/:fileId/generate-json-index", async (re
     });
     res.json({ index });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "generate json index failed");
+    fail(res, 500, "generate json index failed");
   }
 });
 
@@ -1649,7 +1987,7 @@ app.post("/api/admin/books/:bookId/files/:fileId/save-json-index", async (req, r
     if (parsed.data.setActive) setActiveQaReferenceId(book.id, record.id);
     res.status(201).json({ index: summarizeStoredJsonIndex(record, getActiveQaReferenceId(book.id)) });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "save json index failed");
+    fail(res, 500, "save json index failed");
   }
 });
 
@@ -1693,7 +2031,7 @@ app.post("/api/admin/books/:bookId/json-indexes/upload", jsonUpload.single("file
     });
     res.status(201).json({ index: summarizeStoredJsonIndex(record, getActiveQaReferenceId(book.id)) });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "upload json index failed");
+    fail(res, 500, "upload json index failed");
   }
 });
 
@@ -1745,7 +2083,7 @@ app.delete("/api/admin/books/:bookId/json-indexes/:indexFileId", (req, res) => {
     if (getActiveQaReferenceId(book.id) === file.id) setActiveQaReferenceId(book.id, null);
     res.json({ deleted: true });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "delete json index failed");
+    fail(res, 500, "delete json index failed");
   }
 });
 
@@ -1786,7 +2124,7 @@ app.post("/api/admin/books/:bookId/reader-toc/import", (req, res) => {
       outline
     });
   } catch (err) {
-    fail(res, 400, err instanceof Error ? err.message : "import manual TOC failed");
+    fail(res, 400, "import manual TOC failed");
   }
 });
 
@@ -1895,7 +2233,7 @@ app.post("/api/admin/books/:bookId/reader-toc/generate-from-json-index", (req, r
       warnings
     });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "generate reader TOC failed");
+    fail(res, 500, "generate reader TOC failed");
   }
 });
 
@@ -1948,7 +2286,7 @@ app.post("/api/admin/books/:bookId/files/:fileId/apply-chapters", async (req, re
       chapters: enrichChapters(book.id)
     });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "apply chapters failed");
+    fail(res, 500, "apply chapters failed");
   }
 });
 
@@ -2033,7 +2371,7 @@ app.post("/api/admin/books/:bookId/chapters/build", async (req, res) => {
     linkChaptersByPageRange(ctx, book.id);
     res.json({ chapters: enrichChapters(book.id) });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "build chapters failed");
+    fail(res, 500, "build chapters failed");
   }
 });
 
@@ -2055,7 +2393,7 @@ app.post("/api/admin/books/:bookId/ai/split-book", async (req, res) => {
     );
     res.json({ job, chapters: result });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "split-book failed");
+    fail(res, 500, "AI split-book service unavailable");
   }
 });
 
@@ -2078,7 +2416,7 @@ app.post("/api/admin/books/:bookId/ai/build-chapters", async (req, res) => {
     });
     res.json({ job, chapters: result });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "build-chapters failed");
+    fail(res, 500, "AI build-chapters service unavailable");
   }
 });
 
@@ -2094,7 +2432,7 @@ app.post("/api/admin/books/:bookId/chapters/:chapterId/ai/summarize", async (req
     );
     res.json({ job, chapter: result });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "summarize failed");
+    fail(res, 500, "AI summarize service unavailable");
   }
 });
 
@@ -2109,7 +2447,7 @@ app.post("/api/admin/books/:bookId/qa", async (req, res) => {
     );
     res.json({ answer: result.answer, context: result.contextChunks, log: result.log });
   } catch (err) {
-    fail(res, 500, err instanceof Error ? err.message : "qa failed");
+    fail(res, 500, "AI QA service unavailable");
   }
 });
 
@@ -2803,6 +3141,1377 @@ app.post("/api/admin/student-questions/delete", (req, res) => {
   res.json({ deleted: ids.length });
 });
 
+// ---- Public homepage / guest AI ----------------------------------------
+// These endpoints intentionally do not accept bookId. They are a small,
+// rate-limited public flow. The response is atomic JSON: the browser never
+// renders a provider chunk before the gateway has completed and persisted the
+// answer, so a network/parser interruption cannot look like a successful reply.
+app.get("/api/public/site-config", (_req, res) => {
+  res.json(getPublicSiteConfig());
+});
+
+app.post("/api/public/guest-ask", async (req, res) => {
+  const parsed = guestAskRequestSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+
+  const config = loadSiteConfig();
+  if (!config.guestAiEnabled) {
+    return res.status(503).json({
+      status: "disabled",
+      message: "目前暫停開放訪客問答，請登入後繼續使用學習功能。",
+      requiresLoginForMore: true
+    });
+  }
+
+  const identity = guestIdentity(req);
+  const day = guestDayKey();
+  const current = guestUsageByIp.get(identity);
+  const usage: GuestUsage = current?.day === day ? current : { day, count: 0, lastAt: 0 };
+  const remainingBefore = Math.max(0, config.guestDailyLimit - usage.count);
+
+  if (remainingBefore <= 0) {
+    return res.status(429).json({
+      status: "limit_reached",
+      message: "今日訪客體驗額度已使用完畢。",
+      remainingGuestQuestions: 0,
+      requiresLoginForMore: true
+    });
+  }
+
+  const retryAfterSeconds = 20;
+  const elapsed = Date.now() - usage.lastAt;
+  if (usage.lastAt > 0 && elapsed < retryAfterSeconds * 1000) {
+    const retryAfter = Math.max(1, Math.ceil((retryAfterSeconds * 1000 - elapsed) / 1000));
+    res.setHeader("Retry-After", String(retryAfter));
+    return res.status(429).json({
+      status: "rate_limited",
+      message: `為維持服務品質，請約 ${retryAfter} 秒後再試。`,
+      remainingGuestQuestions: remainingBefore,
+      requiresLoginForMore: false,
+      retryAfterSeconds: retryAfter
+    });
+  }
+
+  // Count this request against the daily quota before calling the gateway so a
+  // gateway failure still consumes the attempt (matches prior mock behaviour).
+  usage.count += 1;
+  usage.lastAt = Date.now();
+  guestUsageByIp.set(identity, usage);
+  const remainingGuestQuestions = Math.max(0, config.guestDailyLimit - usage.count);
+
+  const requestId = `guest_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  // IP HMAC is a quota/risk signal only. Recovery authorization uses the
+  // high-entropy recovery token generated below; IP is never the sole auth.
+  const visitorIpHmac = hmacVisitorIp(identity, guestAskIpHmacSecret);
+  // Generate a 256-bit recovery token. The raw token is returned to the client
+  // exactly once (below); only its HMAC digest is persisted. The token is the
+  // sole credential for restoring this answer later.
+  const recoveryToken = generateRecoveryToken();
+  const recoveryTokenDigest = digestRecoveryToken(recoveryToken, guestAskIpHmacSecret);
+  const expiresAt = new Date(Date.now() + guestAskRetentionDays * 86_400_000).toISOString();
+  const clientAbortController = new AbortController();
+  const onRequestAborted = () => clientAbortController.abort();
+  const onResponseClosed = () => {
+    if (!res.writableEnded) clientAbortController.abort();
+  };
+  req.once("aborted", onRequestAborted);
+  res.once("close", onResponseClosed);
+
+  try {
+    const { result, decision, fallbackUsed, fallbackReason } = await aiGateway.run({
+      requestId,
+      prompt: parsed.data.question,
+      systemPrompt: guestSystemPrompt(parsed.data.category, parsed.data.question),
+      requestSource: "guest",
+      // Never persist the raw client IP as a quota scope key. The in-memory
+      // rate limiter may use it transiently, but DB-backed usage uses the HMAC.
+      scopeKey: visitorIpHmac,
+      visitorIpHash: visitorIpHmac,
+      clientSignal: clientAbortController.signal,
+      preferredProvider: parsed.data.providerPreference === "auto" ? undefined : parsed.data.providerPreference
+    });
+
+    // Back-compat: keep domain/displayRole derived from the routed subject so
+    // the existing student frontend rendering is unchanged.
+    const displayRole = guestDisplayRoleForSubject(decision.subject);
+    const mode: "live" | "mock" = result.provider === "mock" ? "mock" : "live";
+    const completion = result.completion ?? {
+      complete: true,
+      reasons: [],
+      requestedItems: [],
+      coveredItems: []
+    };
+    const learnerCompletion = publicCompletion(completion);
+    const answerStatus = completion.complete ? "success" : "incomplete";
+
+    try {
+      repos.guestAskAnswers.create({
+        requestId,
+        visitorIpHmac,
+        recoveryTokenDigest,
+        expiresAt,
+        question: redactSensitiveText(parsed.data.question),
+        answer: result.answer,
+        provider: result.provider,
+        model: result.model,
+        mode,
+        status: answerStatus,
+        finishReason: result.finishReason ?? null,
+        completionJson: JSON.stringify(completion)
+      });
+    } catch {
+      // Do not return an answer that the server failed to persist as if it were
+      // durable. The provider result remains in the operational gateway log,
+      // while the public response contains only a safe retry instruction.
+      return res.status(500).json({
+        requestId,
+        status: "error",
+        message: "回答已產生但保存失敗，請重新產生。",
+        retryable: true,
+        remainingGuestQuestions,
+        requiresLoginForMore: false,
+        error: {
+          code: "AI_ANSWER_SAVE_FAILED",
+          message: "回答保存失敗，請重新產生。",
+          requestId
+        }
+      });
+    }
+
+    // Low-frequency opportunistic cleanup of expired answers, piggybacking on
+    // answer creation so no separate scheduler is required. Best-effort; a
+    // failure is swallowed so it never blocks normal Q&A.
+    if (Math.random() < 0.02) {
+      try {
+        repos.guestAskAnswers.cleanupExpired(new Date().toISOString());
+      } catch {
+        /* opportunistic; ignore */
+      }
+    }
+
+    res.json({
+      requestId,
+      status: answerStatus,
+      domain: decision.subject,
+      displayRole,
+      // One-time recovery token. The client must store this to restore the
+      // answer later; it is never returned again and never logged. Only its
+      // HMAC digest is persisted server-side.
+      recoveryToken,
+      // The gateway validator and bounded provider maxOutputTokens are the
+      // only answer limits. Never apply a second arbitrary character slice at
+      // the API boundary.
+      answer: result.answer,
+      remainingGuestQuestions,
+      requiresLoginForMore: remainingGuestQuestions === 0,
+      retryable: !completion.complete,
+      mode,
+      completion: learnerCompletion,
+      // Additive metadata (non-sensitive) — new clients may read these; old
+      // clients ignore them. Never echoes keys, IPs, or internal config.
+      metadata: {
+        provider: result.provider,
+        model: result.model,
+        mode,
+        fallbackUsed,
+        fallbackReason,
+        subject: decision.subject,
+        taskType: decision.taskType,
+        complexity: decision.complexity,
+        latencyMs: result.latencyMs,
+        completion: learnerCompletion
+      },
+      quota: {
+        used: usage.count,
+        limit: config.guestDailyLimit,
+        remaining: remainingGuestQuestions
+      }
+    });
+  } catch (err) {
+    if ((err instanceof AiGatewayError && err.failureKind === "client_abort") || req.aborted) {
+      return;
+    }
+    if (err instanceof AiGatewayError) {
+      const isBudget = err.code === "AI_BUDGET_EXCEEDED";
+      return res.status(err.httpStatus).json({
+        requestId,
+        status: isBudget ? "limit_reached" : "error",
+        message: guestFailureMessage(err),
+        retryable: !isBudget && err.code !== "AI_INVALID_INPUT",
+        remainingGuestQuestions,
+        requiresLoginForMore: false,
+        error: { code: err.code, message: err.publicMessage, requestId },
+        fallbackReason: err.fallbackReason
+      });
+    }
+    return res.status(500).json({
+      requestId,
+      status: "error",
+      message: "AI 服務目前暫時無法使用，請稍後再試。",
+      remainingGuestQuestions,
+      requiresLoginForMore: false,
+      error: {
+        code: "AI_INTERNAL",
+        message: "AI 服務目前暫時無法使用，請稍後再試。",
+        requestId
+      }
+    });
+  } finally {
+    req.off("aborted", onRequestAborted);
+    res.off("close", onResponseClosed);
+  }
+});
+
+/** Restore a saved answer. Auth = answerId + recovery token header (not IP). */
+app.get("/api/public/guest-ask/:requestId", (req, res) => {
+  const requestId = String(req.params.requestId || "");
+  if (!/^guest_[a-f0-9]{16}$/.test(requestId)) return fail(res, 404, "answer not found");
+  // Authorization is the per-answer recovery token. IP is deliberately not an
+  // auth factor: shared NAT would let one visitor read another's answer. A
+  // missing/wrong token or an expired answer all return the same generic 404.
+  const token = String(req.header("x-guest-recovery-token") || "").trim();
+  if (!token) return fail(res, 404, "answer not found");
+  const providedDigest = digestRecoveryToken(token, guestAskIpHmacSecret);
+  const saved = repos.guestAskAnswers.findActiveByRequestIdAndTokenDigest(
+    requestId,
+    providedDigest,
+    new Date().toISOString()
+  );
+  if (!saved) return fail(res, 404, "answer not found");
+
+  let completion: { complete?: boolean; requestedItems?: string[]; coveredItems?: string[] } | undefined;
+  try {
+    const parsedCompletion = saved.completionJson ? JSON.parse(saved.completionJson) : undefined;
+    if (parsedCompletion && typeof parsedCompletion === "object") {
+      const candidate = parsedCompletion as Record<string, unknown>;
+      completion = publicCompletion({
+        complete: candidate.complete === true,
+        requestedItems: Array.isArray(candidate.requestedItems)
+          ? candidate.requestedItems.filter((item): item is string => typeof item === "string")
+          : [],
+        coveredItems: Array.isArray(candidate.coveredItems)
+          ? candidate.coveredItems.filter((item): item is string => typeof item === "string")
+          : []
+      });
+    }
+  } catch {
+    completion = undefined;
+  }
+  const day = guestDayKey();
+  const usage = guestUsageByIp.get(guestIdentity(req));
+  const remaining = Math.max(0, loadSiteConfig().guestDailyLimit - (usage?.day === day ? usage.count : 0));
+  const mode = saved.mode === "mock" ? "mock" : "live";
+  res.json({
+    requestId: saved.requestId,
+    question: saved.question,
+    status: saved.status,
+    answer: saved.answer,
+    mode,
+    completion,
+    metadata: {
+      provider: saved.provider,
+      model: saved.model,
+      mode,
+      completion
+    },
+    remainingGuestQuestions: remaining,
+    requiresLoginForMore: remaining === 0
+  });
+});
+
+app.post("/api/public/guest-feedback", (req, res) => {
+  const parsed = guestFeedbackRequestSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  // Feedback is deliberately acknowledgement-only in mock mode. It can be
+  // connected to an analytics repository later without changing the client.
+  res.status(202).json({ accepted: true });
+});
+
+app.get("/api/admin/site-config", (_req, res) => {
+  res.json({ config: loadSiteConfig() });
+});
+
+app.put("/api/admin/site-config", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const parsed = siteConfigUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  const merged = siteConfigSchema.parse({ ...loadSiteConfig(), ...parsed.data });
+  repos.settings.set(SITE_CONFIG_KEY, JSON.stringify(merged));
+  res.json({ config: merged, updatedAt: new Date().toISOString() });
+});
+
+// ---- AI provider / credential administration ----------------------------
+// These endpoints deliberately map rows to a public shape; encryptedApiKey,
+// fingerprint and transport envelope are never serialised.
+function publicProviderConfig(row: ReturnType<typeof repos.aiProviders.listConfigs>[number]) {
+  return { id: row.id, provider: row.provider, slug: row.slug, displayName: row.displayName, baseUrl: row.baseUrl,
+    model: row.model, enabled: row.enabled, isDefault: row.isDefault, isRouterProvider: row.isRouterProvider,
+    priority: row.priority, createdAt: row.createdAt, updatedAt: row.updatedAt };
+}
+function publicCredential(row: NonNullable<ReturnType<typeof repos.aiProviders.findCredential>>) {
+  return { id: row.id, providerConfigId: row.providerConfigId, name: row.name, maskedApiKey: row.maskedApiKey,
+    baseUrl: row.baseUrl, model: row.model, status: row.status, priority: row.priority, weight: row.weight,
+    failureCount: row.failureCount, cooldownUntil: row.cooldownUntil, lastTestedAt: row.lastTestedAt,
+    lastTestStatus: row.lastTestStatus, lastTestLatencyMs: row.lastTestLatencyMs, createdAt: row.createdAt,
+    updatedAt: row.updatedAt, disabledAt: row.disabledAt,
+    billingMode: row.billingMode,
+    region: row.region,
+    endpointProfile: row.endpointProfile,
+    usageScope: row.usageScope,
+    productionAuthorized: row.productionAuthorized,
+    allowEvaluation: row.allowEvaluation,
+    evaluationAuthorizedAt: row.evaluationAuthorizedAt,
+    providerHealth: row.providerHealth,
+    modelQuotas: repos.aiCredentialModelQuotas.list(row.id).map(publicModelQuota) };
+}
+
+function credentialActivationFailure(
+  res: Response,
+  provider: string,
+  billingMode: ProviderBillingMode,
+  usageScope: StoredCredentialUsageScope,
+  productionAuthorized: boolean
+) {
+  const validation = validateCredentialActivation({ provider, billingMode, usageScope, productionAuthorized });
+  if (validation.allowed) return undefined;
+  return credentialFailure(res, 422, "credential_policy_violation", validation.message, {
+    usageScope: validation.reason
+  });
+}
+
+function publicModelQuota(row: ReturnType<typeof repos.aiCredentialModelQuotas.list>[number]) {
+	  return {
+	    id: row.id,
+	    credentialId: row.credentialId,
+	    model: row.model,
+	    rpmLimit: row.rpmLimit,
+	    tpmLimit: row.tpmLimit,
+	    rpdLimit: row.rpdLimit,
+	    requestsThisMinute: Math.max(0, row.requestsThisMinute),
+	    tokensThisMinute: Math.max(0, row.tokensThisMinute),
+	    requestsToday: Math.max(0, row.requestsToday),
+	    minuteResetAt: row.minuteResetAt,
+	    dailyResetAt: row.dailyResetAt,
+	    resetTimezone: row.resetTimezone,
+	    usageSource: row.usageSource === "provider_response" ? "provider_response" : "system_estimated",
+	    enabled: row.enabled,
+	    isDefault: row.isDefault,
+	    // Pricing config fields (spec §5.1, §5.2). Exposed so the admin UI can
+	    // display and edit per-model pricing. Historical usage logs keep their own
+	    // immutable snapshot (spec §5.3), so editing prices here only affects
+	    // future requests.
+	    currency: row.currency,
+	    serviceTier: row.serviceTier,
+	    inputPriceUsdPerMillion: row.inputPriceUsdPerMillion,
+	    outputPriceUsdPerMillion: row.outputPriceUsdPerMillion,
+	    cachedInputPriceUsdPerMillion: row.cachedInputPriceUsdPerMillion,
+	    cacheStorageUsdPerMillionTokenHour: row.cacheStorageUsdPerMillionTokenHour,
+	    pricingEffectiveAt: row.pricingEffectiveAt,
+	    pricingSource: row.pricingSource,
+	    pricingUnavailable: row.pricingUnavailable,
+	    createdAt: row.createdAt,
+	    updatedAt: row.updatedAt,
+	    remaining: {
+	      rpm: row.rpmLimit === null ? null : Math.max(0, row.rpmLimit - row.requestsThisMinute),
+	      tpm: row.tpmLimit === null ? null : Math.max(0, row.tpmLimit - row.tokensThisMinute),
+	      rpd: row.rpdLimit === null ? null : Math.max(0, row.rpdLimit - row.requestsToday)
+	    }
+	  };
+	}
+
+function isMaskedCredentialValue(value: string, currentMask?: string): boolean {
+  const normalized = value.trim();
+  return Boolean(currentMask && normalized === currentMask)
+    || normalized === "****"
+    || /^[^*]{1,3}\*{4}[^*]{4}$/.test(normalized);
+}
+
+app.get("/api/admin/ai-providers", (_req, res) => {
+  res.json({ providers: repos.aiProviders.listConfigs().map(publicProviderConfig) });
+});
+app.post("/api/admin/ai-providers", (req, res) => {
+  const parsed = upsertAiProviderConfigInputSchema.safeParse(req.body);
+  if (!parsed.success) return providerValidationFailure(res, parsed.error);
+  let created: ReturnType<typeof repos.aiProviders.createConfig>;
+  try {
+    created = repos.aiProviders.createConfig(parsed.data);
+  } catch (error) {
+    if (error instanceof AiProviderIdentityConflictError) {
+      return providerFailure(res, 409, "provider_identity_conflict", error.field === "slug" ? "此 Provider Slug 已存在，請使用其他 Slug。" : "此 Provider 顯示名稱已存在，請使用其他名稱。");
+    }
+    return providerFailure(res, 500, "unexpected_error", "Provider 建立失敗，請稍後再試。");
+  }
+  const row = created.row;
+  repos.aiProviders.audit("provider.created_or_updated", "provider", row.id, { provider: row.provider });
+  if (created.restored) repos.aiProviders.audit("provider.restored", "provider", row.id, { provider: row.provider });
+  res.status(created.restored ? 200 : 201).json({
+    provider: publicProviderConfig(row),
+    code: created.restored ? "provider_restored" : "provider_created"
+  });
+});
+app.put("/api/admin/ai-providers", (req, res) => {
+  const parsed = upsertAiProviderConfigInputSchema.safeParse(req.body);
+  if (!parsed.success) return providerValidationFailure(res, parsed.error);
+  let row: ReturnType<typeof repos.aiProviders.upsertConfig>;
+  try {
+    row = repos.aiProviders.upsertConfig(parsed.data);
+  } catch (error) {
+    if (error instanceof AiProviderIdentityConflictError) {
+      return providerFailure(res, 409, "provider_identity_conflict", error.field === "slug" ? "此 Provider Slug 已存在，請使用其他 Slug。" : "此 Provider 顯示名稱已存在，請使用其他名稱。");
+    }
+    return providerFailure(res, 500, "unexpected_error", "Provider 更新失敗，請稍後再試。");
+  }
+  repos.aiProviders.audit("provider.updated", "provider", row.id, { provider: row.provider });
+  res.json({ provider: publicProviderConfig(row) });
+});
+app.delete("/api/admin/ai-providers/:id", (req, res) => {
+  const id = String(req.params.id);
+  const current = repos.aiProviders.findConfigIncludingDeleted(id);
+  if (!current) return res.status(204).end();
+  try {
+    const result = repos.aiProviders.deleteConfig(id);
+    // The repository is idempotent; a repeated DELETE never leaks secrets or
+    // turns an already deleted resource into a 500.
+    if (result.deleted) return res.status(204).end();
+    return res.status(204).end();
+  } catch (error) {
+    if (error instanceof Error && error.message === "default router cannot be deleted") {
+      return fail(res, 409, "此 Provider 是 Default Router，請先指定其他 Default Router 再刪除。");
+    }
+    return fail(res, 400, "Provider 無法刪除，請稍後再試。");
+  }
+});
+app.get("/api/admin/ai-providers/:id/credentials", (req, res) => {
+  const provider = repos.aiProviders.findConfig(String(req.params.id));
+  if (!provider) return fail(res, 404, "provider not found");
+  res.json({ credentials: repos.aiProviders.listCredentials(provider.id).map(publicCredential) });
+});
+app.get("/api/admin/ai-credentials/:credentialId/quotas", (req, res) => {
+  const credential = repos.aiProviders.findCredential(String(req.params.credentialId));
+  if (!credential) return fail(res, 404, "credential not found");
+  res.json({ quotas: repos.aiCredentialModelQuotas.list(credential.id).map(publicModelQuota) });
+});
+app.post("/api/admin/ai-credentials/:credentialId/quotas", (req, res) => {
+  const credential = repos.aiProviders.findCredential(String(req.params.credentialId));
+  if (!credential) return fail(res, 404, "credential not found");
+  const parsed = createAiCredentialModelQuotaInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, "模型配額欄位格式不正確；上限須為正整數或留白");
+  if (repos.aiCredentialModelQuotas.findForCredential(credential.id, parsed.data.model)) {
+    return fail(res, 409, "同一 Credential 不可重複建立相同 Model 配額");
+  }
+  try {
+    const row = repos.aiCredentialModelQuotas.create({ ...parsed.data, credentialId: credential.id });
+    repos.aiProviders.audit("credential.model_quota.created", "credential_model_quota", row.id);
+    return res.status(201).json({ quota: publicModelQuota(row) });
+  } catch (error) {
+    if (error instanceof Error && /default model/i.test(error.message)) return fail(res, 409, "預設模型必須保持啟用，請先指定其他預設模型");
+    return fail(res, 400, "模型配額欄位格式不正確或時區不支援");
+  }
+});
+app.put("/api/admin/ai-credential-quotas/:quotaId", (req, res) => {
+  const current = repos.aiCredentialModelQuotas.find(String(req.params.quotaId));
+  if (!current || !repos.aiProviders.findCredential(current.credentialId)) return fail(res, 404, "模型配額不存在");
+  const parsed = updateAiCredentialModelQuotaInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, "模型配額欄位格式不正確；上限須為正整數或留白");
+  const duplicateModel = parsed.data.model
+    ? repos.aiCredentialModelQuotas.findForCredential(current.credentialId, parsed.data.model)
+    : undefined;
+  if (duplicateModel && duplicateModel.id !== current.id) {
+    return fail(res, 409, "同一 Credential 不可重複建立相同 Model 配額");
+  }
+  try {
+    const row = repos.aiCredentialModelQuotas.update(current.id, parsed.data);
+    if (!row) return fail(res, 404, "模型配額不存在");
+    repos.aiProviders.audit("credential.model_quota.updated", "credential_model_quota", row.id);
+    return res.json({ quota: publicModelQuota(row) });
+  } catch (error) {
+    if (error instanceof Error && /default model/i.test(error.message)) return fail(res, 409, "預設模型必須保持啟用，請先指定其他預設模型");
+    return fail(res, 400, "模型配額欄位格式不正確或時區不支援");
+  }
+});
+app.post("/api/admin/ai-credential-quotas/:quotaId/default", (req, res) => {
+  const current = repos.aiCredentialModelQuotas.find(String(req.params.quotaId));
+  if (!current || !repos.aiProviders.findCredential(current.credentialId)) return fail(res, 404, "模型配額不存在");
+  try {
+    const row = repos.aiCredentialModelQuotas.setDefault(current.id);
+    if (!row) return fail(res, 404, "模型配額不存在");
+    repos.aiProviders.audit("credential.model_quota.default_changed", "credential_model_quota", row.id);
+    return res.json({ quota: publicModelQuota(row) });
+  } catch {
+    return fail(res, 409, "停用中的模型不可設為預設模型");
+  }
+});
+app.delete("/api/admin/ai-credential-quotas/:quotaId", (req, res) => {
+  const current = repos.aiCredentialModelQuotas.find(String(req.params.quotaId));
+  if (!current) return res.status(204).end();
+  if (!repos.aiProviders.findCredential(current.credentialId)) return res.status(204).end();
+  try {
+    repos.aiCredentialModelQuotas.remove(current.id);
+  } catch {
+    return fail(res, 409, "預設模型不可直接刪除，請先指定其他預設模型");
+  }
+  repos.aiProviders.audit("credential.model_quota.deleted", "credential_model_quota", current.id);
+  return res.status(204).end();
+});
+app.post("/api/admin/ai-providers/:id/credentials", (req, res) => {
+  const provider = repos.aiProviders.findConfig(String(req.params.id));
+  if (!provider) return credentialFailure(res, 404, "provider_not_found", "Provider 不存在");
+  const parsed = createAiCredentialInputSchema.safeParse(req.body);
+  if (!parsed.success) return credentialValidationFailure(res, parsed.error);
+  const policyFailure = credentialActivationFailure(
+    res,
+    provider.provider,
+    parsed.data.billingMode,
+    parsed.data.usageScope,
+    parsed.data.productionAuthorized
+  );
+  if (policyFailure) return policyFailure;
+  if (parsed.data.model && parsed.data.isDefaultModel === false) {
+    return credentialFailure(res, 422, "validation_error", "Credential 欄位格式不正確", {
+      isDefaultModel: "首次模型必須設為預設模型"
+    });
+  }
+  if (isMaskedCredentialValue(parsed.data.apiKey)) {
+    return credentialFailure(res, 422, "validation_error", "Credential 欄位格式不正確", {
+      apiKey: "請輸入完整 API Key，不能使用遮罩值"
+    });
+  }
+  if (repos.aiProviders.findCredentialByName(provider.id, parsed.data.name)) {
+    return credentialFailure(res, 409, "credential_already_exists", "此 Credential 名稱已存在");
+  }
+  const fingerprint = credentialFingerprint(parsed.data.apiKey);
+  if (repos.aiProviders.findByFingerprint(fingerprint)) {
+    return credentialFailure(res, 409, "credential_already_exists", "此 API Key 已存在");
+  }
+  let encryptedApiKey: string;
+  try {
+    encryptedApiKey = encryptCredential(parsed.data.apiKey);
+  } catch (error) {
+    if (error instanceof Error && /not configured/i.test(error.message)) {
+      return credentialFailure(res, 503, "credential_vault_unavailable", "Credential vault 暫時無法使用");
+    }
+    return credentialFailure(res, 500, "credential_encryption_failed", "Credential 加密失敗");
+  }
+  let row: NonNullable<ReturnType<typeof repos.aiProviders.findCredential>>;
+  try {
+    row = repos.aiProviders.createCredential({ ...parsed.data, providerConfigId: provider.id,
+      evaluationAuthorizedAt: parsed.data.allowEvaluation ? new Date().toISOString() : null,
+      evaluationAuthorizedByAdminId: parsed.data.allowEvaluation ? adminActorId(req) : null,
+      encryptedApiKey, maskedApiKey: maskCredential(parsed.data.apiKey), keyFingerprint: fingerprint });
+  } catch (error) {
+    if (isUniqueCredentialStorageError(error)) {
+      return credentialFailure(res, 409, "credential_already_exists", "此 Credential 已存在");
+    }
+    return credentialFailure(res, 500, "credential_storage_failed", "Credential 儲存失敗");
+  }
+  repos.aiProviders.audit("credential.created", "credential", row.id, { provider: provider.provider, status: row.status });
+  res.status(201).json({ credential: publicCredential(row) });
+});
+app.put("/api/admin/ai-credentials/:credentialId", (req, res) => {
+  const current = repos.aiProviders.findCredential(String(req.params.credentialId));
+  if (!current) return fail(res, 404, "credential not found");
+  const parsed = updateAiCredentialInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, "invalid credential payload");
+  let { apiKey, model, rpmLimit, tpmLimit, rpdLimit, resetTimezone, isDefaultModel, ...safePatch } = parsed.data;
+  // Some older clients populated the write-only input with the displayed
+  // mask. Treat that as "unchanged" so a mask can never overwrite a key.
+  if (apiKey && isMaskedCredentialValue(apiKey, current.maskedApiKey)) apiKey = undefined;
+  const provider = repos.aiProviders.findConfig(current.providerConfigId);
+  if (safePatch.name && provider && repos.aiProviders.findCredentialByName(provider.id, safePatch.name, current.id)) {
+    return fail(res, 409, "credential name already exists");
+  }
+  if (apiKey) {
+    const fingerprint = credentialFingerprint(apiKey);
+    const other = repos.aiProviders.findByFingerprint(fingerprint);
+    if (other && other.id !== current.id) return fail(res, 409, "credential already exists");
+    try {
+      Object.assign(safePatch, { encryptedApiKey: encryptCredential(apiKey), maskedApiKey: maskCredential(apiKey), keyFingerprint: fingerprint });
+    } catch {
+      return fail(res, 503, "credential vault is not configured");
+    }
+  }
+  const effectiveBillingMode = safePatch.billingMode ?? current.billingMode;
+  const effectiveUsageScope = safePatch.usageScope ?? current.usageScope;
+  const effectiveProductionAuthorized = safePatch.productionAuthorized ?? current.productionAuthorized;
+  const policyFailure = credentialActivationFailure(
+    res,
+    provider?.provider ?? "unknown",
+    effectiveBillingMode as ProviderBillingMode,
+    effectiveUsageScope as StoredCredentialUsageScope,
+    effectiveProductionAuthorized
+  );
+  if (policyFailure) return policyFailure;
+  const status = safePatch.status;
+  const patch: Parameters<typeof repos.aiProviders.updateCredential>[1] = {
+    ...safePatch,
+    ...(safePatch.allowEvaluation === true ? { evaluationAuthorizedAt: new Date().toISOString(), evaluationAuthorizedByAdminId: adminActorId(req) } : {}),
+    ...(safePatch.allowEvaluation === false ? { evaluationAuthorizedAt: null, evaluationAuthorizedByAdminId: null } : {}),
+    ...(status === "disabled" ? { disabledAt: new Date().toISOString() } : status ? { disabledAt: null } : {})
+  };
+  let row: ReturnType<typeof repos.aiProviders.updateCredential>;
+  try {
+    row = repos.aiProviders.updateCredential(current.id, patch);
+    if (model !== undefined && model !== null) {
+      if (!model.trim()) return credentialFailure(res, 422, "validation_error", "Credential 欄位格式不正確", {
+        model: "Credential Model 不可空白；請至少保留一組預設模型"
+      });
+      if (isDefaultModel === false) return fail(res, 400, "Credential Model 必須同步代表預設模型");
+      const existingQuota = repos.aiCredentialModelQuotas.findForCredential(current.id, model);
+      const quotaPatch = {
+        model,
+        ...(rpmLimit !== undefined ? { rpmLimit } : {}),
+        ...(tpmLimit !== undefined ? { tpmLimit } : {}),
+        ...(rpdLimit !== undefined ? { rpdLimit } : {}),
+        ...(resetTimezone !== undefined ? { resetTimezone } : {}),
+        isDefault: true,
+        enabled: true
+      };
+      if (existingQuota) repos.aiCredentialModelQuotas.update(existingQuota.id, quotaPatch);
+      else repos.aiCredentialModelQuotas.create({ ...quotaPatch, credentialId: current.id });
+      row = repos.aiProviders.findCredential(current.id) ?? row;
+    }
+  } catch {
+    return fail(res, 409, "credential could not be updated");
+  }
+  repos.aiProviders.audit(apiKey ? "credential.replaced" : "credential.updated", "credential", current.id, { status: row?.status });
+  res.json({ credential: row ? publicCredential(row) : null });
+});
+app.post("/api/admin/ai-credentials/:credentialId/enable", (req, res) => {
+  const current = repos.aiProviders.findCredential(String(req.params.credentialId));
+  if (!current) return fail(res, 404, "credential not found");
+  const provider = repos.aiProviders.findConfig(current.providerConfigId);
+  const policyFailure = credentialActivationFailure(
+    res,
+    provider?.provider ?? "unknown",
+    current.billingMode as ProviderBillingMode,
+    current.usageScope as StoredCredentialUsageScope,
+    current.productionAuthorized
+  );
+  if (policyFailure) return policyFailure;
+  const row = repos.aiProviders.updateCredential(String(req.params.credentialId), { status: "active", disabledAt: null });
+  if (!row) return fail(res, 404, "credential not found");
+  repos.aiProviders.audit("credential.enabled", "credential", row.id);
+  res.json({ credential: publicCredential(row) });
+});
+app.post("/api/admin/ai-credentials/:credentialId/disable", (req, res) => {
+  const row = repos.aiProviders.updateCredential(String(req.params.credentialId), { status: "disabled", disabledAt: new Date().toISOString() });
+  if (!row) return fail(res, 404, "credential not found");
+  repos.aiProviders.audit("credential.disabled", "credential", row.id);
+  res.json({ credential: publicCredential(row) });
+});
+app.delete("/api/admin/ai-credentials/:credentialId", (req, res) => {
+  const current = repos.aiProviders.findCredentialIncludingDeleted(String(req.params.credentialId));
+  if (!current) return fail(res, 404, "credential not found");
+  // DELETE is idempotent: a previously soft-deleted row is already in the
+  // requested state and must not produce another audit event.
+  if (current.deletedAt) return res.status(204).end();
+  const deletedAt = new Date().toISOString();
+  const wasLastActive = current.status === "active" && repos.aiProviders
+    .listCredentials(current.providerConfigId)
+    .filter((row) => row.status === "active").length === 1;
+  repos.aiProviders.updateCredential(current.id, { deletedAt, status: "disabled", disabledAt: deletedAt });
+  repos.aiProviders.audit("credential.deleted", "credential", current.id, { lastActiveCredential: wasLastActive });
+  res.status(204).end();
+});
+app.post("/api/admin/ai-credentials/:credentialId/test", async (req, res) => {
+  const credential = repos.aiProviders.findCredential(String(req.params.credentialId));
+  if (!credential) return fail(res, 404, "credential not found");
+  const provider = repos.aiProviders.findConfig(credential.providerConfigId);
+  if (!provider) return fail(res, 404, "provider not found");
+  const started = Date.now();
+  const managedProvider = provider.provider as "openai" | "gemini" | "kimi" | "qwen" | "zai";
+  if (managedProvider === "qwen") {
+    const endpoint = validateQwenEndpoint({
+      baseUrl: credential.baseUrl ?? provider.baseUrl ?? "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      region: credential.region ?? undefined,
+      endpointProfile: credential.endpointProfile ?? undefined
+    });
+    if (!endpoint.ok) {
+      const reason = endpoint.reason;
+      const health = healthForCredentialVerification(reason);
+      repos.aiProviders.updateCredential(credential.id, {
+        providerHealth: health,
+        ...(health === "access_denied" || health === "quota_exhausted"
+          ? { status: "disabled", disabledAt: new Date().toISOString() }
+          : {})
+      });
+      repos.aiProviders.recordTest(credential.id, "failed", Date.now() - started);
+      repos.aiProviders.audit("credential.tested", "credential", credential.id, {
+        result: "failed", validationReason: reason, region: credential.region
+      });
+      return res.status(422).json({ status: "failed", reason });
+    }
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  try {
+    // Uses the same sanitised adapter path as production; no upstream body is exposed.
+    const adapter = new CredentialBackedProvider(
+      managedProvider,
+      repos,
+      provider.model || defaultModelForManagedProvider(managedProvider),
+      credential.id,
+      "development_interactive"
+    );
+    await adapter.generate({ requestId: `credential_test_${randomUUID()}`, prompt: "Reply with OK.", maxOutputTokens: 8, signal: controller.signal });
+    repos.aiProviders.recordTest(credential.id, "success", Date.now() - started);
+    repos.aiProviders.audit("credential.tested", "credential", credential.id, { result: "success", region: credential.region });
+    res.json({ status: "success", reason: "valid", latencyMs: Date.now() - started });
+  } catch (error) {
+    const status = error instanceof AiGatewayError ? error.upstreamStatus : undefined;
+    const reason = classifyCredentialVerification({
+      status,
+      apiKeyPresent: true,
+      quotaExhausted: status === 429 && error instanceof AiGatewayError && error.fallbackReason === "quota_exhausted"
+    });
+    const health = healthForCredentialVerification(reason);
+    repos.aiProviders.updateCredential(credential.id, {
+      providerHealth: health,
+      ...(health === "access_denied" || health === "quota_exhausted"
+        ? { status: "disabled", disabledAt: new Date().toISOString() }
+        : {})
+    });
+    repos.aiProviders.recordTest(credential.id, "failed", Date.now() - started);
+    repos.aiProviders.audit("credential.tested", "credential", credential.id, {
+      result: "failed", validationReason: reason, httpStatus: status, region: credential.region, health
+    });
+    const responseStatus = reason === "rate_limited" || reason === "quota_exhausted" ? 429 : 503;
+    res.status(responseStatus).json({ status: "failed", reason });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+// ---- AI Analytics (admin) ------------------------------------------------
+// Read-side aggregations over ai_request_logs / ai_usage_logs / ai_daily_usage.
+// All admin analytics routes are gated by requireAdminAccess when a token is
+// configured. Responses never contain raw IPs, API keys, or system prompts.
+app.get("/api/admin/ai-analytics/summary", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const date = typeof req.query.date === "string" ? req.query.date : todayTaipei();
+  if (!isValidDateOnly(date)) return fail(res, 400, "date must be a valid YYYY-MM-DD date");
+  res.json(analytics.summary(date));
+});
+
+app.get("/api/admin/ai-analytics/daily", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const range = parseAnalyticsDateRange(req.query.from, req.query.to);
+  if (!range.ok) return fail(res, 400, range.error);
+  res.json(analytics.daily(range.fromIso, range.toIso));
+});
+
+app.get("/api/admin/ai-analytics/providers", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const range = parseAnalyticsDateRange(req.query.from, req.query.to);
+  if (!range.ok) return fail(res, 400, range.error);
+  res.json(analytics.providers(range.fromIso, range.toIso));
+});
+
+app.get("/api/admin/ai-analytics/subjects", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const range = parseAnalyticsDateRange(req.query.from, req.query.to);
+  if (!range.ok) return fail(res, 400, range.error);
+  res.json(analytics.subjects(range.fromIso, range.toIso));
+});
+
+app.get("/api/admin/ai-requests", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const page = req.query.page === undefined ? 1 : Number(req.query.page);
+  const limit = req.query.limit === undefined ? 50 : Number(req.query.limit);
+  if (!Number.isInteger(page) || page < 1) return fail(res, 400, "page must be a positive integer");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+    return fail(res, 400, "limit must be an integer between 1 and 200");
+  }
+  const sort = req.query.sort === undefined ? "newest" : req.query.sort;
+  if (sort !== "newest" && sort !== "oldest" && sort !== "latency") {
+    return fail(res, 400, "sort is not supported");
+  }
+  const range = parseAnalyticsDateRange(req.query.from, req.query.to);
+  if (!range.ok) return fail(res, 400, range.error);
+  const provider = typeof req.query.provider === "string" ? req.query.provider : undefined;
+  const subject = typeof req.query.subject === "string" ? req.query.subject : undefined;
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  const requestSource = typeof req.query.requestSource === "string" ? req.query.requestSource : undefined;
+  if (provider && !["mock", "gemini", "openai", "kimi", "qwen", "zai"].includes(provider)) {
+    return fail(res, 400, "provider is not supported");
+  }
+  if (subject && !["math", "science", "programming", "language", "humanities", "general", "unknown"].includes(subject)) {
+    return fail(res, 400, "subject is not supported");
+  }
+  if (status && !["pending", "success", "failed", "fallback", "rejected", "timeout"].includes(status)) {
+    return fail(res, 400, "status is not supported");
+  }
+  if (requestSource && !["guest", "student", "book_qa", "admin", "internal"].includes(requestSource)) {
+    return fail(res, 400, "requestSource is not supported");
+  }
+  const model = typeof req.query.model === "string" ? req.query.model.trim() : undefined;
+  if (model && (model.length === 0 || model.length > 200)) return fail(res, 400, "model is invalid");
+  const result = analytics.listRequests({
+    from: range.fromIso,
+    to: range.toIso,
+    provider,
+    model,
+    subject,
+    status,
+    requestSource,
+    page,
+    limit,
+    sort
+  });
+  res.json(result);
+});
+
+app.get("/api/admin/ai-requests/:requestId", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const detail = analytics.requestDetail(req.params.requestId);
+  if (!detail) return fail(res, 404, "request not found");
+  res.json(detail);
+});
+
+// Full Q&A + token/cost detail (spec §3.2, §3.3). The full questionText and
+// answerText are returned ONLY here; the list endpoint exposes previews.
+// Output goes through the typed safe mapper in analytics.usageDetail().
+app.get("/api/admin/ai-usage/:requestId", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const detail = analytics.usageDetail(req.params.requestId);
+  if (!detail) return fail(res, 404, "usage not found");
+  res.json(detail);
+});
+
+// ---- Controlled Live Evaluation ------------------------------------------
+// Live remains disabled until an administrator stores an explicit allowlist,
+// enables the feature, enables a dedicated Evaluation Pool, and completes a
+// short-lived preflight/confirmation handshake.
+app.get("/api/admin/ai-evaluations/settings", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ settings: liveEvaluationService.getSettings() });
+});
+
+app.put("/api/admin/ai-evaluations/settings", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const body = req.body as Record<string, unknown>;
+  const allowed = ["enabled", "evaluationPoolId", "allowedDatasetIds", "allowedLogicalModelIds", "allowedProviderIds", "maxCasesPerRun", "maxTokensPerRun", "maxTokensPerDay", "maxConcurrentRuns", "requireDryRun", "requireExplicitConfirmation"];
+  if (Object.keys(body).some((key) => !allowed.includes(key))) return res.status(400).json({ error: "unsupported live setting", code: "invalid_live_settings" });
+  const arrays = [body.allowedDatasetIds, body.allowedLogicalModelIds, body.allowedProviderIds];
+  if (arrays.some((value) => !Array.isArray(value) || value.some((item) => typeof item !== "string"))) return res.status(400).json({ error: "allowlist fields must be string arrays", code: "invalid_live_settings" });
+  try {
+    const settings = liveEvaluationService.saveSettings({
+      enabled: body.enabled === true,
+      evaluationPoolId: typeof body.evaluationPoolId === "string" ? body.evaluationPoolId : undefined,
+      allowedDatasetIds: body.allowedDatasetIds as string[],
+      allowedLogicalModelIds: body.allowedLogicalModelIds as string[],
+      allowedProviderIds: body.allowedProviderIds as string[],
+      maxCasesPerRun: Number(body.maxCasesPerRun), maxTokensPerRun: Number(body.maxTokensPerRun), maxTokensPerDay: Number(body.maxTokensPerDay), maxConcurrentRuns: Number(body.maxConcurrentRuns),
+      requireDryRun: body.requireDryRun !== false, requireExplicitConfirmation: body.requireExplicitConfirmation !== false,
+      updatedAt: new Date().toISOString()
+    }, adminActorId(req));
+    res.json({ settings });
+  } catch (error) { liveEvaluationError(res, error); }
+});
+
+app.post("/api/admin/ai-evaluations/live-preflight", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const body = req.body as Record<string, unknown>;
+  const logicalModelIds = Array.isArray(body.logicalModelIds) && body.logicalModelIds.every((value) => typeof value === "string") ? body.logicalModelIds as string[] : [];
+  try {
+    const result = liveEvaluationService.preflight({ adminId: adminActorId(req), datasetId: typeof body.datasetId === "string" ? body.datasetId : "", maxCases: Number(body.maxCases), maxTokenBudget: Number(body.maxTokenBudget), logicalModelIds });
+    res.status(result.allowed ? 200 : 409).json(result);
+  } catch (error) { liveEvaluationError(res, error); }
+});
+
+app.get("/api/admin/ai-evaluations/live-readiness", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json(liveEvaluationService.readiness());
+});
+
+app.get("/api/admin/ai-pilot/production-readiness", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json(pilotService.productionReadiness());
+});
+
+app.post("/api/admin/ai-pilot/readiness-review", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try { res.json(pilotService.review(req.body as Record<string, unknown>, adminActorId(req))); }
+  catch (error) { pilotServiceError(res, error); }
+});
+
+app.get("/api/admin/ai-pilot/settings", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ settings: pilotService.settings() });
+});
+
+app.put("/api/admin/ai-pilot/settings", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try {
+    const body = req.body as Record<string, unknown>;
+    const current = pilotService.settings();
+    const categories = Array.isArray(body.allowedTaskCategories) && body.allowedTaskCategories.every((value) => typeof value === "string")
+      ? body.allowedTaskCategories as Array<"programming" | "mathematics" | "knowledge"> : current.allowedTaskCategories;
+    const stopPolicy = body.stopPolicy && typeof body.stopPolicy === "object" && !Array.isArray(body.stopPolicy) ? body.stopPolicy as typeof current.stopPolicy : current.stopPolicy;
+    const settings = pilotService.saveSettings({
+      enabled: body.enabled === true,
+      trafficPercentage: body.trafficPercentage === undefined ? current.trafficPercentage : Number(body.trafficPercentage),
+      allowedTaskCategories: categories,
+      allowVerification: body.allowVerification === undefined ? current.allowVerification : body.allowVerification === true,
+      allowAdjudication: body.allowAdjudication === undefined ? current.allowAdjudication : body.allowAdjudication === true,
+      maxModelCallsPerRequest: body.maxModelCallsPerRequest === undefined ? current.maxModelCallsPerRequest : Number(body.maxModelCallsPerRequest),
+      pilotVersion: typeof body.pilotVersion === "string" ? body.pilotVersion : current.pilotVersion,
+      stopPolicy
+    }, adminActorId(req));
+    res.json({ settings });
+  } catch (error) { pilotServiceError(res, error); }
+});
+
+app.post("/api/admin/ai-pilot/disable", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ settings: pilotService.disable("admin_kill_switch", adminActorId(req)) });
+});
+
+app.get("/api/admin/ai-pilot/metrics", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ metrics: pilotService.metrics() });
+});
+
+app.post("/api/admin/ai-evaluations/:id/cancel", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try { res.json(liveEvaluationService.cancel(req.params.id)); }
+  catch (error) { liveEvaluationError(res, error); }
+});
+
+// ---- Phase 4D evaluation governance -------------------------------------
+// These routes govern only offline Fixture/Mock schedules and safe summaries.
+// The scheduler is disabled by default and has no Live execution branch.
+app.get("/api/admin/ai-evaluations/retention", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ policy: evaluationGovernanceService.getSettings().retention });
+});
+
+app.put("/api/admin/ai-evaluations/retention", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try {
+    const body = req.body as Record<string, unknown>;
+    const policy = body as unknown as Parameters<typeof evaluationGovernanceService.saveSettings>[0]["retention"];
+    const current = evaluationGovernanceService.getSettings();
+    const saved = evaluationGovernanceService.saveSettings({ retention: policy, regressionAlert: current.regressionAlert, budgetAlert: current.budgetAlert, schedulerEnabled: current.schedulerEnabled }, adminActorId(req));
+    repos.aiProviders.audit("evaluation.retention.policy_updated", "ai_evaluation_governance", "default", { enabled: saved.retention.enabled, maxRunsPerDatasetMode: saved.retention.maxRunsPerDatasetMode });
+    res.json({ policy: saved.retention });
+  } catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.get("/api/admin/ai-evaluations/governance", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json(evaluationGovernanceService.getSettings());
+});
+
+app.put("/api/admin/ai-evaluations/governance", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const body = req.body as Record<string, unknown>;
+  if (Object.keys(body).some((key) => key !== "schedulerEnabled") || typeof body.schedulerEnabled !== "boolean") return res.status(400).json({ error: "schedulerEnabled is required", code: "invalid_governance_settings" });
+  try {
+    const current = evaluationGovernanceService.getSettings();
+    res.json(evaluationGovernanceService.saveSettings({ retention: current.retention, regressionAlert: current.regressionAlert, budgetAlert: current.budgetAlert, schedulerEnabled: body.schedulerEnabled }, adminActorId(req)));
+  } catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.post("/api/admin/ai-evaluations/retention/preview", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try { res.json(evaluationGovernanceService.retentionPreview(adminActorId(req))); }
+  catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.post("/api/admin/ai-evaluations/retention/run", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const body = req.body as Record<string, unknown>;
+  if (typeof body.previewId !== "string" || typeof body.confirmationToken !== "string") return res.status(400).json({ error: "previewId and confirmationToken are required", code: "invalid_retention_request" });
+  try { res.json(evaluationGovernanceService.executeRetention({ previewId: body.previewId, confirmationToken: body.confirmationToken }, adminActorId(req))); }
+  catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.get("/api/admin/ai-evaluation-schedules", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ schedulerEnabled: evaluationGovernanceService.getSettings().schedulerEnabled, schedules: evaluationGovernanceService.listSchedules() });
+});
+
+app.post("/api/admin/ai-evaluation-schedules", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const body = req.body as Record<string, unknown>;
+  try {
+    const row = evaluationGovernanceService.createSchedule({ enabled: body.enabled === true, datasetId: String(body.datasetId ?? ""), datasetVersion: Number(body.datasetVersion), executionMode: body.executionMode as "fixture" | "mock_orchestrator", cadence: body.cadence as "daily" | "weekly", scheduledTime: String(body.scheduledTime ?? ""), timezone: String(body.timezone ?? ""), baselinePolicy: body.baselinePolicy as "latest_comparable" | "fixed", fixedBaselineRunId: typeof body.fixedBaselineRunId === "string" ? body.fixedBaselineRunId : undefined }, adminActorId(req));
+    res.status(201).json({ schedule: row });
+  } catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.put("/api/admin/ai-evaluation-schedules/:id", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const body = req.body as Record<string, unknown>;
+  try {
+    const allowed = ["enabled", "datasetId", "datasetVersion", "executionMode", "cadence", "scheduledTime", "timezone", "baselinePolicy", "fixedBaselineRunId"];
+    if (Object.keys(body).some((key) => !allowed.includes(key))) return res.status(400).json({ error: "unsupported schedule field", code: "invalid_schedule" });
+    const row = evaluationGovernanceService.updateSchedule(req.params.id, body as never, adminActorId(req));
+    res.json({ schedule: row });
+  } catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.delete("/api/admin/ai-evaluation-schedules/:id", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try { res.json(evaluationGovernanceService.deleteSchedule(req.params.id)); }
+  catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.post("/api/admin/ai-evaluation-schedules/run-due", async (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try { res.json({ results: await evaluationGovernanceService.runDue(new Date(), adminActorId(req)) }); }
+  catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.get("/api/admin/ai-evaluation-alert-policy", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ policy: evaluationGovernanceService.getSettings().regressionAlert, budgetPolicy: evaluationGovernanceService.getSettings().budgetAlert, schedulerEnabled: evaluationGovernanceService.getSettings().schedulerEnabled });
+});
+
+app.put("/api/admin/ai-evaluation-alert-policy", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try {
+    const body = req.body as Record<string, unknown>;
+    const current = evaluationGovernanceService.getSettings();
+    const policy = body as unknown as Parameters<typeof evaluationGovernanceService.saveSettings>[0]["regressionAlert"];
+    const saved = evaluationGovernanceService.saveSettings({ retention: current.retention, regressionAlert: policy, budgetAlert: current.budgetAlert, schedulerEnabled: current.schedulerEnabled }, adminActorId(req));
+    res.json({ policy: saved.regressionAlert, budgetPolicy: saved.budgetAlert });
+  } catch (error) { evaluationGovernanceError(res, error); }
+});
+
+app.get("/api/admin/ai-evaluation-alerts", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const status = req.query.status === "open" || req.query.status === "acknowledged" || req.query.status === "resolved" ? req.query.status : undefined;
+  res.json({ alerts: evaluationGovernanceService.listAlerts(status) });
+});
+
+app.post("/api/admin/ai-evaluation-alerts/:id/acknowledge", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const alert = evaluationGovernanceService.acknowledgeAlert(req.params.id);
+  if (!alert) return res.status(404).json({ error: "alert not found", code: "alert_not_found" });
+  repos.aiProviders.audit("evaluation.alert.acknowledged", "ai_evaluation_alert", req.params.id, { status: alert.status });
+  res.json({ alert });
+});
+
+app.post("/api/admin/ai-evaluation-alerts/:id/resolve", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const alert = evaluationGovernanceService.resolveAlert(req.params.id);
+  if (!alert) return res.status(404).json({ error: "alert not found", code: "alert_not_found" });
+  repos.aiProviders.audit("evaluation.alert.resolved", "ai_evaluation_alert", req.params.id, { status: alert.status });
+  res.json({ alert });
+});
+
+// ---- Offline AI evaluation quality centre -------------------------------
+// Dataset and fixture selection is server-owned. These routes never accept a
+// filesystem path, prompt, provider credential, API key, or shell command.
+app.get("/api/admin/ai-evaluations", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  if (typeof req.query.executionMode === "string" && !["fixture", "mock_orchestrator", "live"].includes(req.query.executionMode)) return fail(res, 400, "executionMode is not supported");
+  if (typeof req.query.status === "string" && !["pending_confirmation", "running", "completed", "failed", "cancelled", "budget_exhausted"].includes(req.query.status)) return fail(res, 400, "status is not supported");
+  if (req.query.sort !== undefined && req.query.sort !== "newest") return fail(res, 400, "sort is not supported");
+  if (typeof req.query.datasetId === "string" && !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(req.query.datasetId)) return fail(res, 400, "datasetId is invalid");
+  const mode = typeof req.query.executionMode === "string" ? req.query.executionMode as "fixture" | "mock_orchestrator" | "live" : undefined;
+  const status = typeof req.query.status === "string" ? req.query.status as "pending_confirmation" | "running" | "completed" | "failed" | "cancelled" | "budget_exhausted" : undefined;
+  const datasetId = typeof req.query.datasetId === "string" && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(req.query.datasetId)
+    ? req.query.datasetId : undefined;
+  const parseNumber = (value: unknown, fallback: number) => {
+    if (typeof value !== "string" || !/^\d+$/.test(value)) return fallback;
+    return Number(value);
+  };
+  const limit = Math.min(100, Math.max(1, parseNumber(req.query.limit, 50)));
+  const offset = Math.max(0, parseNumber(req.query.offset, 0));
+  if (typeof req.query.dateFrom === "string" && !/^\d{4}-\d{2}-\d{2}/.test(req.query.dateFrom)) return fail(res, 400, "dateFrom is invalid");
+  if (typeof req.query.dateTo === "string" && !/^\d{4}-\d{2}-\d{2}/.test(req.query.dateTo)) return fail(res, 400, "dateTo is invalid");
+  try {
+    const page = evaluationService.list({ datasetId, executionMode: mode, status, dateFrom: typeof req.query.dateFrom === "string" ? req.query.dateFrom : undefined, dateTo: typeof req.query.dateTo === "string" ? req.query.dateTo : undefined, limit, offset });
+    res.json({ runs: page.rows.map(publicEvaluationRun), total: page.total, limit: page.limit, offset: page.offset });
+  } catch (error) {
+    evaluationError(res, error);
+  }
+});
+
+app.get("/api/admin/ai-evaluations/:id/report", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const format = req.query.format === "markdown" ? "markdown" : req.query.format === "json" ? "json" : undefined;
+  if (!format) return res.status(400).json({ error: "report format must be json or markdown", code: "invalid_report_format" });
+  try {
+    const content = evaluationService.report(req.params.id, format);
+    repos.aiProviders.audit("evaluation.report.downloaded", "ai_evaluation_run", req.params.id, { format });
+    const filename = `ai-evaluation-${req.params.id.replace(/[^a-zA-Z0-9_-]/g, "_")}.${format === "json" ? "json" : "md"}`;
+    res.type(format === "json" ? "application/json" : "text/markdown; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(content);
+  } catch (error) {
+    evaluationError(res, error);
+  }
+});
+
+app.get("/api/admin/ai-evaluations/:id", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  try {
+    const detail = evaluationService.detail(req.params.id);
+    res.json({ run: publicEvaluationRun(detail.run), metrics: detail.metrics, issues: detail.issues, regression: detail.regression });
+  } catch (error) {
+    evaluationError(res, error);
+  }
+});
+
+app.post("/api/admin/ai-evaluations/run", async (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const body = req.body as Record<string, unknown>;
+  if (body.executionMode === "live") {
+    const liveAllowed = ["datasetId", "executionMode", "maxCases", "maxTokenBudget", "logicalModelIds", "dryRunId", "confirmationToken", "baselineRunId"];
+    if (Object.keys(body).some((key) => !liveAllowed.includes(key))) return res.status(400).json({ error: "invalid live evaluation request", code: "invalid_live_evaluation_request" });
+    const idempotencyKey = req.header("Idempotency-Key")?.trim() ?? "";
+    const logicalModelIds = Array.isArray(body.logicalModelIds) && body.logicalModelIds.every((value) => typeof value === "string") ? body.logicalModelIds as string[] : [];
+    try {
+      const result = await liveEvaluationService.start({ adminId: adminActorId(req), datasetId: typeof body.datasetId === "string" ? body.datasetId : "", maxCases: Number(body.maxCases), maxTokenBudget: Number(body.maxTokenBudget), logicalModelIds, dryRunId: typeof body.dryRunId === "string" ? body.dryRunId : "", confirmationToken: typeof body.confirmationToken === "string" ? body.confirmationToken : "", baselineRunId: typeof body.baselineRunId === "string" ? body.baselineRunId : undefined, idempotencyKey });
+      return res.status(result.reused ? 200 : 201).json({ run: publicEvaluationRun(result.run), report: result.report, reused: result.reused, cancelled: result.cancelled ?? false });
+    } catch (error) { return liveEvaluationError(res, error); }
+  }
+  if (Object.keys(body).some((key) => !["datasetId", "executionMode", "baselineRunId"].includes(key))) {
+    return res.status(400).json({ error: "only datasetId, executionMode and baselineRunId are accepted", code: "invalid_evaluation_request" });
+  }
+  const datasetId = typeof body.datasetId === "string" ? body.datasetId : "";
+  const executionMode = body.executionMode;
+  const baselineRunId = typeof body.baselineRunId === "string" ? body.baselineRunId : undefined;
+  const idempotencyKey = req.header("Idempotency-Key")?.trim() ?? "";
+  if (!/^[a-z0-9][a-z0-9._:-]{7,127}$/i.test(idempotencyKey)) return res.status(400).json({ error: "Idempotency-Key is required", code: "missing_idempotency_key" });
+  if (typeof executionMode !== "string" || !["fixture", "mock_orchestrator", "live"].includes(executionMode)) return res.status(400).json({ error: "executionMode is invalid", code: "invalid_execution_mode" });
+  try {
+    const result = await evaluationService.start({ datasetId, executionMode: executionMode as "fixture" | "mock_orchestrator" | "live", baselineRunId, idempotencyKey });
+    if (executionMode !== "live" && !result.reused) evaluationGovernanceService.evaluateRunAlerts(result.run.id);
+    res.status(result.reused ? 200 : 201).json({ run: publicEvaluationRun(result.run), reused: result.reused });
+  } catch (error) {
+    evaluationError(res, error);
+  }
+});
+
+app.delete("/api/admin/ai-evaluations/:id", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  if (req.header("x-confirm-delete") !== "true") return res.status(400).json({ error: "delete confirmation required", code: "delete_confirmation_required" });
+  try {
+    const result = evaluationService.delete(req.params.id);
+    res.json(result);
+  } catch (error) {
+    evaluationError(res, error);
+  }
+});
+
+app.get("/api/admin/ai-budget-policies", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ policies: repos.aiBudgetPolicies.list() });
+});
+
+app.put("/api/admin/ai-budget-policies/:id", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const parsed = updateAiBudgetPolicyInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  const updated = repos.aiBudgetPolicies.update(req.params.id, parsed.data);
+  if (!updated) return fail(res, 404, "budget policy not found");
+  res.json({ policy: updated });
+});
+
+app.post("/api/admin/ai-budget-policies", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const parsed = createAiBudgetPolicyInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  const policy = repos.aiBudgetPolicies.upsertByScope(parsed.data);
+  res.status(201).json({ policy });
+});
+
+// ---- Token Pool management (spec §6) --------------------------------------
+// All routes are admin-only (requireAdminAccess) and audit-logged. Pool and
+// model-limit mutations validate that newDailyLimit >= used + reserved so an
+// admin can never lower a cap below current in-flight usage.
+
+app.get("/api/admin/ai-token-pools", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const pools = repos.aiTokenPools.list().map(publicTokenPool);
+  res.json({ pools });
+});
+
+app.post("/api/admin/ai-token-pools", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const parsed = createAiTokenPoolInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  const existing = repos.aiTokenPools.findByType(parsed.data.poolType);
+  if (existing) return fail(res, 409, "token pool type already exists");
+  const created = repos.aiTokenPools.create({
+    name: parsed.data.name,
+    poolType: parsed.data.poolType,
+    timezone: parsed.data.timezone,
+    dailyLimit: parsed.data.dailyLimit,
+    warningThreshold: parsed.data.warningThreshold,
+    throttleThreshold: parsed.data.throttleThreshold,
+    criticalThreshold: parsed.data.criticalThreshold,
+    resetAt: new Date(Date.now() + 86_400_000).toISOString(),
+    enabled: parsed.data.enabled
+  });
+  repos.aiProviders.audit("token_pool.created", "token_pool", created.id, { poolType: created.poolType });
+  res.status(201).json({ pool: publicTokenPool(created) });
+});
+
+app.patch("/api/admin/ai-token-pools/:id", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const current = repos.aiTokenPools.findById(req.params.id);
+  if (!current) return fail(res, 404, "token pool not found");
+  const parsed = updateAiTokenPoolInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  // Validate: newDailyLimit must cover current committed usage.
+  if (parsed.data.dailyLimit !== undefined) {
+    const committed = current.usedTokens + current.reservedTokens;
+    if (parsed.data.dailyLimit < committed) {
+      res.status(409).json({ error: "daily_limit_below_current_usage", code: "daily_limit_below_current_usage" });
+      return;
+    }
+  }
+  // Validate: thresholds strictly increasing when all three provided.
+  const w = parsed.data.warningThreshold ?? current.warningThreshold;
+  const t = parsed.data.throttleThreshold ?? current.throttleThreshold;
+  const c = parsed.data.criticalThreshold ?? current.criticalThreshold;
+  if (!(w < t && t < c)) {
+    res.status(409).json({ error: "thresholds must be strictly increasing", code: "invalid_thresholds" });
+    return;
+  }
+  const updated = repos.aiTokenPools.update(req.params.id, parsed.data);
+  if (!updated) return fail(res, 404, "token pool not found");
+  repos.aiProviders.audit("token_pool.updated", "token_pool", updated.id, { poolType: updated.poolType });
+  res.json({ pool: publicTokenPool(updated) });
+});
+
+// ---- Logical Model Registry ------------------------------------------------
+
+app.get("/api/admin/ai-logical-models", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ logicalModels: repos.aiLogicalModels.list() });
+});
+
+app.post("/api/admin/ai-logical-models", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const parsed = upsertAiLogicalModelInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (parsed.data.providerConfigId) {
+    const provider = repos.aiProviders.findConfig(parsed.data.providerConfigId);
+    if (!provider || provider.provider !== parsed.data.providerId) return fail(res, 422, "logical model provider instance does not match adapter type");
+  }
+  const row = repos.aiLogicalModels.upsert(parsed.data);
+  repos.aiProviders.audit("logical_model.upserted", "logical_model", row.id, { logicalModelId: row.logicalModelId });
+  res.status(201).json({ logicalModel: row });
+});
+
+app.patch("/api/admin/ai-logical-models/:logicalModelId", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const parsed = updateAiLogicalModelInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (parsed.data.providerConfigId) {
+    const currentProvider = repos.aiLogicalModels.findByLogicalId(req.params.logicalModelId);
+    const provider = repos.aiProviders.findConfig(parsed.data.providerConfigId);
+    const adapter = parsed.data.providerId ?? currentProvider?.providerId;
+    if (!provider || provider.provider !== adapter) return fail(res, 422, "logical model provider instance does not match adapter type");
+  }
+  const updated = repos.aiLogicalModels.update(req.params.logicalModelId, parsed.data);
+  if (!updated) return fail(res, 404, "logical model not found");
+  repos.aiProviders.audit("logical_model.updated", "logical_model", updated.id, { logicalModelId: updated.logicalModelId });
+  res.json({ logicalModel: updated });
+});
+
+// ---- Model Daily Limits ----------------------------------------------------
+
+app.get("/api/admin/ai-model-limits", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ modelLimits: repos.aiModelDailyLimits.list() });
+});
+
+app.patch("/api/admin/ai-model-limits/:logicalModelId", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const parsed = updateAiModelDailyLimitInputSchema.safeParse(req.body);
+  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  const current = repos.aiModelDailyLimits.findByLogicalModel(req.params.logicalModelId);
+  if (!current) return fail(res, 404, "model daily limit not found");
+  // Validate: newDailyLimit must cover current committed usage.
+  if (parsed.data.dailyLimit !== undefined) {
+    const committed = current.usedTokens + current.reservedTokens;
+    if (parsed.data.dailyLimit < committed) {
+      res.status(409).json({ error: "daily_limit_below_current_usage", code: "daily_limit_below_current_usage" });
+      return;
+    }
+  }
+  // Validate: fallbackLogicalModelId must not be self.
+  if (parsed.data.fallbackLogicalModelId !== undefined && parsed.data.fallbackLogicalModelId !== null) {
+    if (parsed.data.fallbackLogicalModelId === req.params.logicalModelId) {
+      res.status(409).json({ error: "fallback_logical_model_cannot_be_self", code: "fallback_cycle_detected" });
+      return;
+    }
+    // Detect cycles up to 10 hops.
+    const target = repos.aiModelDailyLimits.findByLogicalModel(parsed.data.fallbackLogicalModelId);
+    if (target) {
+      let cursor: string | null = parsed.data.fallbackLogicalModelId;
+      for (let i = 0; i < 10 && cursor; i += 1) {
+        const row = repos.aiModelDailyLimits.findByLogicalModel(cursor);
+        cursor = row?.fallbackLogicalModelId ?? null;
+        if (cursor === req.params.logicalModelId) {
+          res.status(409).json({ error: "fallback cycle detected", code: "fallback_cycle_detected" });
+          return;
+        }
+      }
+    }
+  }
+  const updated = repos.aiModelDailyLimits.update(req.params.logicalModelId, parsed.data);
+  if (!updated) return fail(res, 404, "model daily limit not found");
+  repos.aiProviders.audit("model_limit.updated", "model_daily_limit", updated.id, { logicalModelId: updated.logicalModelId });
+  res.json({ modelLimit: updated });
+});
+
+// ---- Token Pool usage (today) ---------------------------------------------
+
+app.get("/api/admin/ai-token-usage/today", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  const pools = repos.aiTokenPools.list().map((pool) => {
+    const modelLimits = repos.aiModelDailyLimits.findByPool(pool.id);
+    const modelHardCapsTotal = modelLimits.reduce((sum, m) => sum + m.dailyLimit, 0);
+    return {
+      ...publicTokenPool(pool),
+      unallocatedCapacity: Math.max(0, pool.dailyLimit - modelHardCapsTotal)
+    };
+  });
+  const models = repos.aiModelDailyLimits.list().map((m) => {
+    const committed = m.usedTokens + m.reservedTokens;
+    return {
+      logicalModelId: m.logicalModelId,
+      poolId: m.poolId,
+      dailyLimit: m.dailyLimit,
+      usedTokens: m.usedTokens,
+      reservedTokens: m.reservedTokens,
+      committedTokens: committed,
+      remaining: Math.max(0, m.dailyLimit - committed),
+      utilizationRatio: m.dailyLimit > 0 ? committed / m.dailyLimit : 0,
+      priority: m.priority,
+      fallbackLogicalModelId: m.fallbackLogicalModelId,
+      enabled: m.enabled,
+      allowSecondModelVerification: m.allowSecondModelVerification
+    };
+  });
+  res.json({ date: todayTaipei(), pools, models });
+});
+
+app.get("/api/admin/ai-token-usage/models", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.json({ models: repos.aiModelDailyLimits.list() });
+});
+
+/** Public-facing token pool shape (strips nothing sensitive; pools have no secrets). */
+function publicTokenPool(pool: { id: string; name: string; poolType: string; timezone: string; dailyLimit: number; usedTokens: number; reservedTokens: number; warningThreshold: number; throttleThreshold: number; criticalThreshold: number; resetAt: string; enabled: boolean }) {
+  const committed = pool.usedTokens + pool.reservedTokens;
+  return {
+    ...pool,
+    committedTokens: committed,
+    remaining: Math.max(0, pool.dailyLimit - committed),
+    utilizationRatio: pool.dailyLimit > 0 ? committed / pool.dailyLimit : 0
+  };
+}
+
 // ---- Appearance settings -------------------------------------------------
 // Public read (admin + student); admin-only update. Missing settings fall back
 // to defaults so the UI never blanks out.
@@ -2824,9 +4533,18 @@ app.post("/api/admin/appearance-settings/upload", appearanceUpload.single("file"
   res.status(201).json({ url: `/api/uploads/appearance/${file.filename}` });
 });
 
+// Do not let Express' development error page expose stack traces or request
+// details. Provider and credential errors are already sanitised above; this is
+// the final boundary for unexpected failures such as a database constraint.
+app.use((_error: unknown, _req: Request, res: Response, _next: (error?: unknown) => void) => {
+  if (res.headersSent) return;
+  res.status(500).json({ error: "internal server error" });
+});
+
 const port = Number(process.env.ADMIN_API_PORT || 4300);
-app.listen(port, () => {
+const host = process.env.ADMIN_API_HOST || "127.0.0.1";
+app.listen(port, host, () => {
   console.log(
-    `AI-adm-D1 admin API listening on ${port} (ai provider: ${ai.name}, db: ${resolveDbPath()})`
+    `AI-adm-D1 API listening on ${host}:${port} (legacy book AI: ${ai.name}; gateway default: ${gatewayConfig.defaultProvider})`
   );
 });

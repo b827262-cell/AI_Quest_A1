@@ -18,6 +18,7 @@ import type {
   CreateBookInput,
   UpdateBookInput
 } from "@ai-smartbook/schema";
+import type { SiteConfig, SiteConfigUpdate } from "@ai-smartbook/schema";
 
 export interface ChapterInput {
   title: string;
@@ -51,6 +52,207 @@ export interface GenerateReaderTocResponse extends ReaderTocResponse {
   warnings: string[];
 }
 
+export class ApiHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly code?: string,
+    public readonly fields?: Record<string, string>
+  ) {
+    super(message);
+    this.name = "ApiHttpError";
+  }
+}
+
+export type AiEvaluationMode = "fixture" | "mock_orchestrator" | "live";
+export type AiEvaluationStatus = "pending_confirmation" | "running" | "completed" | "failed" | "cancelled" | "budget_exhausted";
+export interface AiEvaluationRun {
+  id: string;
+  datasetId: string;
+  datasetVersion: number;
+  executionMode: AiEvaluationMode;
+  status: AiEvaluationStatus;
+  startedAt: string;
+  completedAt: string | null;
+  totalCases: number;
+  passedCases: number;
+  failedCases: number;
+  passRate: number;
+  averageScore: number;
+  averageDurationMs: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  totalModelCalls: number;
+  averageModelCalls: number;
+  totalInputTokens: number | null;
+  totalOutputTokens: number | null;
+  totalTokens: number | null;
+  conflictRate: number;
+  unresolvedRate: number;
+  baselineRunId: string | null;
+  regressionIssueCount: number;
+  trafficClass?: "evaluation";
+  maxTokenBudget?: number | null;
+  consumedTokens?: number;
+  dailyBudgetSnapshot?: number | null;
+  evaluationPoolId?: string | null;
+  cancelRequestedAt?: string | null;
+  cancelledAt?: string | null;
+  preflightId?: string | null;
+  logicalModelIds?: string[];
+  providerIds?: string[];
+  createdAt: string;
+}
+export interface AiLiveEvaluationSettings {
+  enabled: boolean;
+  evaluationPoolId?: string;
+  allowedDatasetIds: string[];
+  allowedLogicalModelIds: string[];
+  allowedProviderIds: string[];
+  maxCasesPerRun: number;
+  maxTokensPerRun: number;
+  maxTokensPerDay: number;
+  maxConcurrentRuns: number;
+  requireDryRun: boolean;
+  requireExplicitConfirmation: boolean;
+  updatedAt: string;
+}
+export interface AiLivePreflight {
+  dryRunId: string;
+  confirmationToken?: string;
+  expiresAt: string;
+  allowed: boolean;
+  datasetId: string;
+  datasetVersion: number;
+  selectedCaseCount: number;
+  estimatedMinimumModelCalls: number;
+  estimatedMaximumModelCalls: number;
+  estimatedMaximumTokens: number;
+  evaluationPoolRemainingTokens: number;
+  dailyRemainingTokens: number;
+  blockers: string[];
+  warnings: string[];
+}
+export type AiPilotTaskCategory = "programming" | "mathematics" | "knowledge";
+export interface AiPilotStopPolicy {
+  providerFailureRateThreshold?: number;
+  unresolvedRateThreshold?: number;
+  budgetRejectionRateThreshold?: number;
+  p95LatencyThresholdMs?: number;
+  minimumRequestCount: number;
+  consecutiveWindows: number;
+}
+export interface AiPilotSettings {
+  enabled: boolean;
+  trafficPercentage: number;
+  allowedTaskCategories: AiPilotTaskCategory[];
+  allowVerification: boolean;
+  allowAdjudication: boolean;
+  maxModelCallsPerRequest: number;
+  pilotVersion: string;
+  stopPolicy: AiPilotStopPolicy;
+  updatedAt: string;
+  autoStoppedAt?: string;
+  autoStopReason?: string;
+}
+export interface AiLiveReadiness {
+  ready: boolean;
+  credentialReady: boolean;
+  evaluationPoolReady: boolean;
+  budgetReady: boolean;
+  allowlistReady: boolean;
+  liveEnabled: boolean;
+  blockers: string[];
+  warnings: string[];
+  checkedAt: string;
+  datasetId?: string;
+  datasetVersion?: number;
+  providerIds?: string[];
+  logicalModelIds?: string[];
+  evaluationPoolConfigured?: boolean;
+}
+export interface AiProductionReadiness {
+  status: "ready_for_pilot" | "blocked" | "ready_with_warnings";
+  checks: Array<{ name: string; passed: boolean; severity: "blocker" | "warning"; safeSummary: string }>;
+  blockers: string[];
+  warnings: string[];
+  liveRunId?: string;
+  reviewedAt: string;
+}
+export type AiEvaluationCadence = "daily" | "weekly";
+export type AiEvaluationBaselinePolicy = "latest_comparable" | "fixed";
+export interface AiEvaluationRetentionPolicy {
+  enabled: boolean;
+  maxRunsPerDatasetMode: number;
+  maxAgeDays?: number;
+  preserveLatestSuccessful: number;
+  preserveBaselines: boolean;
+  preserveRunsWithRegressionIssues: boolean;
+  executionModes: AiEvaluationMode[];
+}
+export interface AiEvaluationSchedule {
+  id: string;
+  enabled: boolean;
+  datasetId: string;
+  datasetVersion: number;
+  executionMode: "fixture" | "mock_orchestrator";
+  cadence: AiEvaluationCadence;
+  scheduledTime: string;
+  timezone: string;
+  baselinePolicy: AiEvaluationBaselinePolicy;
+  fixedBaselineRunId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface AiEvaluationAlert {
+  id: string;
+  runId?: string | null;
+  scheduleId?: string | null;
+  type: string;
+  severity: "info" | "warning" | "critical";
+  status: "open" | "acknowledged" | "resolved";
+  safeSummary: string;
+  createdAt: string;
+  acknowledgedAt?: string | null;
+  resolvedAt?: string | null;
+}
+export interface AiEvaluationMetric {
+  id: string;
+  runId: string;
+  dimension: "category" | "difficulty" | "outcome" | "confidence";
+  dimensionValue: string;
+  count: number;
+  passed: number;
+  passRate: number;
+  averageScore: number;
+}
+export interface AiEvaluationIssue {
+  id: string;
+  runId: string;
+  caseId: string;
+  category: string;
+  expectedKind: string;
+  score: number;
+  code: string;
+  severity: "low" | "medium" | "high";
+  safeSummary?: string;
+}
+export interface AiEvaluationDetail {
+  run: AiEvaluationRun;
+  metrics: AiEvaluationMetric[];
+  issues: AiEvaluationIssue[];
+  regression?: {
+    comparable: boolean;
+    reason?: string;
+    passRateDelta: number;
+    averageScoreDelta: number;
+    p95LatencyDeltaMs: number;
+    averageModelCallsDelta: number;
+    totalTokenDelta?: number;
+    regressions: Array<{ code: string; severity: string; message: string }>;
+  };
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: init?.body && !(init.body instanceof FormData)
@@ -59,9 +261,21 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || `${res.status} ${res.statusText}`);
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      message?: string;
+      code?: string;
+      fields?: Record<string, string>;
+      fieldErrors?: Record<string, string>;
+    };
+    throw new ApiHttpError(
+      res.status,
+      data.error || data.message || `${res.status} ${res.statusText}`,
+      data.code,
+      data.fieldErrors ?? data.fields
+    );
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -71,6 +285,114 @@ export interface UploadBookFileOptions {
 }
 
 export const adminApi = {
+  getAiEvaluationSettings: () => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings"),
+  saveAiEvaluationSettings: (settings: Omit<AiLiveEvaluationSettings, "updatedAt">) => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  preflightAiEvaluation: (input: { datasetId: string; maxCases: number; maxTokenBudget: number; logicalModelIds: string[] }) => http<AiLivePreflight>("/api/admin/ai-evaluations/live-preflight", { method: "POST", body: JSON.stringify(input) }),
+  startLiveAiEvaluation: (input: { datasetId: string; maxCases: number; maxTokenBudget: number; logicalModelIds: string[]; dryRunId: string; confirmationToken: string; baselineRunId?: string }, idempotencyKey: string) => http<{ run: AiEvaluationRun; report: unknown; reused: boolean; cancelled: boolean }>("/api/admin/ai-evaluations/run", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ ...input, executionMode: "live" }) }),
+  cancelAiEvaluation: (id: string) => http<{ run: AiEvaluationRun; alreadyFinished: boolean }>(`/api/admin/ai-evaluations/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  getAiLiveReadiness: () => http<AiLiveReadiness>("/api/admin/ai-evaluations/live-readiness"),
+  getAiProductionReadiness: () => http<AiProductionReadiness>("/api/admin/ai-pilot/production-readiness"),
+  submitAiReadinessReview: (review: Record<string, boolean>) => http<AiProductionReadiness>("/api/admin/ai-pilot/readiness-review", { method: "POST", body: JSON.stringify(review) }),
+  getAiPilotSettings: () => http<{ settings: AiPilotSettings }>("/api/admin/ai-pilot/settings"),
+  saveAiPilotSettings: (settings: Omit<AiPilotSettings, "updatedAt" | "autoStoppedAt" | "autoStopReason">) => http<{ settings: AiPilotSettings }>("/api/admin/ai-pilot/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  disableAiPilot: () => http<{ settings: AiPilotSettings }>("/api/admin/ai-pilot/disable", { method: "POST" }),
+  getAiPilotMetrics: () => http<{ metrics: Array<Record<string, unknown>> }>("/api/admin/ai-pilot/metrics"),
+  getAiEvaluationRetention: () => http<{ policy: AiEvaluationRetentionPolicy }>("/api/admin/ai-evaluations/retention"),
+  getAiEvaluationGovernance: () => http<{ schedulerEnabled: boolean }>("/api/admin/ai-evaluations/governance"),
+  setAiEvaluationScheduler: (schedulerEnabled: boolean) => http<{ schedulerEnabled: boolean }>("/api/admin/ai-evaluations/governance", { method: "PUT", body: JSON.stringify({ schedulerEnabled }) }),
+  saveAiEvaluationRetention: (policy: AiEvaluationRetentionPolicy) => http<{ policy: AiEvaluationRetentionPolicy }>("/api/admin/ai-evaluations/retention", { method: "PUT", body: JSON.stringify(policy) }),
+  previewAiEvaluationRetention: () => http<{ id: string; expiresAt: string; confirmationToken: string; candidates: Array<{ id: string; datasetId: string; datasetVersion: number; executionMode: AiEvaluationMode; reason: string; estimatedMetricCount: number; estimatedIssueCount: number }>; protectedCount: number; estimatedDeletedMetrics: number; estimatedDeletedIssues: number }>("/api/admin/ai-evaluations/retention/preview", { method: "POST" }),
+  runAiEvaluationRetention: (input: { previewId: string; confirmationToken: string }) => http<{ deleted: number }>("/api/admin/ai-evaluations/retention/run", { method: "POST", body: JSON.stringify(input) }),
+  listAiEvaluationSchedules: () => http<{ schedulerEnabled: boolean; schedules: AiEvaluationSchedule[] }>("/api/admin/ai-evaluation-schedules"),
+  createAiEvaluationSchedule: (input: Omit<AiEvaluationSchedule, "id" | "createdAt" | "updatedAt">) => http<{ schedule: AiEvaluationSchedule }>("/api/admin/ai-evaluation-schedules", { method: "POST", body: JSON.stringify(input) }),
+  updateAiEvaluationSchedule: (id: string, input: Partial<Omit<AiEvaluationSchedule, "id" | "createdAt" | "updatedAt">>) => http<{ schedule: AiEvaluationSchedule }>(`/api/admin/ai-evaluation-schedules/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteAiEvaluationSchedule: (id: string) => http<{ deleted: boolean }>(`/api/admin/ai-evaluation-schedules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  listAiEvaluationAlerts: (status?: string) => http<{ alerts: AiEvaluationAlert[] }>(`/api/admin/ai-evaluation-alerts${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  acknowledgeAiEvaluationAlert: (id: string) => http<{ alert: AiEvaluationAlert }>(`/api/admin/ai-evaluation-alerts/${encodeURIComponent(id)}/acknowledge`, { method: "POST" }),
+  resolveAiEvaluationAlert: (id: string) => http<{ alert: AiEvaluationAlert }>(`/api/admin/ai-evaluation-alerts/${encodeURIComponent(id)}/resolve`, { method: "POST" }),
+  listAiProviders: () => http<{ providers: Array<{
+    id: string;
+    provider: "openai" | "gemini" | "kimi" | "qwen" | "zai";
+    slug: string;
+    displayName: string;
+    baseUrl: string | null;
+    model: string | null;
+    enabled: boolean;
+    isDefault: boolean;
+    isRouterProvider: boolean;
+    priority: number;
+    createdAt: string;
+    updatedAt: string;
+  }> }>("/api/admin/ai-providers"),
+  saveAiProvider: (input: Record<string, unknown>) => http<{ provider: unknown; code?: string }>("/api/admin/ai-providers", { method: "POST", body: JSON.stringify(input) }),
+  updateAiProvider: (input: Record<string, unknown>) => http<{ provider: unknown; code?: string }>("/api/admin/ai-providers", { method: "PUT", body: JSON.stringify(input) }),
+  deleteAiProvider: (id: string) => http<void>(`/api/admin/ai-providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  listAiCredentials: (providerId: string) => http<{ credentials: Array<{
+    id: string;
+    providerConfigId: string;
+    name: string;
+    maskedApiKey: string;
+    baseUrl: string | null;
+    model: string | null;
+    status: "active" | "standby" | "disabled";
+    priority: number;
+    weight: number;
+    failureCount: number;
+    cooldownUntil: string | null;
+    lastTestedAt: string | null;
+    lastTestStatus: string | null;
+    lastTestLatencyMs: number | null;
+    createdAt: string;
+    updatedAt: string;
+    disabledAt: string | null;
+	    billingMode: "pay_as_you_go" | "token_plan_personal" | "token_plan_team" | "unknown";
+	    region: string | null;
+	    endpointProfile: string | null;
+	    usageScope: "development_interactive" | "staging" | "production" | "unknown";
+	    productionAuthorized: boolean;
+	    providerHealth: "healthy" | "authentication_error" | "access_denied" | "quota_exhausted" | "rate_limited" | "degraded" | "unavailable" | "unknown";
+	    modelQuotas: Array<{
+	      id: string;
+	      credentialId: string;
+	      model: string;
+	      rpmLimit: number | null;
+	      tpmLimit: number | null;
+	      rpdLimit: number | null;
+	      requestsThisMinute: number;
+	      tokensThisMinute: number;
+	      requestsToday: number;
+	      minuteResetAt: string;
+	      dailyResetAt: string;
+	      resetTimezone: string;
+	      usageSource: "provider_response" | "system_estimated";
+	      enabled: boolean;
+	      isDefault: boolean;
+	      // Pricing config fields (spec §5.1, §5.2).
+	      currency: string | null;
+	      serviceTier: string | null;
+	      inputPriceUsdPerMillion: number | null;
+	      outputPriceUsdPerMillion: number | null;
+	      cachedInputPriceUsdPerMillion: number | null;
+	      cacheStorageUsdPerMillionTokenHour: number | null;
+	      pricingEffectiveAt: string | null;
+	      pricingSource: string | null;
+	      pricingUnavailable: boolean | null;
+	      createdAt: string;
+	      updatedAt: string;
+	      remaining: { rpm: number | null; tpm: number | null; rpd: number | null };
+	    }>;
+  }> }>(`/api/admin/ai-providers/${providerId}/credentials`),
+  createAiCredential: (providerId: string, input: Record<string, unknown>) => http<{ credential: unknown }>(`/api/admin/ai-providers/${providerId}/credentials`, { method: "POST", body: JSON.stringify(input) }),
+  updateAiCredential: (id: string, input: Record<string, unknown>) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  testAiCredential: (id: string) => http<{ status: string; reason?: string; latencyMs?: number }>(`/api/admin/ai-credentials/${id}/test`, { method: "POST" }),
+  enableAiCredential: (id: string) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}/enable`, { method: "POST" }),
+  disableAiCredential: (id: string) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}/disable`, { method: "POST" }),
+  deleteAiCredential: (id: string) => http<void>(`/api/admin/ai-credentials/${id}`, { method: "DELETE" }),
+  listAiCredentialQuotas: (id: string) => http<{ quotas: Array<Record<string, unknown>> }>(`/api/admin/ai-credentials/${id}/quotas`),
+  createAiCredentialQuota: (id: string, input: Record<string, unknown>) => http<{ quota: unknown }>(`/api/admin/ai-credentials/${id}/quotas`, { method: "POST", body: JSON.stringify(input) }),
+  updateAiCredentialQuota: (id: string, input: Record<string, unknown>) => http<{ quota: unknown }>(`/api/admin/ai-credential-quotas/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  setDefaultAiCredentialQuota: (id: string) => http<{ quota: unknown }>(`/api/admin/ai-credential-quotas/${id}/default`, { method: "POST" }),
+  deleteAiCredentialQuota: (id: string) => http<void>(`/api/admin/ai-credential-quotas/${id}`, { method: "DELETE" }),
   listBooks: () => http<{ books: Book[] }>("/api/admin/books"),
 
   createBook: (input: CreateBookInput) =>
@@ -318,7 +640,153 @@ export const adminApi = {
       method: "POST",
       body: form
     });
-  }
+  },
+
+  // ---- Public homepage configuration ------------------------------------
+  getSiteConfig: () =>
+    http<{ config: SiteConfig }>("/api/admin/site-config"),
+
+  updateSiteConfig: (input: SiteConfigUpdate) =>
+    http<{ config: SiteConfig; updatedAt: string }>("/api/admin/site-config", {
+      method: "PUT",
+      body: JSON.stringify(input)
+    }),
+
+  // ---- Phase 2 AI Analytics ----------------------------------------------
+  getAiAnalyticsSummary: (date?: string) => {
+    const qs = date ? `?date=${encodeURIComponent(date)}` : "";
+    return http<AiAnalyticsSummary>(`/api/admin/ai-analytics/summary${qs}`);
+  },
+
+  getAiAnalyticsDaily: (from?: string, to?: string) => {
+    const qs = new URLSearchParams();
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
+    const tail = qs.toString() ? `?${qs.toString()}` : "";
+    return http<AiAnalyticsDailyRow[]>(`/api/admin/ai-analytics/daily${tail}`);
+  },
+
+  getAiAnalyticsProviders: (from?: string, to?: string) => {
+    const qs = new URLSearchParams();
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
+    const tail = qs.toString() ? `?${qs.toString()}` : "";
+    return http<AiAnalyticsProviderRow[]>(`/api/admin/ai-analytics/providers${tail}`);
+  },
+
+  getAiAnalyticsSubjects: (from?: string, to?: string) => {
+    const qs = new URLSearchParams();
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
+    const tail = qs.toString() ? `?${qs.toString()}` : "";
+    return http<AiAnalyticsSubjectRow[]>(`/api/admin/ai-analytics/subjects${tail}`);
+  },
+
+  listAiRequests: (query: AiRequestLogQuery = {}) => {
+    const qs = new URLSearchParams();
+    if (query.from) qs.set("from", query.from);
+    if (query.to) qs.set("to", query.to);
+    if (query.provider) qs.set("provider", query.provider);
+    if (query.model) qs.set("model", query.model);
+    if (query.subject) qs.set("subject", query.subject);
+    if (query.status) qs.set("status", query.status);
+    if (query.requestSource) qs.set("requestSource", query.requestSource);
+    if (query.page) qs.set("page", String(query.page));
+    if (query.limit) qs.set("limit", String(query.limit));
+    if (query.sort) qs.set("sort", query.sort);
+    const tail = qs.toString() ? `?${qs.toString()}` : "";
+    return http<AiRequestLogPage>(`/api/admin/ai-requests${tail}`);
+  },
+
+  getAiRequestDetail: (requestId: string) =>
+    http<AiRequestLogDetail>(`/api/admin/ai-requests/${encodeURIComponent(requestId)}`),
+
+  /** Full Q&A + token/cost detail (spec §3.2, §3.3). */
+  getAiUsageDetail: (requestId: string) =>
+    http<AiUsageDetail>(`/api/admin/ai-usage/${encodeURIComponent(requestId)}`),
+
+  listAiEvaluations: (query: { datasetId?: string; executionMode?: AiEvaluationMode; status?: AiEvaluationStatus; limit?: number; offset?: number } = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return http<{ runs: AiEvaluationRun[]; total: number; limit: number; offset: number }>(`/api/admin/ai-evaluations${suffix}`);
+  },
+  getAiEvaluation: (id: string) => http<AiEvaluationDetail>(`/api/admin/ai-evaluations/${encodeURIComponent(id)}`),
+  startAiEvaluation: (input: { datasetId: string; executionMode: "fixture" | "mock_orchestrator"; baselineRunId?: string }, idempotencyKey: string) =>
+    http<{ run: AiEvaluationRun; reused: boolean }>("/api/admin/ai-evaluations/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(input)
+    }),
+  deleteAiEvaluation: (id: string) =>
+    http<{ deleted: boolean; alreadyDeleted: boolean }>(`/api/admin/ai-evaluations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "x-confirm-delete": "true" }
+    }),
+  downloadAiEvaluationReport: async (id: string, format: "json" | "markdown") => {
+    const response = await fetch(`/api/admin/ai-evaluations/${encodeURIComponent(id)}/report?format=${format}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      throw new ApiHttpError(response.status, data.error ?? "報告下載失敗");
+    }
+    return response.blob();
+  },
+
+  listAiBudgetPolicies: () =>
+    http<{ policies: AiBudgetPolicyRow[] }>("/api/admin/ai-budget-policies"),
+
+  updateAiBudgetPolicy: (id: string, input: AiBudgetPolicyUpdate) =>
+    http<{ policy: AiBudgetPolicyRow }>(`/api/admin/ai-budget-policies/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input)
+    }),
+
+  // ---- Token Pool management (spec §6) ----
+  listAiTokenPools: () =>
+    http<{ pools: AiTokenPoolRow[] }>("/api/admin/ai-token-pools"),
+
+  createAiTokenPool: (input: Record<string, unknown>) =>
+    http<{ pool: AiTokenPoolRow }>("/api/admin/ai-token-pools", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+
+  updateAiTokenPool: (id: string, input: Record<string, unknown>) =>
+    http<{ pool: AiTokenPoolRow }>(`/api/admin/ai-token-pools/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    }),
+
+  listAiLogicalModels: () =>
+    http<{ logicalModels: AiLogicalModelRow[] }>("/api/admin/ai-logical-models"),
+
+  upsertAiLogicalModel: (input: Record<string, unknown>) =>
+    http<{ logicalModel: AiLogicalModelRow }>("/api/admin/ai-logical-models", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+
+  updateAiLogicalModel: (logicalModelId: string, input: Record<string, unknown>) =>
+    http<{ logicalModel: AiLogicalModelRow }>(`/api/admin/ai-logical-models/${encodeURIComponent(logicalModelId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    }),
+
+  listAiModelLimits: () =>
+    http<{ modelLimits: AiModelDailyLimitRow[] }>("/api/admin/ai-model-limits"),
+
+  updateAiModelLimit: (logicalModelId: string, input: Record<string, unknown>) =>
+    http<{ modelLimit: AiModelDailyLimitRow }>(`/api/admin/ai-model-limits/${encodeURIComponent(logicalModelId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    }),
+
+  getAiTokenUsageToday: () =>
+    http<AiTokenUsageToday>("/api/admin/ai-token-usage/today"),
+
+  getAiTokenUsageModels: () =>
+    http<{ models: AiModelDailyLimitRow[] }>("/api/admin/ai-token-usage/models")
+
 };
 
 export type DashboardRange = "week" | "month" | "all";
@@ -364,4 +832,229 @@ export interface StudentQuestion {
   subject: string;
   content: string;
   createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 AI Analytics
+// ---------------------------------------------------------------------------
+
+export interface AiAnalyticsSummary {
+  date: string;
+  totalRequests: number;
+  successCount: number;
+  failedCount: number;
+  fallbackCount: number;
+  avgLatencyMs: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalEstimatedCostMicroUsd: number;
+  topProvider: string | null;
+  topSubject: string | null;
+  budgetUtilisationPercentage: number;
+}
+
+export interface AiAnalyticsDailyRow {
+  date: string;
+  requestCount: number;
+  successCount: number;
+  failedCount: number;
+  totalTokens: number;
+  estimatedCostMicroUsd: number;
+  avgLatencyMs: number;
+}
+
+export interface AiAnalyticsProviderRow {
+  provider: string;
+  requestCount: number;
+  totalTokens: number;
+  estimatedCostMicroUsd: number;
+  avgLatencyMs: number;
+}
+
+export interface AiAnalyticsSubjectRow {
+  subject: string;
+  requestCount: number;
+}
+
+export interface AiRequestLogRow {
+  id: string;
+  requestId: string;
+  requestSource: string;
+  questionPreview: string;
+  /** Bounded answer preview (spec §3.1) — never the full text. */
+  answerPreview: string;
+  subject: string;
+  taskType: string;
+  complexity: string;
+  routingProvider: string;
+  routingModel: string | null;
+  providerAttempts: string[];
+  status: string;
+  errorCode: string | null;
+  fallbackReason: string | null;
+  latencyMs: number;
+  createdAt: string;
+  totalTokens?: number | null;
+  estimatedCostMicroUsd?: number;
+}
+
+/** Full Q&A + token + cost detail (spec §3.3). Only from the detail endpoint. */
+export interface AiUsageDetail {
+  requestId: string;
+  createdAt: string;
+  mode: string;
+  status: string;
+  fallbackReason: string | null;
+  latencyMs: number;
+  provider: string;
+  model: string;
+  finishReason: string | null;
+  questionText: string;
+  answerText: string;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  thinkingTokens: number | null;
+  totalTokens: number | null;
+  inputCostMicrousd: number;
+  cachedInputCostMicrousd: number;
+  outputCostMicrousd: number;
+  totalCostMicrousd: number;
+  usageSource: string | null;
+  pricingSource: string | null;
+  pricingVersion: string | null;
+  pricingSnapshot: unknown;
+}
+
+export interface AiRequestLogDetail extends AiRequestLogRow {
+  questionLength: number;
+  routingReason: string;
+  usage?: {
+    provider: string;
+    model: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+    estimatedCostMicroUsd: number;
+    finishReason: string | null;
+  };
+}
+
+export interface AiRequestLogPage {
+  rows: AiRequestLogRow[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface AiBudgetPolicyRow {
+  id: string;
+  scopeType: string;
+  scopeKey: string;
+  dailyTokenLimit: number;
+  dailyCostLimitMicroUsd: number;
+  warningPercentage: number;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiBudgetPolicyUpdate {
+  dailyTokenLimit?: number;
+  dailyCostLimitUsd?: number;
+  warningPercentage?: number;
+  enabled?: boolean;
+}
+
+// ---- Token Pool types (spec §6) ----
+
+export interface AiTokenPoolRow {
+  id: string;
+  name: string;
+  poolType: string;
+  timezone: string;
+  dailyLimit: number;
+  usedTokens: number;
+  reservedTokens: number;
+  committedTokens: number;
+  remaining: number;
+  utilizationRatio: number;
+  warningThreshold: number;
+  throttleThreshold: number;
+  criticalThreshold: number;
+  resetAt: string;
+  enabled: boolean;
+  unallocatedCapacity?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiLogicalModelRow {
+  id: string;
+  logicalModelId: string;
+  providerId: string;
+  providerModelName: string;
+  contextWindowTokens: number;
+  maxInputTokens: number | null;
+  maxOutputTokens: number;
+  supportsThinking: boolean;
+  tokenizerType: string | null;
+  tokenizerVersion: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiModelDailyLimitRow {
+  id: string;
+  logicalModelId: string;
+  poolId: string;
+  dailyLimit: number;
+  usedTokens: number;
+  reservedTokens: number;
+  priority: number;
+  fallbackLogicalModelId: string | null;
+  enabled: boolean;
+  allowSecondModelVerification: boolean;
+  committedTokens?: number;
+  remaining?: number;
+  utilizationRatio?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiTokenUsageModelRow {
+  logicalModelId: string;
+  poolId: string;
+  dailyLimit: number;
+  usedTokens: number;
+  reservedTokens: number;
+  committedTokens: number;
+  remaining: number;
+  utilizationRatio: number;
+  priority: number;
+  fallbackLogicalModelId: string | null;
+  enabled: boolean;
+  allowSecondModelVerification: boolean;
+}
+
+export interface AiTokenUsageToday {
+  date: string;
+  pools: AiTokenPoolRow[];
+  models: AiTokenUsageModelRow[];
+}
+
+export type AiRequestLogSort = "newest" | "oldest" | "latency";
+
+export interface AiRequestLogQuery {
+  from?: string;
+  to?: string;
+  provider?: string;
+  model?: string;
+  subject?: string;
+  status?: string;
+  requestSource?: string;
+  page?: number;
+  limit?: number;
+  sort?: AiRequestLogSort;
 }
