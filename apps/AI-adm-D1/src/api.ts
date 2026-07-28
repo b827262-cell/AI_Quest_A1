@@ -345,46 +345,45 @@ export const adminApi = {
     createdAt: string;
     updatedAt: string;
     disabledAt: string | null;
-	    billingMode: "pay_as_you_go" | "token_plan_personal" | "token_plan_team" | "unknown";
-	    region: string | null;
-	    endpointProfile: string | null;
-	    usageScope: "development_interactive" | "staging" | "production" | "unknown";
-	    productionAuthorized: boolean;
-	    providerHealth: "healthy" | "authentication_error" | "access_denied" | "quota_exhausted" | "rate_limited" | "degraded" | "unavailable" | "unknown";
-	    modelQuotas: Array<{
-	      id: string;
-	      credentialId: string;
-	      model: string;
-	      rpmLimit: number | null;
-	      tpmLimit: number | null;
-	      rpdLimit: number | null;
-	      requestsThisMinute: number;
-	      tokensThisMinute: number;
-	      requestsToday: number;
-	      minuteResetAt: string;
-	      dailyResetAt: string;
-	      resetTimezone: string;
-	      usageSource: "provider_response" | "system_estimated";
-	      enabled: boolean;
-	      isDefault: boolean;
-	      // Pricing config fields (spec §5.1, §5.2).
-	      currency: string | null;
-	      serviceTier: string | null;
-	      inputPriceUsdPerMillion: number | null;
-	      outputPriceUsdPerMillion: number | null;
-	      cachedInputPriceUsdPerMillion: number | null;
-	      cacheStorageUsdPerMillionTokenHour: number | null;
-	      pricingEffectiveAt: string | null;
-	      pricingSource: string | null;
-	      pricingUnavailable: boolean | null;
-	      createdAt: string;
-	      updatedAt: string;
-	      remaining: { rpm: number | null; tpm: number | null; rpd: number | null };
-	    }>;
+    billingMode: "pay_as_you_go" | "token_plan_personal" | "token_plan_team" | "unknown";
+    region: string | null;
+    endpointProfile: string | null;
+    usageScope: "development_interactive" | "staging" | "production" | "unknown";
+    productionAuthorized: boolean;
+    providerHealth: "healthy" | "authentication_error" | "access_denied" | "quota_exhausted" | "rate_limited" | "degraded" | "unavailable" | "unknown";
+    modelQuotas: Array<{
+      id: string;
+      credentialId: string;
+      model: string;
+      rpmLimit: number | null;
+      tpmLimit: number | null;
+      rpdLimit: number | null;
+      requestsThisMinute: number;
+      tokensThisMinute: number;
+      requestsToday: number;
+      minuteResetAt: string;
+      dailyResetAt: string;
+      resetTimezone: string;
+      usageSource: "provider_response" | "system_estimated";
+      enabled: boolean;
+      isDefault: boolean;
+      currency: string | null;
+      serviceTier: string | null;
+      inputPriceUsdPerMillion: number | null;
+      outputPriceUsdPerMillion: number | null;
+      cachedInputPriceUsdPerMillion: number | null;
+      cacheStorageUsdPerMillionTokenHour: number | null;
+      pricingEffectiveAt: string | null;
+      pricingSource: string | null;
+      pricingUnavailable: boolean | null;
+      createdAt: string;
+      updatedAt: string;
+      remaining: { rpm: number | null; tpm: number | null; rpd: number | null };
+    }>;
   }> }>(`/api/admin/ai-providers/${providerId}/credentials`),
   createAiCredential: (providerId: string, input: Record<string, unknown>) => http<{ credential: unknown }>(`/api/admin/ai-providers/${providerId}/credentials`, { method: "POST", body: JSON.stringify(input) }),
   updateAiCredential: (id: string, input: Record<string, unknown>) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  testAiCredential: (id: string) => http<{ status: string; reason?: string; latencyMs?: number }>(`/api/admin/ai-credentials/${id}/test`, { method: "POST" }),
+  testAiCredential: (id: string) => http<{ status: string; reason?: string; latencyMs?: number; endpointProfile?: string | null; upstreamRequestSent?: boolean }>(`/api/admin/ai-credentials/${id}/test`, { method: "POST" }),
   enableAiCredential: (id: string) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}/enable`, { method: "POST" }),
   disableAiCredential: (id: string) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}/disable`, { method: "POST" }),
   deleteAiCredential: (id: string) => http<void>(`/api/admin/ai-credentials/${id}`, { method: "DELETE" }),
@@ -414,7 +413,6 @@ export const adminApi = {
 
   getReaderToc: (bookId: string) => http<ReaderTocResponse>(`/api/admin/books/${bookId}/reader-toc`),
 
-  // Generate a reader TOC from an already-stored JSON index (no large body upload).
   generateReaderTocFromJsonIndex: (
     bookId: string,
     jsonIndexFileId: string,
@@ -478,9 +476,6 @@ export const adminApi = {
       { method: "POST", body: JSON.stringify({ rows }) }
     ),
 
-  // ---- JSON index / QA reference -----------------------------------------
-  // Sends only { level, setActive }; the server regenerates + stores the index
-  // (the full item array is never uploaded, so large indexes do not 413).
   saveJsonIndex: (
     bookId: string,
     fileId: string,
@@ -587,7 +582,6 @@ export const adminApi = {
   getJobs: (bookId: string) =>
     http<{ jobs: BookAiJob[] }>(`/api/admin/books/${bookId}/ai-jobs`),
 
-  // ---- Dashboard / accounts ----------------------------------------------
   getDashboardStats: (range: DashboardRange = "month") =>
     http<AdminDashboardStats>(`/api/admin/dashboard/stats?range=${range}`),
 
@@ -623,7 +617,6 @@ export const adminApi = {
       body: JSON.stringify({ ids })
     }),
 
-  // ---- Appearance settings -----------------------------------------------
   getAppearanceSettings: () =>
     http<{ settings: AppearanceSettings }>("/api/appearance-settings"),
 
@@ -642,7 +635,6 @@ export const adminApi = {
     });
   },
 
-  // ---- Public homepage configuration ------------------------------------
   getSiteConfig: () =>
     http<{ config: SiteConfig }>("/api/admin/site-config"),
 
@@ -652,7 +644,6 @@ export const adminApi = {
       body: JSON.stringify(input)
     }),
 
-  // ---- Phase 2 AI Analytics ----------------------------------------------
   getAiAnalyticsSummary: (date?: string) => {
     const qs = date ? `?date=${encodeURIComponent(date)}` : "";
     return http<AiAnalyticsSummary>(`/api/admin/ai-analytics/summary${qs}`);
@@ -701,7 +692,6 @@ export const adminApi = {
   getAiRequestDetail: (requestId: string) =>
     http<AiRequestLogDetail>(`/api/admin/ai-requests/${encodeURIComponent(requestId)}`),
 
-  /** Full Q&A + token/cost detail (spec §3.2, §3.3). */
   getAiUsageDetail: (requestId: string) =>
     http<AiUsageDetail>(`/api/admin/ai-usage/${encodeURIComponent(requestId)}`),
 
@@ -741,7 +731,6 @@ export const adminApi = {
       body: JSON.stringify(input)
     }),
 
-  // ---- Token Pool management (spec §6) ----
   listAiTokenPools: () =>
     http<{ pools: AiTokenPoolRow[] }>("/api/admin/ai-token-pools"),
 
@@ -792,7 +781,7 @@ export const adminApi = {
 export type DashboardRange = "week" | "month" | "all";
 
 export interface DailyConversationPoint {
-  date: string; // YYYY-MM-DD
+  date: string;
   count: number;
 }
 
@@ -833,10 +822,6 @@ export interface StudentQuestion {
   content: string;
   createdAt: string;
 }
-
-// ---------------------------------------------------------------------------
-// Phase 2 AI Analytics
-// ---------------------------------------------------------------------------
 
 export interface AiAnalyticsSummary {
   date: string;
@@ -881,7 +866,6 @@ export interface AiRequestLogRow {
   requestId: string;
   requestSource: string;
   questionPreview: string;
-  /** Bounded answer preview (spec §3.1) — never the full text. */
   answerPreview: string;
   subject: string;
   taskType: string;
@@ -898,7 +882,6 @@ export interface AiRequestLogRow {
   estimatedCostMicroUsd?: number;
 }
 
-/** Full Q&A + token + cost detail (spec §3.3). Only from the detail endpoint. */
 export interface AiUsageDetail {
   requestId: string;
   createdAt: string;
@@ -965,8 +948,6 @@ export interface AiBudgetPolicyUpdate {
   warningPercentage?: number;
   enabled?: boolean;
 }
-
-// ---- Token Pool types (spec §6) ----
 
 export interface AiTokenPoolRow {
   id: string;

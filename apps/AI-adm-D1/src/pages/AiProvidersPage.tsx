@@ -41,6 +41,7 @@ type Credential = {
   lastTestStatus: string | null;
   lastTestLatencyMs: number | null;
   disabledAt: string | null;
+  endpointProfile: string | null;
   modelQuotas: ModelQuota[];
 };
 
@@ -60,7 +61,6 @@ type ModelQuota = {
   usageSource: "provider_response" | "system_estimated";
   enabled: boolean;
   isDefault: boolean;
-  // Pricing config fields (spec §5.1, §5.2).
   currency: string | null;
   serviceTier: string | null;
   inputPriceUsdPerMillion: number | null;
@@ -105,7 +105,6 @@ type QuotaForm = {
   resetTimezone: string;
   enabled: boolean;
   isDefault: boolean;
-  // Pricing config fields (spec §5.1, §5.2).
   currency: string;
   serviceTier: string;
   inputPriceUsdPerMillion: string;
@@ -125,8 +124,6 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
   zai: "Z.AI"
 };
 
-// The adapter owns its final defaults; this only prevents a typo-prone empty
-// field when an administrator creates a Gemini provider through the UI.
 const PROVIDER_BASE_URL_DEFAULTS: Partial<Record<ProviderId, string>> = {
   gemini: "https://generativelanguage.googleapis.com/v1beta",
   zai: "https://api.z.ai/api/paas/v4"
@@ -216,11 +213,6 @@ function formatDate(value: string | null): string {
   return Number.isNaN(parsed.valueOf()) ? "—" : parsed.toLocaleString("zh-TW");
 }
 
-/**
- * Format a model price column (spec §5.2). Free-tier models show 「免費」,
- * unavailable paid pricing shows 「未提供」 (we never fabricate a price), and
- * standard tiers show the USD-per-million price.
- */
 function formatPriceCol(
   pricing: ReturnType<typeof priceFor>,
   field: "input" | "output" | "cached"
@@ -263,6 +255,28 @@ function resetTime(value: string, timezone?: string): string {
 
 function statusLabel(status: CredentialStatus): string {
   return status === "active" ? "Active" : status === "standby" ? "Standby" : "Disabled";
+}
+
+function safeTestReasonLabel(reason?: string): string {
+  switch (reason) {
+    case "valid":
+    case "連線測試成功":
+      return "連線正常";
+    case "invalid_api_key":
+      return "API Key 無效或未授權";
+    case "access_denied":
+      return "存取被拒（存取層級不符）";
+    case "rate_limited":
+      return "已達速率限制 (Rate Limited)";
+    case "quota_exhausted":
+      return "配額已耗盡 (Quota Exhausted)";
+    case "endpoint_mismatch":
+      return "Endpoint 不符合";
+    case "provider_unavailable":
+      return "Provider 服務暫時無法使用";
+    default:
+      return reason ? `測試失敗（${reason}）` : "連線測試失敗";
+  }
 }
 
 export function AiProvidersPage() {
@@ -529,7 +543,6 @@ export function AiProvidersPage() {
         resetTimezone: quotaForm.resetTimezone.trim() || "Asia/Taipei",
         enabled: quotaForm.enabled,
         isDefault: quotaForm.isDefault,
-        // Pricing config fields (spec §5.1, §5.2).
         currency: quotaForm.currency.trim() || null,
         serviceTier: quotaForm.serviceTier.trim() || null,
         inputPriceUsdPerMillion: floatOrNull(quotaForm.inputPriceUsdPerMillion),
@@ -647,9 +660,6 @@ export function AiProvidersPage() {
     setMessage("");
     setCredentialErrors({});
     try {
-      // The first-model editor has historically rendered both fields. Keep
-      // them on one wire contract: the quota model is the source when the
-      // legacy Credential Model field is left blank.
       const initialModel = credentialForm.model.trim() || quotaForm.model.trim() || null;
       const payload: Record<string, unknown> = {
         name: credentialForm.name.trim(),
@@ -665,7 +675,6 @@ export function AiProvidersPage() {
         payload.rpdLimit = numberOrNull(quotaForm.rpdLimit);
         payload.resetTimezone = quotaForm.resetTimezone.trim() || "Asia/Taipei";
         payload.isDefaultModel = quotaForm.isDefault;
-        // Pricing config (spec §5.1).
         payload.currency = quotaForm.currency.trim() || null;
         payload.serviceTier = quotaForm.serviceTier.trim() || null;
         payload.inputPriceUsdPerMillion = floatOrNull(quotaForm.inputPriceUsdPerMillion);
@@ -728,7 +737,16 @@ export function AiProvidersPage() {
     setMessage("");
     try {
       const response = await adminApi.testAiCredential(credential.id);
-      setMessage(`連線測試完成：${response.status === "success" ? "成功" : "失敗"}${response.latencyMs ? `（${response.latencyMs} ms）` : ""}。`);
+      const isSuccess = response.status === "success";
+      const reasonText = safeTestReasonLabel(response.reason);
+      const profileText = response.endpointProfile ? ` endpointProfile: ${response.endpointProfile}` : "";
+      const upstreamText = response.upstreamRequestSent !== undefined ? ` Upstream已送送: ${response.upstreamRequestSent ? "是" : "否"}` : "";
+      const detailMsg = `連線測試${isSuccess ? "成功" : "失敗"}（${reasonText}${response.latencyMs ? ` · ${response.latencyMs} ms` : ""}${profileText}${upstreamText}）`;
+      if (isSuccess) {
+        setMessage(detailMsg);
+      } else {
+        setError(detailMsg);
+      }
       if (selectedProvider) await loadCredentials(selectedProvider.id);
     } catch (testError) {
       setError(credentialErrorMessage(testError, "test"));
@@ -768,7 +786,6 @@ export function AiProvidersPage() {
                 return <tr key={quota.id}>
                   <td><strong>{quota.model}</strong>{quota.isDefault ? <span className="admin-quota-default-badge">預設</span> : null}</td>
                   <td><span className={status.className}>{status.label}</span></td>
-                  {/* Pricing columns (spec §5.2) — read-only display from priceFor. */}
                   <td>{formatPriceCol(priceFor(providerId, quota.model), "input")}</td>
                   <td>{formatPriceCol(priceFor(providerId, quota.model), "output")}</td>
                   <td>{formatPriceCol(priceFor(providerId, quota.model), "cached")}</td>
@@ -894,7 +911,6 @@ export function AiProvidersPage() {
           <label>每日重置時區<input value={quotaForm.resetTimezone} disabled={busy} placeholder="Asia/Taipei" onChange={(event) => setQuotaForm((current) => ({ ...current, resetTimezone: event.target.value }))} /></label>
           <label className="admin-check-row"><input type="checkbox" checked={quotaForm.enabled} disabled={busy || quotaForm.isDefault} onChange={(event) => setQuotaForm((current) => ({ ...current, enabled: event.target.checked }))} /> 配額啟用</label>
           <label className="admin-check-row"><input type="checkbox" checked={quotaForm.isDefault} disabled={busy || quotaForm.isDefault} onChange={(event) => setQuotaForm((current) => ({ ...current, isDefault: event.target.checked }))} /> 設為預設模型</label>
-          {/* Pricing config fields (spec §5.1, §5.2). */}
           <label>貨幣（ISO 4217）<input value={quotaForm.currency} disabled={busy} placeholder="USD" onChange={(event) => setQuotaForm((current) => ({ ...current, currency: event.target.value }))} /></label>
           <label>計價層級<select value={quotaForm.serviceTier || "standard"} disabled={busy} onChange={(event) => setQuotaForm((current) => ({ ...current, serviceTier: event.target.value }))}>
             <option value="standard">Standard（付費）</option>
