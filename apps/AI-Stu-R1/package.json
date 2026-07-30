@@ -7,8 +7,9 @@
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
     "server:build": "esbuild server/stu-api.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist-server/stu-api.mjs --external:better-sqlite3 --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\"",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "echo \"lint placeholder\"",
+    "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=.",
     "server:dev": "tsx server/stu-api.ts",
     "flow:sidecar": "node server/flow-sidecar.mjs"
   },

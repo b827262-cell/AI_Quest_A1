@@ -10,3 +10,6 @@ export * from "./aiJob.schema";
 export * from "./qaLog.schema";
 export * from "./sync.schema";
 export * from "./appearance.schema";
+export * from "./siteConfig.schema";
+export * from "./aiGateway.schema";
+export * from "./tokenPool.schema";

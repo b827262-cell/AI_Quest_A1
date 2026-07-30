@@ -35,17 +35,21 @@ export class OpenAiCompatibleProvider implements AiProvider {
         model: input.model || this.model,
         temperature: input.temperature ?? 0.4,
         messages
-      })
+      }),
+      signal: input.signal
     });
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`OpenAI-compatible request failed: ${res.status} ${text.slice(0, 300)}`);
+      await res.text().catch(() => "");
+      throw new Error(`OpenAI-compatible request failed: ${res.status}`);
     }
 
-    const data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
+    let data: { choices?: { message?: { content?: string } }[] };
+    try {
+      data = (await res.json()) as typeof data;
+    } catch {
+      throw new Error("OpenAI-compatible provider returned invalid JSON");
+    }
     return (data.choices?.[0]?.message?.content ?? "").trim();
   }
 }

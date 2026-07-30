@@ -6,6 +6,7 @@ export interface AiGenerateInput {
   /** Optional override of the configured model. */
   model?: string;
   temperature?: number;
+  signal?: AbortSignal;
 }
 
 export interface AiProvider {

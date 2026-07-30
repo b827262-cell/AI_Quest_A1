@@ -57,12 +57,23 @@ export class ApiHttpError extends Error {
     public readonly status: number,
     message: string,
     public readonly code?: string,
-    public readonly fields?: Record<string, string>
+    public readonly fields?: Record<string, string>,
+    public readonly details?: CredentialTestDetails
   ) {
     super(message);
     this.name = "ApiHttpError";
   }
 }
+
+export interface CredentialTestResponse {
+  status: "success" | "failed";
+  reason: string;
+  latencyMs: number;
+  endpointProfile: string | null;
+  upstreamRequestSent: boolean;
+}
+
+export type CredentialTestDetails = Pick<CredentialTestResponse, "reason" | "latencyMs" | "endpointProfile" | "upstreamRequestSent">;
 
 export type AiEvaluationMode = "fixture" | "mock_orchestrator" | "live";
 export type AiEvaluationStatus = "pending_confirmation" | "running" | "completed" | "failed" | "cancelled" | "budget_exhausted";
@@ -267,12 +278,29 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
       code?: string;
       fields?: Record<string, string>;
       fieldErrors?: Record<string, string>;
+      reason?: unknown;
+      latencyMs?: unknown;
+      endpointProfile?: unknown;
+      upstreamRequestSent?: unknown;
     };
+    const details: CredentialTestDetails | undefined =
+      typeof data.reason === "string"
+      && typeof data.latencyMs === "number"
+      && (typeof data.endpointProfile === "string" || data.endpointProfile === null)
+      && typeof data.upstreamRequestSent === "boolean"
+        ? {
+            reason: data.reason,
+            latencyMs: data.latencyMs,
+            endpointProfile: data.endpointProfile,
+            upstreamRequestSent: data.upstreamRequestSent
+          }
+        : undefined;
     throw new ApiHttpError(
       res.status,
       data.error || data.message || `${res.status} ${res.statusText}`,
       data.code,
-      data.fieldErrors ?? data.fields
+      data.fieldErrors ?? data.fields,
+      details
     );
   }
   if (res.status === 204) return undefined as T;
@@ -383,7 +411,7 @@ export const adminApi = {
   }> }>(`/api/admin/ai-providers/${providerId}/credentials`),
   createAiCredential: (providerId: string, input: Record<string, unknown>) => http<{ credential: unknown }>(`/api/admin/ai-providers/${providerId}/credentials`, { method: "POST", body: JSON.stringify(input) }),
   updateAiCredential: (id: string, input: Record<string, unknown>) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  testAiCredential: (id: string) => http<{ status: string; reason?: string; latencyMs?: number; endpointProfile?: string | null; upstreamRequestSent?: boolean }>(`/api/admin/ai-credentials/${id}/test`, { method: "POST" }),
+  testAiCredential: (id: string) => http<CredentialTestResponse>(`/api/admin/ai-credentials/${id}/test`, { method: "POST" }),
   enableAiCredential: (id: string) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}/enable`, { method: "POST" }),
   disableAiCredential: (id: string) => http<{ credential: unknown }>(`/api/admin/ai-credentials/${id}/disable`, { method: "POST" }),
   deleteAiCredential: (id: string) => http<void>(`/api/admin/ai-credentials/${id}`, { method: "DELETE" }),
@@ -774,7 +802,19 @@ export const adminApi = {
     http<AiTokenUsageToday>("/api/admin/ai-token-usage/today"),
 
   getAiTokenUsageModels: () =>
-    http<{ models: AiModelDailyLimitRow[] }>("/api/admin/ai-token-usage/models")
+    http<{ models: AiModelDailyLimitRow[] }>("/api/admin/ai-token-usage/models"),
+
+  getOpenAiCredentialDailyUsage: () =>
+    http<OpenAiCredentialDailyUsageResponse>("/api/admin/ai-quota-center/openai-credentials"),
+
+  getOpenAiCredentialDailyDetail: (credentialId: string) =>
+    http<OpenAiCredentialDailyDetail>(`/api/admin/ai-quota-center/openai-credentials/${credentialId}`),
+
+  updateOpenAiCredentialDailyLimit: (credentialId: string, input: OpenAiCredentialDailyLimitPatch) =>
+    http<{ limit: OpenAiCredentialDailyLimitRow }>(`/api/admin/ai-quota-center/openai-credentials/${credentialId}/daily-limit`, {
+      method: "PUT",
+      body: JSON.stringify(input)
+    })
 
 };
 
@@ -1023,6 +1063,74 @@ export interface AiTokenUsageToday {
   date: string;
   pools: AiTokenPoolRow[];
   models: AiTokenUsageModelRow[];
+}
+
+// ---- OpenAI Credential daily quota (per-key independent daily ledger) ----
+export interface OpenAiCredentialDailyLimitRow {
+  id: string;
+  credentialId: string;
+  dailyTokenLimit: number | null;
+  dailyCostLimitMicroUsd: number | null;
+  timezone: string;
+  warningThreshold: number;
+  enabled: boolean;
+  resetAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OpenAiCredentialDailyUsageRow {
+  credentialId: string;
+  instanceName: string | null;
+  name: string;
+  maskedApiKey: string;
+  status: string;
+  cooldownUntil: string | null;
+  dailyTokenLimit: number | null;
+  dailyCostLimitMicroUsd: number | null;
+  timezone: string;
+  limitEnabled: boolean;
+  usedTokens: number;
+  reservedTokens: number;
+  remainingTokens: number | null;
+  utilizationRatio: number;
+  requestCount: number;
+  actualCostMicroUsd: number;
+  costSource: "priced" | "unconfigured";
+  providerModel: string | null;
+  resetAt: string | null;
+  lastUsedAt: string | null;
+}
+
+export interface OpenAiCredentialDailyUsageResponse {
+  date: string;
+  credentials: OpenAiCredentialDailyUsageRow[];
+  poolSummary: {
+    label: string;
+    credentialCount: number;
+    usedTokens: number;
+    reservedTokens: number;
+    requestCount: number;
+    actualCostMicroUsd: number;
+    isAggregate: boolean;
+  };
+}
+
+export interface OpenAiCredentialDailyDetail {
+  credentialId: string;
+  name: string;
+  maskedApiKey: string;
+  limit: OpenAiCredentialDailyLimitRow | undefined;
+  usage: Record<string, unknown> | null;
+  latestReservation: Record<string, unknown> | null;
+}
+
+export interface OpenAiCredentialDailyLimitPatch {
+  dailyTokenLimit?: number | null;
+  dailyCostLimitMicroUsd?: number | null;
+  timezone?: string;
+  warningThreshold?: number;
+  enabled?: boolean;
 }
 
 export type AiRequestLogSort = "newest" | "oldest" | "latency";

@@ -19,7 +19,7 @@ export class GeminiAiProvider implements AiProvider {
 
   async generateText(input: AiGenerateInput): Promise<string> {
     const model = input.model || this.model;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
     const body = {
       systemInstruction: input.system
@@ -33,18 +33,22 @@ export class GeminiAiProvider implements AiProvider {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
+      body: JSON.stringify(body),
+      signal: input.signal
     });
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Gemini request failed: ${res.status} ${text.slice(0, 300)}`);
+      await res.text().catch(() => "");
+      throw new Error(`Gemini request failed: ${res.status}`);
     }
 
-    const data = (await res.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
+    let data: { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    try {
+      data = (await res.json()) as typeof data;
+    } catch {
+      throw new Error("Gemini provider returned invalid JSON");
+    }
     const parts = data.candidates?.[0]?.content?.parts ?? [];
     return parts.map((p) => p.text ?? "").join("").trim();
   }

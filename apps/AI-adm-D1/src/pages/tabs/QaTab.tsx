@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { BookQaLog } from "@ai-smartbook/schema";
 import { adminApi } from "../../api";
 
@@ -13,13 +13,18 @@ export function QaTab({ bookId }: { bookId: string }) {
   const [error, setError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
-  function reloadLogs() {
-    adminApi.getQaLogs(bookId).then((r) => setLogs(r.logs));
-  }
+  const reloadLogs = useCallback(async () => {
+    try {
+      const r = await adminApi.getQaLogs(bookId);
+      setLogs(r.logs);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [bookId]);
 
   useEffect(() => {
-    reloadLogs();
-  }, [bookId]);
+    void reloadLogs();
+  }, [reloadLogs]);
 
   async function ask(e: React.FormEvent) {
     e.preventDefault();
@@ -32,7 +37,7 @@ export function QaTab({ bookId }: { bookId: string }) {
       const r = await adminApi.ask(bookId, question);
       setAnswer(r.answer);
       setContext(r.context);
-      reloadLogs();
+      await reloadLogs();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

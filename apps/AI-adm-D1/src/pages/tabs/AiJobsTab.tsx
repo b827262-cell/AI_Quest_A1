@@ -4,14 +4,26 @@ import { adminApi } from "../../api";
 
 export function AiJobsTab({ bookId }: { bookId: string }) {
   const [jobs, setJobs] = useState<BookAiJob[]>([]);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    adminApi.getJobs(bookId).then((d) => setJobs(d.jobs));
+    let active = true;
+    void adminApi.getJobs(bookId)
+      .then((d) => {
+        if (active) setJobs(d.jobs);
+      })
+      .catch((e: unknown) => {
+        if (active) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      active = false;
+    };
   }, [bookId]);
 
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>AI 任務記錄（{jobs.length}）</h3>
+      {error ? <p className="error">{error}</p> : null}
       {jobs.length === 0 ? (
         <p className="muted">尚無 AI 任務。</p>
       ) : (

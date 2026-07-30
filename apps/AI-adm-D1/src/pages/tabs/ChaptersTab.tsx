@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { BookChapter } from "@ai-smartbook/schema";
 import { adminApi } from "../../api";
@@ -8,17 +8,24 @@ export function ChaptersTab({ bookId }: { bookId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  function reload() {
-    adminApi.getChapters(bookId).then((d) => setChapters(d.chapters));
-  }
-  useEffect(reload, [bookId]);
+  const reload = useCallback(async () => {
+    try {
+      const d = await adminApi.getChapters(bookId);
+      setChapters(d.chapters);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [bookId]);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
 
   async function onSummarize(chapterId: string) {
     setBusy(true);
     setError("");
     try {
       await adminApi.summarizeChapter(bookId, chapterId);
-      reload();
+      await reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

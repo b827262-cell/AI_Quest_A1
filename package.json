@@ -4,14 +4,37 @@
   "private": true,
   "description": "Modular SmartBook R1 monorepo: student frontend, admin backend, SQLite, PDF parsing, admin AI modules.",
   "packageManager": "pnpm@9.15.0",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "9.15.0",
+      "onFail": "ignore"
+    }
+  },
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
+    "typecheck:release-scripts": "./apps/AI-adm-D1/node_modules/.bin/tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --strict --skipLibCheck --esModuleInterop --types node --typeRoots ./apps/AI-adm-D1/node_modules/@types scripts/provider-live-smoke.ts scripts/phase3a-staging-smoke.ts scripts/credential-key-rotation.ts",
     "lint": "pnpm -r lint",
+    "lint:release-scripts": "node scripts/lint-release-scripts.mjs",
+    "test": "pnpm -r --if-present test",
     "db:migrate": "pnpm --filter @ai-smartbook/db db:migrate",
+    "db:preflight:phase2": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/phase2-db-preflight.ts",
+    "smoke:phase2": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/phase2-http-smoke.ts",
+    "smoke:phase3a": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/phase3a-staging-smoke.ts",
+    "smoke:provider": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/provider-live-smoke.ts",
+    "verify:guest-ask-live": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/guest-ask-live-verify.ts",
+    "e2e:admin-providers": "pnpm --filter AI-adm-D1 build && node scripts/admin-provider-ui-e2e.mjs",
+    "production:verify:phase3a": "node scripts/production-verification.mjs",
+    "release-gate:phase3a": "node scripts/phase3a-release-gate.mjs",
+    "credential-key:rotate": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/credential-key-rotation.ts",
+    "credential-key:verify": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/credential-key-rotation.ts --verify",
     "db:seed": "pnpm --filter @ai-smartbook/db db:seed",
     "student:build": "pnpm --filter AI-Stu-R1 build",
     "admin:build": "pnpm --filter AI-adm-D1 build"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
   }
 }

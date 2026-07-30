@@ -30,6 +30,21 @@ export function AdminSidebar({
         <NavLink end to="/admin/appearance" className={NAV_CLASS}>
           介面設定
         </NavLink>
+        <NavLink end to="/admin/site-config" className={NAV_CLASS}>
+          網站首頁設定
+        </NavLink>
+        <NavLink end to="/admin/ai-analytics" className={NAV_CLASS}>
+          AI 執行分析
+        </NavLink>
+        <NavLink end to="/admin/ai-providers" className={NAV_CLASS}>
+          AI Provider／金鑰
+        </NavLink>
+        <NavLink end to="/admin/ai-quota-center" className={NAV_CLASS}>
+          AI 每日配額中心
+        </NavLink>
+        <NavLink end to="/admin/ai-quality-evaluations" className={NAV_CLASS}>
+          AI 品質評測
+        </NavLink>
       </nav>
 
       <p className="admin-nav-subgroup">智能書本管理</p>

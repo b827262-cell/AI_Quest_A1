@@ -7,8 +7,9 @@
     "dev": "vite --host 0.0.0.0 --port 5174",
     "server:dev": "tsx src/server/index.ts",
     "build": "vite build",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "echo \"lint placeholder\""
+    "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "dependencies": {
     "@ai-smartbook/schema": "workspace:*",
@@ -20,7 +21,8 @@
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.0.0",
     "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "zod": "latest"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "latest",

@@ -7,8 +7,58 @@ import type {
   CreateSmartBookNoteInput,
   ReaderOutlineResponse,
   SmartBookNote,
-  UpdateSmartBookNoteInput
+  UpdateSmartBookNoteInput,
+  GuestAnswerContent
 } from "@ai-smartbook/schema";
+
+export interface PublicSiteConfig {
+  siteTitle: string;
+  siteSubtitle: string;
+  homeGreeting: string;
+  homeInputPlaceholder: string;
+  guestAiEnabled: boolean;
+  guestDailyLimit: number;
+  studentLoginEnabled: boolean;
+  maintenanceNotice: string;
+}
+
+export type GuestQuestionCategory =
+  | "auto"
+  | "programming"
+  | "math"
+  | "humanities"
+  | "cybersecurity"
+  | "教材問答";
+export type GuestProviderPreference = "auto" | "openai" | "gemini" | "kimi" | "qwen";
+
+export type GuestAnswerStatus =
+  | "success"
+  | "incomplete"
+  | "limit_reached"
+  | "rate_limited"
+  | "disabled"
+  | "error";
+
+export interface GuestAskResponse {
+  requestId: string;
+  question?: string;
+  status: GuestAnswerStatus;
+  answer?: string;
+  message?: string;
+  remainingGuestQuestions?: number;
+  requiresLoginForMore?: boolean;
+  retryAfterSeconds?: number;
+  retryable?: boolean;
+  mode?: "live" | "mock";
+  /** Structured, allowlisted learning content preferred by the renderer. */
+  structuredAnswer?: GuestAnswerContent;
+  /**
+   * One-time high-entropy recovery token, returned ONLY when a new answer is
+   * created. The client must persist it to restore the answer after a refresh.
+   * It is never returned by the recovery endpoint and must never be logged.
+   */
+  recoveryToken?: string;
+}
 
 export interface BookDetail extends Book {
   chapters: BookChapter[];
@@ -78,8 +128,8 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || `${res.status} ${res.statusText}`);
+    const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    throw new Error(data.error || data.message || `${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
 }
@@ -92,8 +142,8 @@ async function httpWithSession<T>(path: string, sessionId: string, init?: Reques
   }
   const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || `${res.status} ${res.statusText}`);
+    const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    throw new Error(data.error || data.message || `${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
 }
@@ -115,8 +165,8 @@ async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
     cache: "no-store"
   });
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || `${res.status} ${res.statusText}`);
+    const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    throw new Error(data.error || data.message || `${res.status} ${res.statusText}`);
   }
   return await res.blob();
 }
@@ -126,6 +176,34 @@ async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
  * an API key and never calls an AI SDK directly.
  */
 export const studentClient = {
+  getPublicSiteConfig: () => http<PublicSiteConfig>("/api/public/site-config"),
+
+  askAsGuest: (body: {
+    question: string;
+    category: GuestQuestionCategory;
+    sourceType: "manual" | "image" | "file";
+    providerPreference?: GuestProviderPreference;
+  }, signal?: AbortSignal) =>
+    http<GuestAskResponse>("/api/public/guest-ask", {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal
+    }),
+
+  // Restore a saved guest answer. The recovery token is sent via a header
+  // (never in the URL query string) and authorizes the restore; IP is not an
+  // auth factor. This is a non-streaming JSON API.
+  getSavedGuestAnswer: (requestId: string, recoveryToken: string) =>
+    http<GuestAskResponse>(`/api/public/guest-ask/${encodeURIComponent(requestId)}`, {
+      headers: { "x-guest-recovery-token": recoveryToken }
+    }),
+
+  sendGuestFeedback: (body: { requestId: string; helpful: boolean }) =>
+    http<{ accepted: boolean }>("/api/public/guest-feedback", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
+
   listBooks: () => http<{ mode: string; books: Book[] }>("/api/student/books"),
 
   getBook: (bookId: string) => http<{ book: BookDetail }>(`/api/student/books/${bookId}`),

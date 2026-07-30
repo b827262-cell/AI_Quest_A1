@@ -1,0 +1,57 @@
+{
+  "datasetId": "phase-4a-core",
+  "datasetVersion": 1,
+  "executionMode": "fixture",
+  "commitSha": "2a02f12939be9ba63914abe7d6ca72388c157a0a",
+  "createdAt": "2026-07-27T00:00:00.000Z",
+  "summary": {
+    "datasetId": "phase-4a-core",
+    "datasetVersion": 1,
+    "executionMode": "fixture",
+    "totalCases": 40,
+    "passedCases": 40,
+    "failedCases": 0,
+    "passRate": 1,
+    "averageScore": 1,
+    "byCategory": {
+      "knowledge": {"count":10,"passed":10,"passRate":1,"averageScore":1},
+      "mathematics": {"count":12,"passed":12,"passRate":1,"averageScore":1},
+      "programming": {"count":12,"passed":12,"passRate":1,"averageScore":1},
+      "unknown": {"count":6,"passed":6,"passRate":1,"averageScore":1}
+    },
+    "byDifficulty": {
+      "easy": {"count":14,"passed":14,"passRate":1,"averageScore":1},
+      "hard": {"count":11,"passed":11,"passRate":1,"averageScore":1},
+      "medium": {"count":15,"passed":15,"passRate":1,"averageScore":1}
+    },
+    "byOutcome": {
+      "adjudicated": {"count":1,"passed":1,"passRate":1,"averageScore":1},
+      "conflict_detected": {"count":2,"passed":2,"passRate":1,"averageScore":1},
+      "primary_only": {"count":1,"passed":1,"passRate":1,"averageScore":1},
+      "supplemented": {"count":1,"passed":1,"passRate":1,"averageScore":1},
+      "unknown": {"count":27,"passed":27,"passRate":1,"averageScore":1},
+      "unresolved": {"count":4,"passed":4,"passRate":1,"averageScore":1},
+      "verified": {"count":4,"passed":4,"passRate":1,"averageScore":1}
+    },
+    "byConfidence": {
+      "high": {"count":4,"passed":4,"passRate":1,"averageScore":1},
+      "low": {"count":6,"passed":6,"passRate":1,"averageScore":1},
+      "medium": {"count":2,"passed":2,"passRate":1,"averageScore":1},
+      "unverified": {"count":1,"passed":1,"passRate":1,"averageScore":1}
+    },
+    "confidenceCalibration": [
+      {"confidenceLevel":"high","total":4,"passed":4,"empiricalPassRate":1},
+      {"confidenceLevel":"medium","total":2,"passed":2,"empiricalPassRate":1},
+      {"confidenceLevel":"low","total":6,"passed":6,"empiricalPassRate":1},
+      {"confidenceLevel":"unverified","total":1,"passed":1,"empiricalPassRate":1}
+    ],
+    "averageDurationMs":3.6,
+    "p50DurationMs":3,
+    "p95DurationMs":5,
+    "totalModelCalls":52,
+    "averageModelCalls":1.3,
+    "totalInputTokens":77,
+    "totalOutputTokens":21,
+    "totalTokens":98
+  }
+}

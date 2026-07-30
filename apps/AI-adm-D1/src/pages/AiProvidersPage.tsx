@@ -6,7 +6,7 @@ import { AdminErrorCard } from "../components/admin/AdminErrorCard";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
 import { quotaMetric, quotaStatus, usageSourceLabel, SYSTEM_DAILY_RESET_LABEL } from "./aiQuotaDisplay";
 import { providerErrorMessage } from "../providerErrorMessage";
-import { credentialErrorMessage, credentialFieldErrors, credentialFormAfterFailure } from "../credentialErrorMessage";
+import { credentialErrorMessage, credentialFieldErrors, credentialFormAfterFailure, credentialTestResultMessage } from "../credentialErrorMessage";
 
 type ProviderId = "openai" | "gemini" | "kimi" | "qwen" | "zai";
 type CredentialStatus = "active" | "standby" | "disabled";
@@ -92,6 +92,7 @@ type CredentialForm = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  endpointProfile: string;
   status: CredentialStatus;
   priority: number;
   weight: number;
@@ -148,6 +149,7 @@ const EMPTY_CREDENTIAL: CredentialForm = {
   apiKey: "",
   baseUrl: "",
   model: "",
+  endpointProfile: "",
   status: "active",
   priority: 100,
   weight: 1
@@ -255,28 +257,6 @@ function resetTime(value: string, timezone?: string): string {
 
 function statusLabel(status: CredentialStatus): string {
   return status === "active" ? "Active" : status === "standby" ? "Standby" : "Disabled";
-}
-
-function safeTestReasonLabel(reason?: string): string {
-  switch (reason) {
-    case "valid":
-    case "連線測試成功":
-      return "連線正常";
-    case "invalid_api_key":
-      return "API Key 無效或未授權";
-    case "access_denied":
-      return "存取被拒（存取層級不符）";
-    case "rate_limited":
-      return "已達速率限制 (Rate Limited)";
-    case "quota_exhausted":
-      return "配額已耗盡 (Quota Exhausted)";
-    case "endpoint_mismatch":
-      return "Endpoint 不符合";
-    case "provider_unavailable":
-      return "Provider 服務暫時無法使用";
-    default:
-      return reason ? `測試失敗（${reason}）` : "連線測試失敗";
-  }
 }
 
 export function AiProvidersPage() {
@@ -470,6 +450,7 @@ export function AiProvidersPage() {
       apiKey: "",
       baseUrl: credential.baseUrl ?? "",
       model: credential.model ?? credential.modelQuotas.find((quota) => quota.isDefault)?.model ?? "",
+      endpointProfile: credential.endpointProfile ?? "",
       status: credential.status,
       priority: credential.priority,
       weight: credential.weight
@@ -665,6 +646,7 @@ export function AiProvidersPage() {
         name: credentialForm.name.trim(),
         baseUrl: credentialForm.baseUrl.trim() || null,
         model: initialModel,
+        endpointProfile: credentialForm.endpointProfile.trim() || null,
         status: credentialForm.status,
         priority: Number(credentialForm.priority),
         weight: Number(credentialForm.weight)
@@ -738,10 +720,7 @@ export function AiProvidersPage() {
     try {
       const response = await adminApi.testAiCredential(credential.id);
       const isSuccess = response.status === "success";
-      const reasonText = safeTestReasonLabel(response.reason);
-      const profileText = response.endpointProfile ? ` endpointProfile: ${response.endpointProfile}` : "";
-      const upstreamText = response.upstreamRequestSent !== undefined ? ` Upstream已送送: ${response.upstreamRequestSent ? "是" : "否"}` : "";
-      const detailMsg = `連線測試${isSuccess ? "成功" : "失敗"}（${reasonText}${response.latencyMs ? ` · ${response.latencyMs} ms` : ""}${profileText}${upstreamText}）`;
+      const detailMsg = credentialTestResultMessage(response);
       if (isSuccess) {
         setMessage(detailMsg);
       } else {
@@ -884,6 +863,7 @@ export function AiProvidersPage() {
         <label>名稱<input value={credentialForm.name} aria-invalid={Boolean(credentialErrors.name)} disabled={busy} maxLength={100} onChange={(event) => setCredentialForm((current) => ({ ...current, name: event.target.value }))} />{credentialFieldError("name")}</label>
         <label>{editingCredentialId ? "替換 API Key（可留白）" : "API Key"}<input type="password" autoComplete="new-password" aria-invalid={Boolean(credentialErrors.apiKey)} value={credentialForm.apiKey} disabled={busy} onChange={(event) => setCredentialForm((current) => ({ ...current, apiKey: event.target.value }))} />{credentialFieldError("apiKey")}</label>
         <label>Credential Base URL（可留白）<input value={credentialForm.baseUrl} aria-invalid={Boolean(credentialErrors.baseUrl)} disabled={busy} onChange={(event) => setCredentialForm((current) => ({ ...current, baseUrl: event.target.value }))} />{credentialFieldError("baseUrl")}</label>
+        {selectedProvider.provider === "gemini" ? <label>Gemini Endpoint Profile<select value={credentialForm.endpointProfile} disabled={busy} onChange={(event) => setCredentialForm((current) => ({ ...current, endpointProfile: event.target.value }))}><option value="">Legacy Default（Native）</option><option value="gemini_native">Gemini Native API</option><option value="gemini_openai_compatible">Gemini OpenAI-Compatible API</option></select></label> : null}
         <label>Credential Model<input value={credentialForm.model} aria-invalid={Boolean(credentialErrors.model)} disabled={busy} onChange={(event) => {
           const model = event.target.value;
           setCredentialForm((current) => ({ ...current, model }));

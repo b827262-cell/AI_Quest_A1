@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "description": "Repository-owned lint baseline used when external ESLint packages are unavailable.",
+  "typescript": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noExplicitAny": true
+  },
+  "tests": {
+    "forbidOnlyOrSkip": true
+  },
+  "promises": {
+    "forbidUncaughtSingleLineThen": true
+  },
+  "security": {
+    "forbidSensitiveConsoleArguments": true,
+    "sensitiveTokens": [
+      "apiKey",
+      "authorization",
+      "bearer",
+      "encryptedApiKey",
+      "masterKey",
+      "secret"
+    ]
+  },
+  "react": {
+    "forbidObviousConditionalHooks": true
+  }
+}
