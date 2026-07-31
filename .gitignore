@@ -3,9 +3,6 @@ node_modules
 dist
 dist-server
 build
-.env
-.env.*
-!.env.example
 *.log
 tmp
 tmp_*.json
@@ -24,4 +21,20 @@ data/*.sqlite-*
 *.db-shm
 uploads
 exports/*.json
+release-artifacts/
 tmp_*.ts
+.aider*
+
+# Local IDE and agent state
+.codewhale/
+.run/
+.zcode/
+
+# Local runtime output
+logs/dev/
+*.pid
+
+# Local secrets
+.env
+.env.*
+!.env.example
