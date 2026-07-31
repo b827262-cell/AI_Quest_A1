@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AI Quest A1 互動式 AI 學習任務板">
+  <title>AI Quest A1</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">AI QUEST · LEVEL A1</p>
+      <h1>用任務建立你的 AI 基礎能力</h1>
+      <p class="subtitle">選擇任務、留下筆記、追蹤進度，完成你的第一條 AI 學習路線。</p>
+    </div>
+    <section class="progress-card" aria-label="學習進度">
+      <div><strong id="progress-value">0%</strong><span id="progress-label">尚未開始</span></div>
+      <progress id="progress" max="100" value="0">0%</progress>
+    </section>
+  </header>
+
+  <main>
+    <section class="toolbar" aria-label="任務篩選">
+      <label>
+        <span>搜尋任務</span>
+        <input id="search" type="search" placeholder="例如：提示、倫理、模型">
+      </label>
+      <label>
+        <span>難度</span>
+        <select id="difficulty">
+          <option value="all">全部</option>
+          <option value="beginner">入門</option>
+          <option value="intermediate">進階</option>
+        </select>
+      </label>
+      <button id="reset" class="secondary" type="button">重設進度</button>
+    </section>
+
+    <section class="recommendation" aria-live="polite">
+      <span>下一步建議</span>
+      <strong id="recommendation">先完成一個入門任務。</strong>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <div><p class="eyebrow">QUEST BOARD</p><h2>學習任務</h2></div>
+        <span id="result-count"></span>
+      </div>
+      <div id="quest-list" class="quest-grid"></div>
+      <p id="empty-state" class="empty" hidden>找不到符合條件的任務。</p>
+    </section>
+  </main>
+
+  <template id="quest-template">
+    <article class="quest-card">
+      <div class="quest-meta"><span class="tag"></span><span class="duration"></span></div>
+      <h3></h3>
+      <p class="description"></p>
+      <ul class="objectives"></ul>
+      <label class="notes-label">學習筆記<textarea rows="3" placeholder="記錄你的觀察或答案…"></textarea></label>
+      <button class="complete-button" type="button"></button>
+    </article>
+  </template>
+
+  <footer>AI Quest A1 · 所有進度只儲存在你的瀏覽器中。</footer>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
