@@ -903,13 +903,15 @@ function getPublicSiteConfig() {
 function requireAdminAccess(req: Request, res: Response): boolean {
   // Kept as a defence-in-depth guard for the newer handlers. The canonical
   // policy is the `/api/admin` middleware registered above.
+  if (process.env.NODE_ENV !== "production" && process.env.ADMIN_ALLOW_INSECURE_DEV === "true") {
+    return true;
+  }
   const expected = String(process.env.ADMIN_API_TOKEN || "").trim();
   if (!expected) {
     if (process.env.NODE_ENV === "production") {
       fail(res, 503, "admin API authentication is not configured");
       return false;
     }
-    if (process.env.ADMIN_ALLOW_INSECURE_DEV === "true") return true;
     fail(res, 401, "admin authentication required");
     return false;
   }

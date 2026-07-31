@@ -41,6 +41,7 @@ export function createAdminAuthMiddleware(
   }
 
   return (req: Request, res: Response, next: NextFunction) => {
+    if (config.allowInsecureDev) return next();
     const candidate = candidateToken(req);
     if (config.token && candidate && sameSecret(candidate, config.token)) {
       return next();
@@ -48,7 +49,6 @@ export function createAdminAuthMiddleware(
     if (!config.token && config.production) {
       return res.status(503).json({ error: "admin API authentication is not configured" });
     }
-    if (!config.token && config.allowInsecureDev) return next();
     return res.status(401).json({ error: "admin authentication required" });
   };
 }
