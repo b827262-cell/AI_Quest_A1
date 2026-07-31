@@ -19,6 +19,14 @@ function failureKindForStatus(status: number): "provider_timeout" | "provider_ra
   return "unknown";
 }
 
+// Reasoning-family and GPT-5+ models reject the legacy `max_tokens` field
+// (400 "unsupported_parameter") and reject non-default `temperature` (400
+// "unsupported_value"); they require `max_completion_tokens` and no
+// temperature override instead.
+function isReasoningFamilyModel(model: string): boolean {
+  return /^(o[1-9]|gpt-5)/i.test(model);
+}
+
 function tokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
@@ -77,8 +85,9 @@ export class OpenAiGatewayProvider implements GatewayAiProvider {
         },
         body: JSON.stringify({
           model,
-          temperature: request.temperature ?? 0.4,
-          max_tokens: request.maxOutputTokens,
+          ...(isReasoningFamilyModel(model)
+            ? { max_completion_tokens: request.maxOutputTokens }
+            : { temperature: request.temperature ?? 0.4, max_tokens: request.maxOutputTokens }),
           messages
         }),
         signal: request.signal
