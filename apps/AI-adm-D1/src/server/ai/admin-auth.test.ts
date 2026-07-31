@@ -40,6 +40,15 @@ describe("admin auth boundary", () => {
       .toBe(true);
   });
 
+  it("allows explicit insecure development mode even when a token is configured", () => {
+    const env = {
+      NODE_ENV: "development",
+      ADMIN_API_TOKEN: "admin-secret",
+      ADMIN_ALLOW_INSECURE_DEV: "true"
+    };
+    expect(invoke(env).nextCalled).toBe(true);
+  });
+
   it("accepts the correct bearer token and rejects the wrong one", () => {
     const env = { NODE_ENV: "production", ADMIN_API_TOKEN: "admin-secret" };
     expect(invoke(env, { authorization: "Bearer admin-secret" }).nextCalled).toBe(true);

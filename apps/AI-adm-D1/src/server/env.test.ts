@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadRootEnv } from "./env";
 
@@ -28,11 +29,17 @@ describe("repository root environment loading", () => {
   });
 
   it("resolves the repository-root .env path independently of the caller cwd", () => {
-    const target: NodeJS.ProcessEnv = {};
-    const result = loadRootEnv(undefined, target);
-    expect(result.path.endsWith("/AI-SmartBook-R1-PR4/.env")).toBe(true);
-    expect(result.adminTokenConfigured).toBe(true);
-    expect(result.credentialEncryptionKeyConfigured).toBe(true);
-    expect(target.ADMIN_API_TOKEN).toBeTruthy();
+    const originalCwd = process.cwd();
+    const directory = mkdtempSync(join(tmpdir(), "ai-quest-cwd-test-"));
+    temporaryDirectories.push(directory);
+    const expectedPath = fileURLToPath(new URL("../../../../.env", import.meta.url));
+
+    try {
+      process.chdir(directory);
+      const result = loadRootEnv(undefined, {});
+      expect(result.path).toBe(expectedPath);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });
