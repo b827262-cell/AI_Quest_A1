@@ -5,6 +5,7 @@ const FIELD_LABELS: Record<string, string> = {
   apiKey: "API Key",
   baseUrl: "Credential Base URL",
   model: "Model",
+  endpointProfile: "Endpoint Profile",
   status: "狀態",
   priority: "Priority",
   weight: "Weight",

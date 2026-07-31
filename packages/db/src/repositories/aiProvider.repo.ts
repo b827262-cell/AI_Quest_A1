@@ -265,7 +265,7 @@ export function makeAiProviderRepo(db: Db) {
     findByFingerprint(fingerprint: string) {
       return db.select().from(aiProviderCredentials).where(eq(aiProviderCredentials.keyFingerprint, fingerprint)).get();
     },
-    createCredential(input: { providerConfigId: string; name: string; encryptedApiKey: string; maskedApiKey: string; keyFingerprint: string; baseUrl?: string | null; model?: string | null; rpmLimit?: number | null; tpmLimit?: number | null; rpdLimit?: number | null; resetTimezone?: string; status?: CredentialStatus; billingMode?: string; region?: string; endpointProfile?: string; usageScope?: string; productionAuthorized?: boolean; allowEvaluation?: boolean; evaluationAuthorizedAt?: string | null; evaluationAuthorizedByAdminId?: string | null; priority?: number; weight?: number }) {
+    createCredential(input: { providerConfigId: string; name: string; encryptedApiKey: string; maskedApiKey: string; keyFingerprint: string; baseUrl?: string | null; model?: string | null; rpmLimit?: number | null; tpmLimit?: number | null; rpdLimit?: number | null; resetTimezone?: string; status?: CredentialStatus; billingMode?: string; region?: string; endpointProfile?: string | null; usageScope?: string; productionAuthorized?: boolean; allowEvaluation?: boolean; evaluationAuthorizedAt?: string | null; evaluationAuthorizedByAdminId?: string | null; priority?: number; weight?: number }) {
       const now = nowIso(); const id = newId("aic");
       const model = input.model?.trim() || null;
       const timezone = assertQuotaTimezone(input.resetTimezone ?? "Asia/Taipei");

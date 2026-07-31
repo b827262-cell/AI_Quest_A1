@@ -14,6 +14,14 @@ describe("Credential API error messages", () => {
     expect(credentialFieldErrors(error)).toEqual({ name: "名稱為必填", baseUrl: "格式錯誤" });
   });
 
+  it("labels endpointProfile validation errors instead of leaking the raw field key", () => {
+    const error = new ApiHttpError(422, "ignored", "validation_error", {
+      endpointProfile: "欄位格式不正確"
+    });
+    expect(credentialErrorMessage(error, "save")).toContain("Endpoint Profile");
+    expect(credentialErrorMessage(error, "save")).not.toContain("API Key");
+  });
+
   it("maps safe backend classifications", () => {
     expect(credentialErrorMessage(new ApiHttpError(404, "ignored", "provider_not_found"), "save"))
       .toContain("Provider");

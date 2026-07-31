@@ -291,7 +291,7 @@ export const createAiCredentialInputSchema = z.object({
   status: aiCredentialStatusSchema.default("active"),
   billingMode: providerBillingModeSchema.default("unknown"),
   region: z.string().trim().min(1).max(80).optional(),
-  endpointProfile: z.string().trim().min(1).max(120).optional(),
+  endpointProfile: z.string().trim().min(1).max(120).nullable().optional(),
   usageScope: credentialUsageScopeSchema.default("unknown"),
   productionAuthorized: z.boolean().default(false),
   allowEvaluation: z.boolean().default(false),

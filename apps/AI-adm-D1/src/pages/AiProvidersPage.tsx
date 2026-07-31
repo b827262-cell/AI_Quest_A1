@@ -678,8 +678,13 @@ export function AiProvidersPage() {
       resetCredentialForm();
       await loadCredentials(selectedProvider.id);
     } catch (saveError) {
-      setCredentialErrors(credentialFieldErrors(saveError));
-      if (!editingCredentialId && credentialForm.apiKey.trim()) {
+      const fieldErrors = credentialFieldErrors(saveError);
+      setCredentialErrors(fieldErrors);
+      // Only prompt to re-enter the API Key when the key itself was the
+      // problem (missing/invalid/masked). A validation error on an unrelated
+      // field (e.g. endpointProfile) must not blame the key or clear it.
+      const apiKeyIsCulprit = "apiKey" in fieldErrors;
+      if (!editingCredentialId && credentialForm.apiKey.trim() && apiKeyIsCulprit) {
         setCredentialForm((current) => credentialFormAfterFailure(current, true));
         setError("新增失敗，請重新輸入 API Key。\n" + credentialErrorMessage(saveError, "save"));
       } else {
