@@ -96,6 +96,8 @@ export {
   armstrongNumbersInRange,
   armstrongOutputForRange,
   buildStudentAnswer,
+  removeSectionHeading,
+  SECTION_HEADING_PATTERN,
   publicStudentAnswer,
   validateStudentAnswer
 } from "./gateway/student-answer";
