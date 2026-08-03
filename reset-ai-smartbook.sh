@@ -136,6 +136,65 @@ is_port_open() {
   (echo >"/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1
 }
 
+read_admin_token() {
+  if [[ -n "${ADMIN_API_TOKEN:-}" ]]; then
+    printf '%s' "$ADMIN_API_TOKEN"
+    return 0
+  fi
+  if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    awk -F= '/^[[:space:]]*(export[[:space:]]+)?ADMIN_API_TOKEN[[:space:]]*=/ {
+      value=$0; sub(/^[^=]*=/, "", value); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value);
+      if (value ~ /^".*"$/ || value ~ /^'"'"'.*'"'"'$/) value=substr(value, 2, length(value)-2);
+      print value; exit
+    }' "$PROJECT_ROOT/.env"
+  fi
+}
+
+http_status() {
+  local url="$1"
+  local token="${2:-}"
+  if [[ -n "$token" ]]; then
+    curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -H "x-admin-token: $token" "$url" 2>/dev/null || printf '000'
+  else
+    curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || printf '000'
+  fi
+}
+
+verify_admin_readiness() {
+  local token live ready unauthenticated authenticated
+  token="$(read_admin_token)"
+  if [[ -z "$token" ]]; then
+    fail "Admin readiness 無法驗證：ADMIN_API_TOKEN 無法讀取。"
+    return 1
+  fi
+
+  live="$(http_status "${URLS[admin-api]}/health/live")"
+  ready="$(http_status "${URLS[admin-api]}/health/ready")"
+  unauthenticated="$(http_status "${URLS[admin-api]}/api/admin/accounts")"
+  authenticated="$(http_status "${URLS[admin-api]}/api/admin/accounts" "$token")"
+
+  if [[ "$live" != "200" || "$ready" != "200" || "$unauthenticated" != "401" || "$authenticated" != "200" ]]; then
+    fail "Admin HTTP readiness 失敗：live=$live ready=$ready unauthenticated=$unauthenticated authenticated=$authenticated"
+    return 1
+  fi
+  return 0
+}
+
+verify_admin_proxy() {
+  local token proxy_status
+  token="$(read_admin_token)"
+  if [[ -z "$token" ]]; then
+    fail "Vite proxy readiness 無法驗證：ADMIN_API_TOKEN 無法讀取。"
+    return 1
+  fi
+  proxy_status="$(http_status "${URLS[admin-web]}/api/admin/accounts")"
+  if [[ "$proxy_status" != "200" ]]; then
+    fail "Vite proxy readiness 失敗：status=$proxy_status"
+    return 1
+  fi
+  return 0
+}
+
 kill_port() {
   local port="$1"
 
@@ -243,6 +302,14 @@ start_service() {
     fi
 
     if is_port_open "$port"; then
+      if [[ "$service" == "admin-api" ]] && ! verify_admin_readiness; then
+        tail -n 40 "$log_file" >&2 || true
+        return 1
+      fi
+      if [[ "$service" == "admin-web" ]] && ! verify_admin_proxy; then
+        tail -n 40 "$log_file" >&2 || true
+        return 1
+      fi
       ok "$service 已啟動：${URLS[$service]}（PID $pid）"
       return 0
     fi
