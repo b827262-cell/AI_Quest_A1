@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { HomeAIComposer } from "../components/HomeAIComposer";
 import { StudentAnswerRenderer } from "../components/GuestAnswerRenderer";
+import { estimateThinkingProgress, ThinkingProgress } from "../components/ThinkingProgress";
 import {
   clearGuestAnswerCredential,
   publicGuestAnswerForHistory,
@@ -158,8 +159,12 @@ export function PublicHomePage() {
   const [feedback, setFeedback] = useState("");
   const [lastSourceType, setLastSourceType] = useState<"manual" | "image" | "file">("manual");
   const [restoringAnswer, setRestoringAnswer] = useState(isAnswerRoute);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [progressComplete, setProgressComplete] = useState(false);
   const requestAbortRef = useRef<AbortController | null>(null);
   const studentName = useMemo(readStudentName, []);
+  const thinkingProgress = progressComplete ? 100 : estimateThinkingProgress(elapsedMs);
 
   useEffect(() => {
     let active = true;
@@ -173,13 +178,19 @@ export function PublicHomePage() {
   }, []);
 
   useEffect(() => {
+    if (!busy || startedAt === null) return;
+    const updateElapsed = () => setElapsedMs(Date.now() - startedAt);
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 250);
+    return () => window.clearInterval(timer);
+  }, [busy, startedAt]);
+
+  useEffect(() => {
     let active = true;
     requestAbortRef.current?.abort();
     requestAbortRef.current = null;
 
     if (!isAnswerRoute) {
-      // The root URL is always a clean compose screen. An old recovery
-      // reference must never force the visitor back into a previous answer.
       clearGuestAnswerCredential();
       setQuestion("");
       setResponse(null);
@@ -188,6 +199,9 @@ export function PublicHomePage() {
       setFeedback("");
       setLastSourceType("manual");
       setRestoringAnswer(false);
+      setStartedAt(null);
+      setElapsedMs(0);
+      setProgressComplete(false);
       return () => {
         active = false;
       };
@@ -236,21 +250,27 @@ export function PublicHomePage() {
     setError("");
     setFeedback("");
     if (!trimmed) {
-      setError("請先輸入問題。這裡最多接受 2,000 字。" );
+      setError("請先輸入問題。這裡最多接受 2,000 字。");
       return;
     }
     if (trimmed.length > 2000) {
-      setError("問題太長，請縮短到 2,000 字以內。" );
+      setError("問題太長，請縮短到 2,000 字以內。");
       return;
     }
     if (!config.guestAiEnabled) {
-      setError("目前暫停開放訪客問答，請登入後繼續使用。" );
+      setError("目前暫停開放訪客問答，請登入後繼續使用。");
       return;
     }
+
     const controller = new AbortController();
     requestAbortRef.current?.abort();
     requestAbortRef.current = controller;
+    const requestStartedAt = Date.now();
+    setStartedAt(requestStartedAt);
+    setElapsedMs(0);
+    setProgressComplete(false);
     setBusy(true);
+
     try {
       const result = await studentClient.askAsGuest({
         question: trimmed,
@@ -259,9 +279,13 @@ export function PublicHomePage() {
         providerPreference
       }, controller.signal);
       if (controller.signal.aborted) return;
+
+      setElapsedMs(Date.now() - requestStartedAt);
+      setProgressComplete(true);
+      await new Promise((resolve) => window.setTimeout(resolve, 400));
+      if (controller.signal.aborted) return;
+
       setResponse(result);
-      // Persist the one-time recovery token so the answer can survive a
-      // refresh. Only the token + requestId are stored; never log the token.
       if (result.requestId && result.recoveryToken) {
         saveGuestAnswerCredential({
           requestId: result.requestId,
@@ -273,11 +297,13 @@ export function PublicHomePage() {
       });
     } catch (err) {
       if (controller.signal.aborted) return;
-      setError(err instanceof Error ? err.message : "訪客問答暫時無法使用，請稍後再試。" );
+      setError(err instanceof Error ? err.message : "訪客問答暫時無法使用，請稍後再試。");
     } finally {
       if (requestAbortRef.current === controller) {
         requestAbortRef.current = null;
         setBusy(false);
+        setStartedAt(null);
+        setProgressComplete(false);
       }
     }
   }
@@ -286,10 +312,19 @@ export function PublicHomePage() {
     if (!response?.requestId) return;
     try {
       await studentClient.sendGuestFeedback({ requestId: response.requestId, helpful });
-      setFeedback("謝謝你的回饋！" );
+      setFeedback("謝謝你的回饋！");
     } catch {
-      setFeedback("回饋已記錄在本次體驗中。" );
+      setFeedback("回饋已記錄在本次體驗中。");
     }
+  }
+
+  function stopThinking() {
+    requestAbortRef.current?.abort("user_cancelled");
+    requestAbortRef.current = null;
+    setBusy(false);
+    setStartedAt(null);
+    setProgressComplete(false);
+    setError("已停止解題，題目內容仍保留，可再次送出。");
   }
 
   function resetQuestion() {
@@ -301,6 +336,9 @@ export function PublicHomePage() {
     setError("");
     setFeedback("");
     setLastSourceType("manual");
+    setStartedAt(null);
+    setElapsedMs(0);
+    setProgressComplete(false);
     clearGuestAnswerCredential();
     navigate("/", { replace: true, state: null });
   }
@@ -324,58 +362,62 @@ export function PublicHomePage() {
         <section className="public-hero" aria-labelledby="public-home-heading">
           <div className="public-hero-orbit public-hero-orbit-one" />
           <div className="public-hero-orbit public-hero-orbit-two" />
-          <span className="public-eyebrow">智慧學習入口 · AI-SmartBook</span>
-          <h1 id="public-home-heading">
-            {studentName ? `${studentName}，${config.homeGreeting}` : config.homeGreeting}
-          </h1>
-          <p className="public-hero-subtitle">{config.siteSubtitle}</p>
-          <p className="public-hero-copy">輸入題目、選取教材內容，或上傳圖片開始智慧解題。</p>
 
-        {!response && !restoringAnswer ? (
+          {!response && !restoringAnswer && busy ? (
+            <ThinkingProgress progress={thinkingProgress} elapsedMs={elapsedMs} onCancel={stopThinking} />
+          ) : (
             <>
-              <HomeAIComposer
-                value={question}
-                onChange={setQuestion}
-                onSubmit={(nextSourceType) => {
-                  void submitGuestQuestion(nextSourceType);
-                }}
-                placeholder={config.homeInputPlaceholder}
-                category={category}
-                onCategoryChange={setCategory}
-                providerPreference={providerPreference}
-                onProviderPreferenceChange={setProviderPreference}
-                busy={busy}
-                autoFocus={!busy}
-              />
-              <div className="public-composer-meta">
-                <span>訪客每日可體驗 {config.guestDailyLimit} 題 · 每題最多 2,000 字</span>
-                <span>目前模式：{category === "auto" ? "自動判斷" : category}</span>
-              </div>
-              {error ? <p className="public-form-error" role="alert">{error}</p> : null}
-              {feedback ? <p className="public-feedback-text" role="status">{feedback}</p> : null}
-              {busy ? (
-                <button type="button" className="public-back-button public-cancel-question-button" onClick={resetQuestion}>
-                  ← 取消並返回首頁
-                </button>
-              ) : null}
-              <div className="public-quick-starts" aria-label="快速題型">
-                {QUICK_STARTS.map((item) => (
-                  <button
-                    type="button"
-                    key={item.label}
-                    onClick={() => {
-                      setQuestion(item.question);
-                      setCategory(item.category);
-                    }}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+              <span className="public-eyebrow">智慧學習入口 · AI-SmartBook</span>
+              <h1 id="public-home-heading">
+                {studentName ? `${studentName}，${config.homeGreeting}` : config.homeGreeting}
+              </h1>
+              <p className="public-hero-subtitle">{config.siteSubtitle}</p>
+              <p className="public-hero-copy">輸入題目、選取教材內容，或上傳圖片開始智慧解題。</p>
             </>
-        ) : restoringAnswer ? (
-          <p className="public-answer-loading" role="status">正在載入回答…</p>
-        ) : response ? (
+          )}
+
+          {!response && !restoringAnswer ? (
+            busy ? null : (
+              <>
+                <HomeAIComposer
+                  value={question}
+                  onChange={setQuestion}
+                  onSubmit={(nextSourceType) => {
+                    void submitGuestQuestion(nextSourceType);
+                  }}
+                  placeholder={config.homeInputPlaceholder}
+                  category={category}
+                  onCategoryChange={setCategory}
+                  providerPreference={providerPreference}
+                  onProviderPreferenceChange={setProviderPreference}
+                  busy={busy}
+                  autoFocus={!busy}
+                />
+                <div className="public-composer-meta">
+                  <span>訪客每日可體驗 {config.guestDailyLimit} 題 · 每題最多 2,000 字</span>
+                  <span>目前模式：{category === "auto" ? "自動判斷" : category}</span>
+                </div>
+                {error ? <p className="public-form-error" role="alert">{error}</p> : null}
+                {feedback ? <p className="public-feedback-text" role="status">{feedback}</p> : null}
+                <div className="public-quick-starts" aria-label="快速題型">
+                  {QUICK_STARTS.map((item) => (
+                    <button
+                      type="button"
+                      key={item.label}
+                      onClick={() => {
+                        setQuestion(item.question);
+                        setCategory(item.category);
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )
+          ) : restoringAnswer ? (
+            <p className="public-answer-loading" role="status">正在載入回答…</p>
+          ) : response ? (
             <GuestAnswer
               question={question}
               response={response}
@@ -386,11 +428,13 @@ export function PublicHomePage() {
           ) : null}
         </section>
 
-        <section id="features" className="public-feature-strip" aria-label="AI-SmartBook 功能">
-          <div><span>01</span><strong>快速理解</strong><p>把問題整理成清楚、可行動的學習步驟。</p></div>
-          <div><span>02</span><strong>教材連結</strong><p>登入後從個人書庫延伸追問與複習。</p></div>
-          <div><span>03</span><strong>學習留存</strong><p>保存回答、進度與最近提問，隨時接續。</p></div>
-        </section>
+        {!busy ? (
+          <section id="features" className="public-feature-strip" aria-label="AI-SmartBook 功能">
+            <div><span>01</span><strong>快速理解</strong><p>把問題整理成清楚、可行動的學習步驟。</p></div>
+            <div><span>02</span><strong>教材連結</strong><p>登入後從個人書庫延伸追問與複習。</p></div>
+            <div><span>03</span><strong>學習留存</strong><p>保存回答、進度與最近提問，隨時接續。</p></div>
+          </section>
+        ) : null}
       </main>
       <footer className="public-home-footer">AI-SmartBook · 公開體驗回答僅供學習參考</footer>
     </div>
