@@ -748,7 +748,7 @@ export function AiProvidersPage() {
         <div className="admin-quota-list">
           <div className="admin-quota-list-header">
             <div>
-              <strong>模型配額列表</strong>
+              <strong>模型配額列表（維度 2：Provider／金鑰／模型的 RPM、TPM、RPD）</strong>
               <span className="muted">（後端 API 用量資料）</span>
             </div>
             <button type="button" className="admin-btn secondary" onClick={() => void refreshCredentialQuotas(credential.id)} disabled={busy}>重新整理</button>
