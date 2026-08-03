@@ -39,8 +39,8 @@ describe("graph-theory prompt + answer verification (spec §1, §1.4)", () => {
     expect(isGraphTheoryQuestion("What is the capital of France?")).toBe(false);
   });
 
-  it("selectGuestSystemPrompt routes graph questions to the graph prompt", () => {
-    expect(selectGuestSystemPrompt("Use Kruskal to find the MST")).toBe(GRAPH_THEORY_TUTOR_SYSTEM_PROMPT);
+  it("keeps the internal graph contract out of guest prompts", () => {
+    expect(selectGuestSystemPrompt("Use Kruskal to find the MST")).toBe(GUEST_ASK_SYSTEM_PROMPT);
     expect(selectGuestSystemPrompt("hello world")).toBe(GUEST_ASK_SYSTEM_PROMPT);
   });
 

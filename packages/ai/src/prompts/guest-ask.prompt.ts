@@ -27,6 +27,7 @@ export const GUEST_ASK_SYSTEM_PROMPT = [
 export const PROGRAMMING_TUTOR_SYSTEM_PROMPT = [
   GUEST_ASK_SYSTEM_PROMPT,
   "遇到演算法或程式設計題，優先依序提供：題意摘要、4 到 6 個解題步驟、完整可執行的程式碼、範例輸入輸出與複雜度。",
+  "解題步驟最多 6 項；若題目需要定義 strong、weak、unsecured 等名詞，請把定義放在題意摘要或補充說明，不要各自占用步驟名額。步驟必須保留核心計算、完整輸出格式，以及時間與空間複雜度。",
   "程式題的程式碼區塊必須完整；不要把內部驗證、路由、工具結果或 JSON 當成學生答案。"
 ].join("\n");
 
@@ -61,13 +62,17 @@ export function isGraphTheoryQuestion(question: string): boolean {
 }
 
 /**
- * Select the most specific system prompt for a guest question. Graph-theory
- * questions get the structured graph prompt; programming questions get the
- * programming-tutor prompt; everything else gets the base guest prompt.
+ * Select the system prompt for a guest question.
+ *
+ * Programming is the only specialized guest prompt selected here. Graph
+ * classification remains available to the answer validation pipeline, but it
+ * must not replace the general guest instructions (or append the graph JSON
+ * contract) for a guest request.
  */
 export function selectGuestSystemPrompt(question: string, category?: string): string {
   const classification = classifyProblem(question);
-  if (classification.requiresGraphAnalysis) return GRAPH_THEORY_TUTOR_SYSTEM_PROMPT;
-  const isProgramming = classification.problemType === "programming" || category === "programming";
-  return isProgramming ? PROGRAMMING_TUTOR_SYSTEM_PROMPT : GUEST_ASK_SYSTEM_PROMPT;
+  if (category === "programming" || classification.problemType === "programming") {
+    return PROGRAMMING_TUTOR_SYSTEM_PROMPT;
+  }
+  return GUEST_ASK_SYSTEM_PROMPT;
 }

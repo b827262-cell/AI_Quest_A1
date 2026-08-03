@@ -8,11 +8,12 @@ export const LOCAL_ADMIN_ORIGINS = [
 export function resolveAdminAllowedOrigins(env: NodeJS.ProcessEnv = process.env): Set<string> {
   const configured = (env.ADMIN_ALLOWED_ORIGINS || "")
     .split(",")
-    .map((value) => value.trim())
+    .map((value) => value.trim().replace(/\/+$/, ""))
     .filter(Boolean);
-  if (configured.length > 0) return new Set(configured);
-  if (env.NODE_ENV !== "production") return new Set(LOCAL_ADMIN_ORIGINS);
-  return new Set();
+  if (env.NODE_ENV !== "production") {
+    return new Set([...configured, ...LOCAL_ADMIN_ORIGINS]);
+  }
+  return new Set(configured);
 }
 
 /** CORS/origin boundary for Admin API. It never authenticates a request. */
@@ -20,7 +21,8 @@ export function createAdminOriginMiddleware(env: NodeJS.ProcessEnv = process.env
   const allowedOrigins = resolveAdminAllowedOrigins(env);
   return (req: Request, res: Response, next: NextFunction) => {
     const origin = req.header("origin");
-    if (origin && !allowedOrigins.has(origin)) {
+    const normalizedOrigin = origin ? origin.trim().replace(/\/+$/, "") : undefined;
+    if (origin && (!normalizedOrigin || !allowedOrigins.has(normalizedOrigin))) {
       return res.status(403).json({ error: "admin origin is not allowed" });
     }
     if (origin) {

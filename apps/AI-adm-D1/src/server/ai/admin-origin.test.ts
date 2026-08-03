@@ -26,7 +26,7 @@ function response() {
   return { result, get statusCode() { return statusCode; }, get body() { return body; }, headers };
 }
 
-function runChain(method: string, origin: string | undefined, token: string | undefined) {
+function runChain(method: string, origin: string | undefined, token: string | undefined, envOverride?: NodeJS.ProcessEnv) {
   const req = request(method, origin);
   const res = response();
   let passedOrigin = false;
@@ -37,7 +37,9 @@ function runChain(method: string, origin: string | undefined, token: string | un
     if (name.toLowerCase() === "x-admin-token") return token;
     return undefined;
   } } as Request;
-  createAdminOriginMiddleware({ NODE_ENV: "development", ADMIN_ALLOWED_ORIGINS: LOCAL_ADMIN_ORIGINS.join(",") })(req, res.result, () => {
+
+  const env = envOverride || { NODE_ENV: "development", ADMIN_ALLOWED_ORIGINS: LOCAL_ADMIN_ORIGINS.join(",") };
+  createAdminOriginMiddleware(env)(req, res.result, () => {
     passedOrigin = true;
     createAdminAuthMiddleware({ NODE_ENV: "development", ADMIN_API_TOKEN: "valid-token" })(authRequest, res.result, nextAuth);
   });
@@ -71,5 +73,39 @@ describe("Admin origin and auth boundary", () => {
   it("uses only the two local defaults and fails closed for production without explicit origins", () => {
     expect([...resolveAdminAllowedOrigins({ NODE_ENV: "development" })]).toEqual([...LOCAL_ADMIN_ORIGINS]);
     expect(resolveAdminAllowedOrigins({ NODE_ENV: "production" }).size).toBe(0);
+  });
+
+  it("supports Tailscale IP and MagicDNS origins in ADMIN_ALLOWED_ORIGINS", () => {
+    const tailscaleIpOrigin = "http://100.115.92.2:5174";
+    const magicDnsOrigin = "http://my-admin-laptop.ts.net:5174";
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: "development",
+      ADMIN_ALLOWED_ORIGINS: `${tailscaleIpOrigin}, ${magicDnsOrigin}/`
+    };
+
+    const origins = resolveAdminAllowedOrigins(env);
+    expect(origins.has(tailscaleIpOrigin)).toBe(true);
+    expect(origins.has(magicDnsOrigin)).toBe(true);
+
+    const tsResult = runChain("GET", tailscaleIpOrigin, "valid-token", env);
+    expect(tsResult.passedOrigin).toBe(true);
+    expect(tsResult.passedAuth).toBe(true);
+
+    const magicResult = runChain("GET", magicDnsOrigin, "valid-token", env);
+    expect(magicResult.passedOrigin).toBe(true);
+    expect(magicResult.passedAuth).toBe(true);
+  });
+
+  it("normalizes trailing slashes and spaces in ADMIN_ALLOWED_ORIGINS and request Origin header", () => {
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: "production",
+      ADMIN_ALLOWED_ORIGINS: " http://100.64.1.2:5174/ , http://tailscale.ts.net:5174/// "
+    };
+    const origins = resolveAdminAllowedOrigins(env);
+    expect(origins.has("http://100.64.1.2:5174")).toBe(true);
+    expect(origins.has("http://tailscale.ts.net:5174")).toBe(true);
+
+    const reqResult = runChain("POST", "http://100.64.1.2:5174/", "valid-token", env);
+    expect(reqResult.passedOrigin).toBe(true);
   });
 });

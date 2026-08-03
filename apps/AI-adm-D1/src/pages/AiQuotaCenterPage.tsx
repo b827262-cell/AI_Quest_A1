@@ -11,6 +11,7 @@ import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
 import { formatQuotaCount } from "./aiQuotaDisplay";
+import { formatAdminErrorMessage } from "../adminErrorMessage";
 
 /**
  * AI 每日額度中心 — Token Pool 監控與設定。
@@ -52,7 +53,7 @@ export function AiQuotaCenterPage() {
       setModelLimits(ml.modelLimits);
       setOpenAiDaily(od);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "無法載入額度資料");
+      setError(formatAdminErrorMessage(err, "無法載入額度資料"));
     } finally {
       setLoading(false);
     }

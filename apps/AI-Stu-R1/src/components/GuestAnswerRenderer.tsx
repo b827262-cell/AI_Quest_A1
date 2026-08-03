@@ -9,6 +9,46 @@ export type MarkdownBlock =
   | { kind: "code"; language?: string; code: string }
   | { kind: "table"; headers: string[]; rows: string[][] };
 
+export const STRUCTURED_SECTION_HEADING_PATTERN =
+  /^(?:#{1,6}\s*)?(題意摘要|解題步驟|完整程式碼|範例(?:輸入輸出|驗證)?|複雜度分析?|補充說明|解題重點|核心結論|解法摘要|解題思路|關鍵觀察|核心概念|解法說明|演算法說明|重點整理|解題方向|問題分析|思路分析|答案|結論)\s*[:：]?\s*$/;
+
+export function removeStructuredSectionHeading(text: string): string {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .filter((line) => !STRUCTURED_SECTION_HEADING_PATTERN.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
+function summaryFallbackFromMarkdown(markdownText: string): string {
+  return removeStructuredSectionHeading(markdownText)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) =>
+      line &&
+      !/^```/.test(line) &&
+      !/^(?:[-*+]\s+|\d+[.)、:：]\s+)/.test(line)
+    )
+    .map((line) => line
+      .replace(/^#{1,6}\s*/, "")
+      .replace(/\*\*|__|~~|`/g, "")
+      .trim())
+    .find(Boolean) ?? "請依題目條件與輸出要求完成解題。";
+}
+
+/** Normalize historical structured answers before any answer section renders. */
+export function normalizeGuestAnswerContent(content: GuestAnswerContent): GuestAnswerContent {
+  const summary = removeStructuredSectionHeading(content.summary) ||
+    summaryFallbackFromMarkdown(content.markdownText);
+  const steps = content.steps
+    .map(removeStructuredSectionHeading)
+    .map((step) => step.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+
+  return { ...content, summary, steps };
+}
+
 function tableCells(line: string): string[] {
   const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
   return trimmed.split("|").map((cell) => cell.trim());
@@ -199,13 +239,14 @@ export function ExpandableExplanation({ explanation, complexity }: { explanation
 }
 
 export function StructuredStudentAnswer({ content }: { content: GuestAnswerContent }) {
+  const normalized = normalizeGuestAnswerContent(content);
   return (
     <div className="structured-student-answer">
-      <AnswerSummary summary={content.summary} />
-      <StepsList steps={content.steps} />
-      {content.code ? <CodeBlock language={content.codeLanguage} code={content.code} /> : null}
-      <ExampleCases examples={content.examples} />
-      <ExpandableExplanation explanation={content.explanation} complexity={content.complexity} />
+      <AnswerSummary summary={normalized.summary} />
+      <StepsList steps={normalized.steps} />
+      {normalized.code ? <CodeBlock language={normalized.codeLanguage} code={normalized.code} /> : null}
+      <ExampleCases examples={normalized.examples} />
+      <ExpandableExplanation explanation={normalized.explanation} complexity={normalized.complexity} />
     </div>
   );
 }
