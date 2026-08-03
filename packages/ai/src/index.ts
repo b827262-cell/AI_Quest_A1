@@ -96,6 +96,7 @@ export {
   armstrongNumbersInRange,
   armstrongOutputForRange,
   buildStudentAnswer,
+  firstProseLineFromMarkdown,
   removeSectionHeading,
   SECTION_HEADING_PATTERN,
   publicStudentAnswer,

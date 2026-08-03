@@ -10,7 +10,7 @@ export type MarkdownBlock =
   | { kind: "table"; headers: string[]; rows: string[][] };
 
 export const STRUCTURED_SECTION_HEADING_PATTERN =
-  /^(?:#{1,6}\s*)?(題意摘要|解題步驟|完整程式碼|範例(?:輸入輸出|驗證)?|複雜度分析?|補充說明)\s*[:：]?\s*$/;
+  /^(?:#{1,6}\s*)?(題意摘要|解題步驟|完整程式碼|範例(?:輸入輸出|驗證)?|複雜度分析?|補充說明|解題重點|核心結論|解法摘要|解題思路|關鍵觀察|核心概念|解法說明|演算法說明|重點整理|解題方向|問題分析|思路分析|答案|結論)\s*[:：]?\s*$/;
 
 export function removeStructuredSectionHeading(text: string): string {
   return String(text ?? "")
@@ -24,10 +24,13 @@ function summaryFallbackFromMarkdown(markdownText: string): string {
   return removeStructuredSectionHeading(markdownText)
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line && !/^```/.test(line))
+    .filter((line) =>
+      line &&
+      !/^```/.test(line) &&
+      !/^(?:[-*+]\s+|\d+[.)、:：]\s+)/.test(line)
+    )
     .map((line) => line
       .replace(/^#{1,6}\s*/, "")
-      .replace(/^(?:[-*+]\s+|\d+[.)、:：]\s+)/, "")
       .replace(/\*\*|__|~~|`/g, "")
       .trim())
     .find(Boolean) ?? "請依題目條件與輸出要求完成解題。";

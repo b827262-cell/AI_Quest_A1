@@ -32,7 +32,7 @@ const GRAPH_TEXT_PATTERN = /(?:\b(?:graph\s+analysis|vertices?|edges?|degrees?|d
 
 /** Headings belong to the structured answer shell, not to a field's content. */
 export const SECTION_HEADING_PATTERN =
-  /^(?:#{1,6}\s*)?(題意摘要|解題步驟|完整程式碼|範例(?:輸入輸出|驗證)?|複雜度分析?|補充說明)\s*[:：]?\s*$/;
+  /^(?:#{1,6}\s*)?(題意摘要|解題步驟|完整程式碼|範例(?:輸入輸出|驗證)?|複雜度分析?|補充說明|解題重點|核心結論|解法摘要|解題思路|關鍵觀察|核心概念|解法說明|演算法說明|重點整理|解題方向|問題分析|思路分析|答案|結論)\s*[:：]?\s*$/;
 
 const GENERIC_SUMMARY_FALLBACK = "請依序整理輸入、處理流程與輸出結果。";
 const RECTANGLE_SUMMARY_FALLBACK =
@@ -45,6 +45,29 @@ export function removeSectionHeading(text: string): string {
     .filter((line) => !SECTION_HEADING_PATTERN.test(line.trim()))
     .join("\n")
     .trim();
+}
+
+/**
+ * Extract the first non-heading, non-empty prose line from a Markdown string.
+ * Used as a last-resort summary when the structured summary field is blank.
+ * Numbered/bulleted items are skipped because they are steps, not summaries.
+ */
+export function firstProseLineFromMarkdown(markdownText: string): string {
+  return removeSectionHeading(markdownText)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) =>
+      line &&
+      !/^```/.test(line) &&
+      !/^(?:[-*+]\s+|\d+[.)、:：]\s+)/.test(line)
+    )
+    .map((line) =>
+      line
+        .replace(/^#{1,6}\s*/, "")
+        .replace(/\*\*|__|~~|`/g, "")
+        .trim()
+    )
+    .find(Boolean) ?? "";
 }
 
 const ARMSTRONG_PYTHON = `def is_armstrong(number):
@@ -139,12 +162,12 @@ function sectionKeyForHeading(line: string): Exclude<AnswerSectionKey, "preamble
   const match = line.trim().match(SECTION_HEADING_PATTERN);
   if (!match) return null;
   const heading = match[1];
-  if (heading === "題意摘要") return "summary";
-  if (heading === "解題步驟") return "steps";
+  if (heading === "題意摘要" || heading === "解法摘要" || heading === "核心結論" || heading === "核心概念") return "summary";
+  if (heading === "解題步驟" || heading === "解題重點" || heading === "解題思路" || heading === "解題方向" || heading === "思路分析" || heading === "演算法說明") return "steps";
   if (heading === "完整程式碼") return "code";
   if (heading.startsWith("範例")) return "examples";
   if (heading.startsWith("複雜度")) return "complexity";
-  if (heading === "補充說明") return "explanation";
+  if (heading === "補充說明" || heading === "問題分析" || heading === "重點整理" || heading === "解法說明" || heading === "關鍵觀察" || heading === "答案" || heading === "結論") return "explanation";
   return null;
 }
 
@@ -179,7 +202,7 @@ function numberedOrBulletedLines(text: string): string[] {
     .filter(Boolean);
 }
 
-function firstParagraph(text: string, fallback = GENERIC_SUMMARY_FALLBACK): string {
+function firstParagraph(text: string, fallback = GENERIC_SUMMARY_FALLBACK, markdownText?: string): string {
   const sections = splitAnswerSections(text);
   const parsedSummary = (sections.summary.length > 0 ? sections.summary : sections.preamble).join("\n");
   const cleanedSummary = removeSectionHeading(parsedSummary);
@@ -188,7 +211,13 @@ function firstParagraph(text: string, fallback = GENERIC_SUMMARY_FALLBACK): stri
     .map((block) => plainText(block.replace(/\n/g, " ")))
     .map((block) => removeSectionHeading(block))
     .find((block) => block && !/^(?:輸入|輸出|input|output|範例|example|解題步驟|步驟)/i.test(block));
-  return candidate || fallback;
+  if (candidate) return candidate;
+  // When the structured summary is only headings, try extracting from markdownText.
+  if (markdownText) {
+    const mdFallback = firstProseLineFromMarkdown(markdownText);
+    if (mdFallback) return mdFallback;
+  }
+  return fallback;
 }
 
 function isRectangleCoverageQuestion(question: string): boolean {
@@ -324,7 +353,8 @@ function genericContent(raw: string, classification: ProblemClassification, ques
   const steps = parsedComplexity.steps.slice(0, 6);
   const summary = firstParagraph(
     prose,
-    isRectangleCoverageQuestion(question) ? RECTANGLE_SUMMARY_FALLBACK : GENERIC_SUMMARY_FALLBACK
+    isRectangleCoverageQuestion(question) ? RECTANGLE_SUMMARY_FALLBACK : GENERIC_SUMMARY_FALLBACK,
+    raw.trim()
   );
   const examples = parseExamples(prose);
   const legacyExplanation = prose
