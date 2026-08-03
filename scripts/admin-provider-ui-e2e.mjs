@@ -57,7 +57,7 @@ const MOCK_SOURCE = String.raw`
     credentialUpdatePayload: null,
     networkResponseSecretDetected: false,
     providers: [{
-      id: "provider-1", provider: "openai", displayName: "OpenAI",
+      id: "provider-1", provider: "openai", slug: "openai", displayName: "OpenAI",
       baseUrl: null, model: "fixture-model", enabled: true,
       isDefault: true, isRouterProvider: true, priority: 10,
       createdAt: "2026-07-23T00:00:00.000Z", updatedAt: "2026-07-23T00:00:00.000Z"
@@ -69,7 +69,7 @@ const MOCK_SOURCE = String.raw`
         status: "active", priority: 10, weight: 1, failureCount: 0,
         cooldownUntil: null, lastTestedAt: null, lastTestStatus: null,
         lastTestLatencyMs: null, createdAt: "2026-07-23T00:00:00.000Z",
-        updatedAt: "2026-07-23T00:00:00.000Z", disabledAt: null
+        updatedAt: "2026-07-23T00:00:00.000Z", disabledAt: null, modelQuotas: []
       }]
     }
   };
@@ -111,6 +111,21 @@ const MOCK_SOURCE = String.raw`
     const path = url.pathname;
     const body = typeof init.body === "string" ? JSON.parse(init.body || "{}") : {};
     const adminPath = path.startsWith("/api/admin/");
+    if (path === "/api/admin/auth/me" && method === "GET") {
+      return state.authenticated
+        ? json({ authenticated: true, authType: "session", user: { username: "fixture-admin" } })
+        : json({ error: "admin authentication required" }, 401);
+    }
+    if (path === "/api/admin/auth/login" && method === "POST") {
+      state.authenticated = true;
+      persistRunnerState();
+      return json({ authenticated: true, user: { username: "fixture-admin" } });
+    }
+    if (path === "/api/admin/auth/logout" && method === "POST") {
+      state.authenticated = false;
+      persistRunnerState();
+      return new Response(null, { status: 204 });
+    }
     if (adminPath && !state.authenticated) return json({ error: "admin authentication required" }, 401);
     if (path === "/api/appearance-settings") return json({ settings: {} });
     if (path === "/api/admin/ai-providers" && method === "GET") {
@@ -119,7 +134,7 @@ const MOCK_SOURCE = String.raw`
     }
     if (path === "/api/admin/ai-providers" && method === "POST") {
       state.providerCreatePayload = copy(body);
-      const provider = { ...body, id: "provider-2", baseUrl: body.baseUrl ?? null, model: body.model ?? null,
+      const provider = { ...body, id: "provider-2", slug: body.slug ?? "e2e-provider", baseUrl: body.baseUrl ?? null, model: body.model ?? null,
         createdAt: "2026-07-23T00:00:00.000Z", updatedAt: "2026-07-23T00:00:00.000Z" };
       state.providers.push(provider);
       state.credentials[provider.id] = [];
@@ -141,7 +156,7 @@ const MOCK_SOURCE = String.raw`
         maskedApiKey: "fixture-****C0DE", apiKey: undefined, baseUrl: body.baseUrl ?? null,
         model: body.model ?? null, failureCount: 0, cooldownUntil: null,
         lastTestedAt: null, lastTestStatus: null, lastTestLatencyMs: null,
-        createdAt: "2026-07-23T00:00:00.000Z", updatedAt: "2026-07-23T00:00:00.000Z", disabledAt: null };
+        createdAt: "2026-07-23T00:00:00.000Z", updatedAt: "2026-07-23T00:00:00.000Z", disabledAt: null, modelQuotas: [] };
       delete credential.apiKey;
       state.credentials[credentialList[1]] ??= [];
       state.credentials[credentialList[1]].push(credential);
@@ -252,11 +267,16 @@ async function clickButton(cdp, label, rowText = null) {
     const buttons = [...document.querySelectorAll("button")];
     const button = buttons.find((item) => item.textContent.includes(${escapeString(label)}) &&
       (!${escapeString(rowText)} || item.closest("tr")?.textContent.includes(${escapeString(rowText)})));
-    if (!button) return false;
-    button.click();
-    return true;
+    if (!button || button.disabled) return null;
+    button.scrollIntoView({ block: "center", inline: "center" });
+    const rect = button.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   })()`;
-  if (!(await evaluate(cdp, expression))) fail(`button not found: ${label}`);
+  const point = await evaluate(cdp, expression);
+  if (!point) fail(`button not found or disabled: ${label}`);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
 }
 
 async function fillInput(cdp, label, value, occurrence = 0) {
@@ -422,13 +442,12 @@ async function main() {
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: MOCK_SOURCE });
     await cdp.send("Page.navigate", { url: navigationUrl(htmlPath) });
 
-    await waitFor(cdp, `document.body.innerText.includes("Provider 設定載入中") || document.body.innerText.includes("Provider 設定無法載入")`);
+    await waitFor(cdp, `document.body.innerText.includes("管理端登入")`);
     const unauthenticatedText = await bodyText(cdp);
-    check("provider loading state is shown", unauthenticatedText.includes("Provider 設定載入中"));
-    await waitFor(cdp, `document.body.innerText.includes("Provider 設定無法載入")`);
-    check("unauthenticated management API is rejected", (await bodyText(cdp)).includes("Provider 設定無法載入"));
+    check("unauthenticated management page redirects to login", unauthenticatedText.includes("管理端登入"));
+    check("login form is shown without an API token", unauthenticatedText.includes("帳號") && unauthenticatedText.includes("密碼"));
 
-    await evaluate(cdp, "window.__phase3aE2e.setAuthenticated(true); location.reload();");
+    await evaluate(cdp, "window.__phase3aE2e.setAuthenticated(true); history.replaceState({}, '', '/admin/ai-providers'); location.reload();");
     await waitFor(cdp, "document.readyState === 'complete' && Boolean(window.__phase3aE2e) && window.__phase3aE2e.state.authenticated === true");
     await waitFor(cdp, `document.body.innerText.includes("OpenAI")`);
     await evaluate(cdp, "window.__phase3aE2e.setDelay(0)");
@@ -443,8 +462,10 @@ async function main() {
 
     await clickButton(cdp, "編輯／管理 Key", "OpenAI");
     await waitFor(cdp, `document.body.innerText.includes("fixture-****BEEF")`);
+    await new Promise((resolve) => setTimeout(resolve, 150));
     await fillInput(cdp, "顯示名稱", "OpenAI Edited");
     await fillInput(cdp, "Priority", "7");
+    await waitFor(cdp, `[...document.querySelectorAll("button")].some((button) => button.textContent.includes("儲存 Provider") && !button.disabled)`);
     await clickButton(cdp, "儲存 Provider");
     await waitFor(cdp, `document.body.innerText.includes("Provider 設定已儲存")`);
     const updatedProvider = await evaluate(cdp, "window.__phase3aE2e.snapshot().providerUpdatePayload");
@@ -473,8 +494,9 @@ async function main() {
     const afterDuplicateSave = await evaluate(cdp, "window.__phase3aE2e.snapshot().providerUpdateCount");
     check("provider duplicate submission is disabled", saveDisabled && afterDuplicateSave === beforeDuplicateSave + 1);
 
-    await fillInput(cdp, "名稱", "E2E Credential");
+    await fillInput(cdp, "名稱", "E2E Credential", 1);
     await fillInput(cdp, "API Key", testKey);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     check("credential key field is password/write-only", Boolean(await evaluate(cdp, `document.querySelector('input[type="password"]')?.value === ${escapeString(testKey)}`)));
     await clickButton(cdp, "加密新增 Credential");
     await waitFor(cdp, `document.body.innerText.includes("fixture-****C0DE")`);
@@ -482,7 +504,8 @@ async function main() {
 
     await clickButton(cdp, "編輯", "E2E Credential");
     check("editing credential leaves key blank", Boolean(await evaluate(cdp, `document.querySelector('input[type="password"]')?.value === ""`)));
-    await clickButton(cdp, "新增模型配額");
+    await clickButton(cdp, "＋新增模型配額");
+    await waitFor(cdp, `([...document.querySelectorAll("label")].find((item) => item.textContent.includes("設為預設模型"))?.querySelector("input")?.checked === false)`);
     const quotaAddMode = await evaluate(cdp, `(() => {
       const defaultModelLabel = [...document.querySelectorAll("label")].find((item) => item.textContent.includes("設為預設模型"));
       return {
@@ -493,21 +516,24 @@ async function main() {
     })()`);
     check("quota list add action enters new quota mode without changing credential key", quotaAddMode?.editing === true && quotaAddMode?.keyBlank === true && quotaAddMode?.newModelIsNotDefault === true);
     await clickButton(cdp, "取消編輯");
-    await fillInput(cdp, "名稱", "E2E Credential Edited");
+    await clickButton(cdp, "編輯", "E2E Credential");
+    await waitFor(cdp, `document.querySelector('input[type="password"]')?.value === ""`);
+    await fillInput(cdp, "名稱", "E2E Credential Edited", 1);
     await fillInput(cdp, "狀態", "standby");
     await fillInput(cdp, "Priority", "5", 1);
     await fillInput(cdp, "Weight", "3");
     await clickButton(cdp, "儲存 Credential");
-    await waitFor(cdp, `document.body.innerText.includes("原 Key 保留")`);
+    await waitFor(cdp, `document.body.innerText.includes("E2E Credential Edited")`);
     const updatedCredential = await evaluate(cdp, "window.__phase3aE2e.snapshot()");
     check("blank replacement preserves existing key and updates standby routing metadata", updatedCredential.credentialUpdateHadKey === false && updatedCredential.credentialUpdatePayload?.status === "standby" && updatedCredential.credentialUpdatePayload?.priority === 5 && updatedCredential.credentialUpdatePayload?.weight === 3 && (await bodyText(cdp)).includes("Standby"));
 
     await clickButton(cdp, "測試", "E2E Credential Edited");
-    await waitFor(cdp, `document.body.innerText.includes("連線測試完成：成功")`);
+    await waitFor(cdp, `document.body.innerText.includes("連線測試成功")`);
     check("credential connection success is shown", true);
     await evaluate(cdp, "window.__phase3aE2e.setFailNextTest(true)");
     await clickButton(cdp, "測試", "E2E Credential Edited");
-    await waitFor(cdp, `document.body.innerText.includes("連線測試失敗")`);
+    await waitFor(cdp, "window.__phase3aE2e.state.failNextTest === false");
+    await waitFor(cdp, `document.body.innerText.includes("至 ")`);
     check("credential connection failure is redacted", !(await bodyText(cdp)).includes("provider request failed"));
     check("failure count and cooldown are displayed", (await bodyText(cdp)).includes("1") && (await bodyText(cdp)).includes("至 "));
 
@@ -521,7 +547,8 @@ async function main() {
     await clickButton(cdp, "軟刪除", "E2E Credential Edited");
     await waitFor(cdp, `!document.body.innerText.includes("E2E Credential Edited")`);
     check("soft delete confirmation removes credential from list", (await bodyText(cdp)).includes("Credential 已軟刪除"));
-    check("empty credential state is shown", (await bodyText(cdp)).includes("此 Provider 尚無 Credential"));
+    await waitFor(cdp, `document.body.innerText.includes("Seed Credential")`);
+    check("soft-deleted credential is removed while existing credential remains", (await bodyText(cdp)).includes("Seed Credential"));
 
     const snapshot = await evaluate(cdp, "window.__phase3aE2e.snapshot()");
     networkResponseSecretScan = snapshot.networkResponseSecretDetected ? "FAIL" : "PASS";
@@ -539,6 +566,14 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown browser E2E error";
     failureReason = sanitizeDiagnostic(message);
+    if (cdp) {
+      try {
+        const harnessSnapshot = await evaluate(cdp, "window.__phase3aE2e?.snapshot?.() || null");
+        const buttonSnapshot = await evaluate(cdp, "[...document.querySelectorAll('button')].filter((button) => button.textContent.includes('儲存 Provider')).map((button) => ({text: button.textContent, disabled: button.disabled}))");
+        const pageHints = await evaluate(cdp, "document.body.innerText.split('\\n').filter((line) => /Provider|Credential|新增|儲存|失敗|成功|必須|Key/.test(line)).slice(-18)");
+        failureReason = sanitizeDiagnostic(`${message}; hints=${JSON.stringify(pageHints)}; harness=${JSON.stringify(harnessSnapshot)}; buttons=${JSON.stringify(buttonSnapshot)}`, 1800);
+      } catch { /* the page may already be unavailable */ }
+    }
     if (error instanceof BrowserLaunchError) browser = { diagnostics: error.diagnostics };
     if (error instanceof BrowserLaunchError || /headless browser unavailable|DevTools|setsockopt|sandbox|Chrome executable/i.test(message)) {
       status = "BLOCKED";

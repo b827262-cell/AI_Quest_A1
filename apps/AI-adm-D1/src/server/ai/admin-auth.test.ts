@@ -27,26 +27,26 @@ function invoke(env: NodeJS.ProcessEnv, headers: Record<string, string> = {}) {
 }
 
 describe("admin auth boundary", () => {
-  it("rejects production without a token with 503", () => {
-    expect(invoke({ NODE_ENV: "production" }).statusCode).toBe(503);
+  it("rejects production without a session or token with 401", () => {
+    expect(invoke({ NODE_ENV: "production" }).statusCode).toBe(401);
   });
 
   it("rejects development without explicit insecure opt-in", () => {
     expect(invoke({ NODE_ENV: "development" }).statusCode).toBe(401);
   });
 
-  it("allows only explicit development insecure mode", () => {
+  it("ignores the insecure development flag", () => {
     expect(invoke({ NODE_ENV: "development", ADMIN_ALLOW_INSECURE_DEV: "true" }).nextCalled)
-      .toBe(true);
+      .toBe(false);
   });
 
-  it("allows explicit insecure development mode even when a token is configured", () => {
+  it("does not bypass auth when the insecure flag and token are both configured", () => {
     const env = {
       NODE_ENV: "development",
       ADMIN_API_TOKEN: "admin-secret",
       ADMIN_ALLOW_INSECURE_DEV: "true"
     };
-    expect(invoke(env).nextCalled).toBe(true);
+    expect(invoke(env).nextCalled).toBe(false);
   });
 
   it("accepts the correct bearer token and rejects the wrong one", () => {

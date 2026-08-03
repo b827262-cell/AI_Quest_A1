@@ -366,6 +366,21 @@ export const aiAdminAuditLogs = sqliteTable("ai_admin_audit_logs", {
   createdAt: text("created_at").notNull()
 });
 
+/** Revocable, short-lived browser sessions for the Admin SPA. Secrets are
+ * stored only as SHA-256 digests; the raw cookie values never enter SQLite. */
+export const adminSessions = sqliteTable("admin_sessions", {
+  id: text("id").primaryKey(),
+  tokenDigest: text("token_digest").notNull().unique(),
+  csrfTokenDigest: text("csrf_token_digest").notNull(),
+  username: text("username").notNull(),
+  createdAt: text("created_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  lastSeenAt: text("last_seen_at").notNull(),
+  revokedAt: text("revoked_at"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent")
+});
+
 /** Safe, offline evaluation run summaries. No question/answer/prompt payloads. */
 export const aiEvaluationRuns = sqliteTable("ai_evaluation_runs", {
   id: text("id").primaryKey(),

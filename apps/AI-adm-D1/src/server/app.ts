@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import express, { type Request, type Response } from "express";
 import multer from "multer";
@@ -25,7 +25,16 @@ import {
   digestRecoveryToken
 } from "@ai-smartbook/ai/server";
 import { makeAnalyticsService, todayTaipei } from "./ai/analytics-service";
-import { createAdminAuthMiddleware } from "./ai/admin-auth";
+import {
+  adminCredentialsMatch,
+  clearAdminSessionCookies,
+  createAdminAuthMiddleware,
+  createAdminCsrfMiddleware,
+  createAdminSessionSecrets,
+  digestAdminSecret,
+  resolveAdminAuthConfig,
+  setAdminSessionCookies
+} from "./ai/admin-auth";
 import { createAdminOriginMiddleware } from "./ai/admin-origin";
 import { EvaluationServiceError, makeEvaluationService } from "./ai/evaluation-service";
 import { LiveEvaluationServiceError, makeLiveEvaluationService } from "./ai/live-evaluation-service";
@@ -306,9 +315,63 @@ app.get("/health/ready", (_req, res) => {
 app.use("/api/admin", createAdminOriginMiddleware(env));
 // Serve uploaded appearance images read-only (rides the /api proxy in both apps).
 app.use("/api/uploads/appearance", express.static(APPEARANCE_UPLOAD_DIR));
+
+// Browser authentication is a revocable, HttpOnly session. Token/Bearer
+// authentication remains available to CLI/internal automation through the
+// same middleware, but the SPA never receives or stores the token.
+const adminAuthConfig = resolveAdminAuthConfig(env);
+const adminAuthMiddleware = createAdminAuthMiddleware(env, repos.adminSessions);
+const adminCsrfMiddleware = createAdminCsrfMiddleware(env, repos.adminSessions);
+
+app.post("/api/admin/auth/login", (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!adminCredentialsMatch(username, password, adminAuthConfig)) {
+    repos.aiProviders.audit("admin.auth.login.failed", "admin_session", undefined, { username: username.slice(0, 80) });
+    res.setHeader("Cache-Control", "no-store");
+    return fail(res, 401, "invalid administrator credentials");
+  }
+
+  repos.adminSessions.purgeExpired();
+  const { sessionToken, csrfToken } = createAdminSessionSecrets();
+  const expiresAt = new Date(Date.now() + adminAuthConfig.sessionTtlMs).toISOString();
+  const session = repos.adminSessions.create({
+    tokenDigest: digestAdminSecret(sessionToken),
+    csrfTokenDigest: digestAdminSecret(csrfToken),
+    username,
+    expiresAt,
+    ipAddress: req.ip || null,
+    userAgent: req.header("user-agent") || null
+  });
+  setAdminSessionCookies(res, adminAuthConfig, sessionToken, csrfToken);
+  repos.aiProviders.audit("admin.auth.login.succeeded", "admin_session", session.id, { username });
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(200).json({ authenticated: true, user: { username } });
+});
+
+app.get("/api/admin/auth/me", adminAuthMiddleware, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  return res.json({
+    authenticated: true,
+    authType: req.adminAuth?.kind,
+    user: req.adminAuth?.kind === "session" ? { username: req.adminAuth.username } : null
+  });
+});
+
+app.post("/api/admin/auth/logout", adminAuthMiddleware, adminCsrfMiddleware, (req, res) => {
+  if (req.adminAuth?.kind === "session") {
+    repos.adminSessions.revokeById(req.adminAuth.id);
+    repos.aiProviders.audit("admin.auth.logout", "admin_session", req.adminAuth.id);
+  }
+  clearAdminSessionCookies(res, adminAuthConfig);
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(204).end();
+});
+
 // Security boundary: every current and future admin route is protected here.
 // Public and student routes are mounted outside this prefix and are unaffected.
-app.use("/api/admin", createAdminAuthMiddleware(env));
+app.use("/api/admin", adminAuthMiddleware);
+app.use("/api/admin", adminCsrfMiddleware);
 
 function fail(res: Response, status: number, message: string) {
   res.status(status).json({ error: message });
@@ -899,21 +962,7 @@ function getPublicSiteConfig() {
 function requireAdminAccess(req: Request, res: Response): boolean {
   // Kept as a defence-in-depth guard for the newer handlers. The canonical
   // policy is the `/api/admin` middleware registered above.
-  if (env.NODE_ENV !== "production" && env.ADMIN_ALLOW_INSECURE_DEV === "true") {
-    return true;
-  }
-  const expected = String(env.ADMIN_API_TOKEN || "").trim();
-  if (!expected) {
-    if (env.NODE_ENV === "production") {
-      fail(res, 503, "admin API authentication is not configured");
-      return false;
-    }
-    fail(res, 401, "admin authentication required");
-    return false;
-  }
-  const candidate = (req.header("x-admin-token") || "").trim() ||
-    (req.header("authorization") || "").replace(/^Bearer\s+/i, "").trim();
-  if (candidate !== expected) {
+  if (!req.adminAuth) {
     fail(res, 401, "admin authentication required");
     return false;
   }
@@ -922,8 +971,9 @@ function requireAdminAccess(req: Request, res: Response): boolean {
 
 /** Stable non-secret actor identifier for audit/preflight binding. */
 function adminActorId(req: Request): string {
-  const candidate = (req.header("x-admin-token") || req.header("authorization") || "").trim();
-  return `admin:${createHash("sha256").update(candidate).digest("hex").slice(0, 24)}`;
+  if (req.adminAuth?.kind === "session") return `admin:session:${req.adminAuth.id}`;
+  if (req.adminAuth?.kind === "token") return "admin:token";
+  return "admin:unknown";
 }
 
 function guestDayKey(): string {
