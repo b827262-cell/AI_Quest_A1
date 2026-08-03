@@ -203,6 +203,177 @@
   transition: width 600ms cubic-bezier(.2, .78, .2, 1);
 }
 
+.thinking-dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(39, 45, 83, 0.34);
+  backdrop-filter: blur(5px);
+}
+
+.thinking-dialog {
+  width: min(100%, 480px);
+  padding: 27px 25px 24px;
+  border: 1px solid rgba(133, 149, 208, 0.3);
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(58, 66, 126, 0.25);
+  text-align: center;
+}
+
+.thinking-dialog-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  margin: 0 auto 10px;
+  place-items: center;
+  border-radius: 14px;
+  color: #fff;
+  background: linear-gradient(135deg, #527cff, #a16ce8);
+  box-shadow: 0 8px 18px rgba(91, 105, 215, 0.24);
+  font-size: 22px;
+}
+
+.thinking-dialog h2 {
+  margin: 0 0 10px;
+  color: #29365f;
+  font-size: 20px;
+}
+
+.thinking-dialog > p {
+  margin: 0;
+  color: #69758e;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.thinking-dialog-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 19px 0 13px;
+}
+
+.thinking-dialog-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 10px;
+  border-radius: 13px;
+  background: #f6f7fd;
+}
+
+.thinking-dialog-stats span {
+  color: #8a94a9;
+  font-size: 12px;
+}
+
+.thinking-dialog-stats strong {
+  color: #4b59a8;
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thinking-dialog-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eceefa;
+}
+
+.thinking-dialog-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #527cff, #a16ce8);
+  transition: width 350ms ease;
+}
+
+.thinking-dialog-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.thinking-dialog-actions button,
+.guest-timeout-actions button {
+  min-height: 42px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.thinking-continue-button,
+.guest-timeout-retry-button {
+  border: 1px solid #6171d0;
+  color: #fff;
+  background: linear-gradient(135deg, #527cff, #8c6de8);
+  box-shadow: 0 8px 14px rgba(82, 101, 212, 0.2);
+}
+
+.thinking-stop-button-secondary,
+.guest-timeout-edit-button {
+  border: 1px solid rgba(133, 149, 208, 0.3);
+  color: #65718b;
+  background: #f8f9ff;
+}
+
+.guest-timeout-card {
+  width: min(100%, 820px);
+  margin: 36px auto 10px;
+  padding: 48px 58px 46px;
+  border: 2px solid rgba(127, 112, 245, 0.2);
+  border-radius: 38px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 28px 70px rgba(77, 89, 174, 0.14);
+  text-align: center;
+}
+
+.guest-timeout-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  margin: 2px auto 14px;
+  place-items: center;
+  border: 1px solid rgba(190, 92, 112, 0.2);
+  border-radius: 16px;
+  color: #b1546d;
+  background: #fff1f5;
+  font-size: 24px;
+  font-weight: 850;
+}
+
+.guest-timeout-card h2 {
+  margin: 0 0 10px;
+  color: #39466d;
+  font-size: 24px;
+}
+
+.guest-timeout-card p {
+  max-width: 600px;
+  margin: 0 auto;
+  color: #69758e;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.guest-timeout-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
 .thinking-progress-fill::after {
   content: "";
   position: absolute;
@@ -444,6 +615,24 @@
   .thinking-status-row button {
     margin-left: 0;
   }
+
+  .guest-timeout-card {
+    margin-top: 18px;
+    padding: 30px 18px 28px;
+    border-radius: 24px;
+  }
+
+  .thinking-dialog {
+    padding: 23px 17px 19px;
+  }
+
+  .thinking-dialog-actions {
+    flex-direction: column;
+  }
+
+  .thinking-dialog-actions button {
+    width: 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -456,6 +645,10 @@
   }
 
   .thinking-progress-fill {
+    transition: none;
+  }
+
+  .thinking-dialog-progress span {
     transition: none;
   }
 }
