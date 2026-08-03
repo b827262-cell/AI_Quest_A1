@@ -15,11 +15,12 @@ import { formatQuotaCount } from "./aiQuotaDisplay";
 /**
  * AI 每日額度中心 — Token Pool 監控與設定。
  *
- * 四種獨立限制維度（spec）：
+ * 五種獨立限制維度（spec）：
  *   (1) 每日 Token Pool     — 共用池 (2.5M) + Sol 獨立池 (200k)
  *   (2) Provider RPM/TPM/RPD（見 AI Provider 頁）
  *   (3) 模型每日上限        — 各模型的硬上限
  *   (4) Context Window      — 單次請求容量（見 Logical Model 設定）
+ *   (5) OpenAI 金鑰每日額度 — 每把金鑰獨立的每日追蹤與硬上限
  *
  * 共用池的「未配置容量」= dailyLimit − 模型硬上限合計（spec：顯示為未配置，不可借用）。
  */
@@ -100,16 +101,38 @@ export function AiQuotaCenterPage() {
     }
   }
 
-  async function patchOpenAiDailyLimit(credentialId: string, name: string) {
-    const raw = window.prompt(`${name}：每日 Token 上限（留空=未設定/無限，整數）`, "");
+  async function patchOpenAiDailyLimit(
+    credentialId: string,
+    name: string,
+    currentLimit: number | null
+  ) {
+    const raw = window.prompt(
+      `${name}：每日 Token 上限（留空＝無限但仍追蹤用量；請輸入非負整數）`,
+      currentLimit === null ? "" : String(currentLimit)
+    );
     if (raw === null) return;
+
+    const normalized = raw.trim();
+    const dailyTokenLimit = normalized === "" ? null : Number(normalized);
+    if (
+      dailyTokenLimit !== null &&
+      (!Number.isSafeInteger(dailyTokenLimit) || dailyTokenLimit < 0)
+    ) {
+      setMessage("");
+      setError("每日 Token 上限必須是非負整數；留空代表無限但仍追蹤用量。");
+      return;
+    }
+
     setBusy(true);
     setError("");
     setMessage("");
     try {
-      const dailyTokenLimit = raw.trim() === "" ? null : Number(raw.trim());
       await adminApi.updateOpenAiCredentialDailyLimit(credentialId, { dailyTokenLimit, enabled: true });
-      setMessage(`${name} 每日額度已更新`);
+      setMessage(
+        dailyTokenLimit === null
+          ? `${name} 的獨立每日額度已啟用：無限，但仍追蹤用量`
+          : `${name} 的獨立每日上限已設為 ${formatQuotaCount(dailyTokenLimit)} Tokens`
+      );
       await loadAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新失敗");
@@ -122,7 +145,7 @@ export function AiQuotaCenterPage() {
     <div>
       <AdminPageHeader
         title="AI 每日額度中心"
-        subtitle="每日 Token Pool、模型每日上限與 Logical Model Context Window 設定"
+        subtitle="Token Pool、模型上限、Context Window 與每把 OpenAI 金鑰的獨立每日額度"
       />
       {message ? <p className="admin-inline-success" role="status">{message}</p> : null}
       {error ? <p className="admin-inline-error" role="alert">{error}</p> : null}
@@ -311,6 +334,12 @@ export function AiQuotaCenterPage() {
 
       {/* ---- OpenAI Credential daily quota (per-key independent daily ledger) ---- */}
       <AdminCard title="OpenAI 金鑰每日額度（維度 5：每把金鑰獨立每日額度）">
+        <div className="admin-inline-info" style={{ marginBottom: 8 }}>
+          <strong>狀態說明：</strong>
+          「尚未設定」代表這把金鑰從未啟用維度 5，並非金鑰故障；點擊「設定額度」即可啟用。
+          輸入非負整數會建立每日硬上限，留空則啟用為「無限（追蹤中）」。
+          此維度與共用 Token Pool（維度 1）完全獨立。
+        </div>
         {openAiDaily && openAiDaily.credentials.length === 0 ? (
           <p className="muted">尚未設定 OpenAI Provider 金鑰。</p>
         ) : openAiDaily ? (
@@ -322,7 +351,7 @@ export function AiQuotaCenterPage() {
                     <th>Provider Instance</th>
                     <th>金鑰名稱</th>
                     <th>遮罩 Key</th>
-                    <th>狀態</th>
+                    <th>額度狀態</th>
                     <th>每日上限</th>
                     <th>已用</th>
                     <th>預留中</th>
@@ -345,36 +374,67 @@ export function AiQuotaCenterPage() {
                         <td><code>{c.maskedApiKey}</code></td>
                         <td>
                           {!c.limitEnabled ? (
-                            <span className="admin-quota-badge admin-quota-disabled">未啟用</span>
+                            <span
+                              className="admin-quota-badge admin-quota-disabled"
+                              title="尚未啟用每把金鑰獨立每日額度；不代表金鑰故障"
+                            >
+                              尚未設定
+                            </span>
                           ) : c.status !== "active" && c.status !== "standby" ? (
-                            <span className="admin-quota-badge admin-quota-disabled">停用</span>
+                            <span className="admin-quota-badge admin-quota-disabled">金鑰停用</span>
                           ) : inCooldown ? (
                             <span className="admin-quota-badge admin-quota-warning">冷卻中</span>
                           ) : (
-                            <span className="admin-quota-badge admin-quota-enabled">啟用</span>
+                            <span className="admin-quota-badge admin-quota-enabled">已啟用</span>
                           )}
                         </td>
-                        <td>{c.dailyTokenLimit !== null ? formatQuotaCount(c.dailyTokenLimit) : "未設定"}</td>
+                        <td>
+                          {!c.limitEnabled
+                            ? "—"
+                            : c.dailyTokenLimit !== null
+                              ? formatQuotaCount(c.dailyTokenLimit)
+                              : "無限（追蹤中）"}
+                        </td>
                         <td>{formatQuotaCount(c.usedTokens)}</td>
                         <td>{formatQuotaCount(c.reservedTokens)}</td>
-                        <td>{c.remainingTokens !== null ? formatQuotaCount(c.remainingTokens) : "—"}</td>
                         <td>
-                          <span className={`admin-quota-badge ${utilizationClass(c.utilizationRatio)}`}>
-                            {utilizationPercent(c.utilizationRatio)}
-                          </span>
+                          {!c.limitEnabled
+                            ? "—"
+                            : c.remainingTokens !== null
+                              ? formatQuotaCount(c.remainingTokens)
+                              : "無限"}
+                        </td>
+                        <td>
+                          {!c.limitEnabled || c.dailyTokenLimit === null ? (
+                            "—"
+                          ) : (
+                            <span className={`admin-quota-badge ${utilizationClass(c.utilizationRatio)}`}>
+                              {utilizationPercent(c.utilizationRatio)}
+                            </span>
+                          )}
                         </td>
                         <td>{c.requestCount}</td>
                         <td>{c.resetAt ? new Date(c.resetAt).toLocaleString("zh-TW") : "—"}</td>
                         <td>{c.lastUsedAt ? new Date(c.lastUsedAt).toLocaleString("zh-TW") : "—"}</td>
-                        <td>{c.costSource === "priced" ? `$${(c.actualCostMicroUsd / 1_000_000).toFixed(4)}` : "未配置"}</td>
+                        <td
+                          title={
+                            c.costSource === "priced"
+                              ? "依已設定的模型 Input/Output 單價計算"
+                              : "此模型尚未設定 Input/Output 單價；Token 仍會照常計入"
+                          }
+                        >
+                          {c.costSource === "priced"
+                            ? `$${(c.actualCostMicroUsd / 1_000_000).toFixed(4)}`
+                            : "未配置單價"}
+                        </td>
                         <td>
                           <button
                             type="button"
                             className="admin-btn secondary"
                             disabled={busy}
-                            onClick={() => void patchOpenAiDailyLimit(c.credentialId, c.name)}
+                            onClick={() => void patchOpenAiDailyLimit(c.credentialId, c.name, c.dailyTokenLimit)}
                           >
-                            改上限
+                            {busy ? "處理中…" : c.limitEnabled ? "改上限" : "設定額度"}
                           </button>
                         </td>
                       </tr>
@@ -395,7 +455,7 @@ export function AiQuotaCenterPage() {
         )}
         <p className="muted" style={{ marginTop: 8 }}>
           每把 OpenAI 金鑰獨立計算每日 Token 額度，與 Token Pool（維度 1）互相獨立。Gemini/ZAI/Kimi/Qwen 金鑰不在此列。
-          未設定價格時 Token 照記、成本顯示「未配置」（非 0）。
+          「未配置單價」只表示該模型尚未在首次模型與配額設定 Input/Output 單價；Token 仍會照常計入，也不影響額度啟用。
         </p>
       </AdminCard>
     </div>
