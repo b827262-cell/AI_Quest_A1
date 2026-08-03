@@ -104,10 +104,20 @@ export function ProtectedPdfViewer({
         docRef.current = doc;
         onPageCount?.(doc.numPages);
         setStatus("ready");
-      } catch (err: any) {
-        if (err?.name === "RenderingCancelledException") return;
+      } catch (err: unknown) {
+        const errorName = err instanceof Error
+          ? err.name
+          : typeof err === "object" && err !== null && "name" in err && typeof err.name === "string"
+            ? err.name
+            : undefined;
+        const errorMessage = err instanceof Error
+          ? err.message
+          : typeof err === "object" && err !== null && "message" in err && typeof err.message === "string"
+            ? err.message
+            : String(err);
+        if (errorName === "RenderingCancelledException") return;
         console.error("[PdfViewer] PDF render error:", err);
-        const msg = `無法載入 PDF 或渲染失敗：${err?.message || String(err)}`;
+        const msg = `無法載入 PDF 或渲染失敗：${errorMessage}`;
         setMessage(msg);
         setStatus("error");
         onError?.(msg);

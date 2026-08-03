@@ -57,6 +57,17 @@ export function resolveAdminAuthConfig(env: NodeJS.ProcessEnv = process.env): Ad
   };
 }
 
+/** Fail closed at the production process boundary before a listener opens. */
+export function assertAdminAuthConfig(config: AdminAuthConfig): void {
+  if (!config.production) return;
+  if (!config.username || !config.passwordHash) {
+    throw new Error("production admin auth requires ADMIN_USERNAME and ADMIN_PASSWORD_HASH");
+  }
+  if (!config.secureCookies) {
+    throw new Error("production admin auth requires ADMIN_SESSION_SECURE=true");
+  }
+}
+
 export function digestAdminSecret(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }

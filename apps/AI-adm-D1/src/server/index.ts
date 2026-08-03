@@ -1,8 +1,10 @@
 import { loadRootEnv } from "./env";
 import { createAdminApp } from "./app";
 import { createAdminDependencies } from "./dependencies";
+import { assertAdminAuthConfig, resolveAdminAuthConfig } from "./ai/admin-auth";
 
 const rootEnv = loadRootEnv();
+assertAdminAuthConfig(resolveAdminAuthConfig(process.env));
 console.log(`ADMIN_API_TOKEN: ${rootEnv.adminTokenConfigured ? "configured" : "missing"}`);
 console.log(`AI_CREDENTIAL_ENCRYPTION_KEY: ${rootEnv.credentialEncryptionKeyConfigured ? "configured" : "missing"}`);
 

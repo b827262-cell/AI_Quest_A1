@@ -12,6 +12,8 @@ describe("admin production bundle security", () => {
     for (const file of files) {
       const contents = readFileSync(file, "utf8");
       expect(contents).not.toContain("ADMIN_API_TOKEN");
+      expect(contents).not.toMatch(/VITE_[A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY)/i);
+      expect(contents).not.toMatch(/\b(?:localStorage|sessionStorage)\b/);
       if (token) expect(contents).not.toContain(token);
     }
   });

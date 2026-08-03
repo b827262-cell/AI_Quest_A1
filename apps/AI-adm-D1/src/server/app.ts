@@ -372,6 +372,20 @@ app.post("/api/admin/auth/logout", adminAuthMiddleware, adminCsrfMiddleware, (re
 // Public and student routes are mounted outside this prefix and are unaffected.
 app.use("/api/admin", adminAuthMiddleware);
 app.use("/api/admin", adminCsrfMiddleware);
+app.use("/api/admin", (req, res, next) => {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method.toUpperCase())) {
+    return next();
+  }
+  res.once("finish", () => {
+    repos.aiProviders.audit("admin.request.mutation", "admin_route", req.path.slice(0, 200), {
+      actorId: adminActorId(req),
+      method: req.method,
+      path: req.path.slice(0, 200),
+      statusCode: res.statusCode
+    });
+  });
+  return next();
+});
 
 function fail(res: Response, status: number, message: string) {
   res.status(status).json({ error: message });
