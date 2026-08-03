@@ -2,7 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { HomeAIComposer } from "../components/HomeAIComposer";
 import { StudentAnswerRenderer } from "../components/GuestAnswerRenderer";
-import { estimateThinkingProgress, ThinkingProgress } from "../components/ThinkingProgress";
+import {
+  ExtendedWaitDialog,
+  estimateThinkingProgress,
+  ThinkingProgress
+} from "../components/ThinkingProgress";
+import {
+  ANSWER_REVEAL_DELAY_MS,
+  createGuestAnswerTimer,
+  GUEST_EXTENDED_WAIT_AFTER_MS,
+  GUEST_EXTENDED_WAIT_MS,
+  GUEST_MAX_WAIT_MS,
+  type GuestAnswerTimer
+} from "../guestAnswerRequest";
 import {
   clearGuestAnswerCredential,
   publicGuestAnswerForHistory,
@@ -34,6 +46,8 @@ const QUICK_STARTS: Array<{ label: string; category: GuestQuestionCategory; ques
   { label: "教材問答", category: "教材問答", question: "請示範如何從教材整理一個重點。" },
   { label: "資通安全", category: "cybersecurity", question: "Reflected XSS 是否能讀取其他網站的 Cookie？" }
 ];
+
+const GUEST_TIMEOUT_MESSAGE = "本次解題時間超過 150 秒，已停止處理。題目可能較長，或目前 AI 服務回應較慢。可以重新產生答案，或稍微縮短題目內容。";
 
 function readStudentName(): string {
   if (typeof window === "undefined") return "";
@@ -145,6 +159,25 @@ function GuestAnswer({
   );
 }
 
+function GuestTimeoutCard({ onEdit, onRetry }: { onEdit: () => void; onRetry: () => void }) {
+  return (
+    <section className="guest-timeout-card" role="alert" aria-live="assertive">
+      <div className="guest-timeout-icon" aria-hidden="true">!</div>
+      <h2>解題時間已到</h2>
+      <p>{GUEST_TIMEOUT_MESSAGE}</p>
+      <div className="guest-timeout-actions">
+        <button type="button" className="guest-timeout-edit-button" onClick={onEdit}>返回修改題目</button>
+        <button type="button" className="guest-timeout-retry-button" onClick={onRetry}>重新產生</button>
+      </div>
+    </section>
+  );
+}
+
+type ActiveGuestRequest = {
+  controller: AbortController;
+  timer: GuestAnswerTimer;
+};
+
 export function PublicHomePage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -155,16 +188,30 @@ export function PublicHomePage() {
   const [providerPreference, setProviderPreference] = useState<GuestProviderPreference>("auto");
   const [response, setResponse] = useState<GuestAskResponse | null>(null);
   const [busy, setBusy] = useState(false);
+  const [thinkingStartedAt, setThinkingStartedAt] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [showExtendedWait, setShowExtendedWait] = useState(false);
+  const [thinkingComplete, setThinkingComplete] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
   const [lastSourceType, setLastSourceType] = useState<"manual" | "image" | "file">("manual");
   const [restoringAnswer, setRestoringAnswer] = useState(isAnswerRoute);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const [progressComplete, setProgressComplete] = useState(false);
-  const requestAbortRef = useRef<AbortController | null>(null);
+  const activeGuestRequestRef = useRef<ActiveGuestRequest | null>(null);
   const studentName = useMemo(readStudentName, []);
-  const thinkingProgress = progressComplete ? 100 : estimateThinkingProgress(elapsedMs);
+  const thinkingProgress = thinkingComplete ? 100 : estimateThinkingProgress(elapsedMs);
+  const remainingExtendedWaitMs = Math.max(
+    0,
+    GUEST_EXTENDED_WAIT_MS - Math.max(0, elapsedMs - GUEST_EXTENDED_WAIT_AFTER_MS)
+  );
+
+  function invalidateActiveRequest(reason: string) {
+    const activeRequest = activeGuestRequestRef.current;
+    if (!activeRequest) return;
+    activeGuestRequestRef.current = null;
+    activeRequest.timer.cancel();
+    activeRequest.controller.abort(reason);
+  }
 
   useEffect(() => {
     let active = true;
@@ -178,30 +225,36 @@ export function PublicHomePage() {
   }, []);
 
   useEffect(() => {
-    if (!busy || startedAt === null) return;
-    const updateElapsed = () => setElapsedMs(Date.now() - startedAt);
+    if (!busy || thinkingStartedAt === null) return;
+    const activeRequest = activeGuestRequestRef.current;
+    if (!activeRequest) return;
+    const updateElapsed = () => {
+      if (activeGuestRequestRef.current !== activeRequest || !activeRequest.timer.isActive()) return;
+      setElapsedMs(Math.min(GUEST_MAX_WAIT_MS, Math.max(0, Date.now() - thinkingStartedAt)));
+    };
     updateElapsed();
     const timer = window.setInterval(updateElapsed, 250);
     return () => window.clearInterval(timer);
-  }, [busy, startedAt]);
+  }, [busy, thinkingStartedAt]);
 
   useEffect(() => {
     let active = true;
-    requestAbortRef.current?.abort();
-    requestAbortRef.current = null;
+    invalidateActiveRequest("route_changed");
 
     if (!isAnswerRoute) {
       clearGuestAnswerCredential();
       setQuestion("");
       setResponse(null);
       setBusy(false);
+      setThinkingStartedAt(null);
+      setElapsedMs(0);
+      setShowExtendedWait(false);
+      setThinkingComplete(false);
+      setTimedOut(false);
       setError("");
       setFeedback("");
       setLastSourceType("manual");
       setRestoringAnswer(false);
-      setStartedAt(null);
-      setElapsedMs(0);
-      setProgressComplete(false);
       return () => {
         active = false;
       };
@@ -262,13 +315,34 @@ export function PublicHomePage() {
       return;
     }
 
+    invalidateActiveRequest("request_replaced");
     const controller = new AbortController();
-    requestAbortRef.current?.abort();
-    requestAbortRef.current = controller;
-    const requestStartedAt = Date.now();
-    setStartedAt(requestStartedAt);
+    let activeRequest: ActiveGuestRequest;
+    const timer = createGuestAnswerTimer({
+      onExtendedWait: () => {
+        if (activeGuestRequestRef.current === activeRequest) setShowExtendedWait(true);
+      },
+      onTimeout: () => {
+        if (activeGuestRequestRef.current !== activeRequest) return;
+        activeGuestRequestRef.current = null;
+        controller.abort("guest_answer_timeout");
+        setElapsedMs(GUEST_MAX_WAIT_MS);
+        setShowExtendedWait(false);
+        setThinkingComplete(false);
+        setThinkingStartedAt(null);
+        setBusy(false);
+        setTimedOut(true);
+        setError(GUEST_TIMEOUT_MESSAGE);
+      }
+    });
+    activeRequest = { controller, timer };
+    activeGuestRequestRef.current = activeRequest;
+    setTimedOut(false);
+    setResponse(null);
+    setThinkingStartedAt(timer.startedAt);
     setElapsedMs(0);
-    setProgressComplete(false);
+    setShowExtendedWait(false);
+    setThinkingComplete(false);
     setBusy(true);
 
     try {
@@ -278,12 +352,14 @@ export function PublicHomePage() {
         sourceType: nextSourceType,
         providerPreference
       }, controller.signal);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || activeGuestRequestRef.current !== activeRequest) return;
 
-      setElapsedMs(Date.now() - requestStartedAt);
-      setProgressComplete(true);
-      await new Promise((resolve) => window.setTimeout(resolve, 400));
-      if (controller.signal.aborted) return;
+      activeRequest.timer.complete();
+      setElapsedMs(Math.min(GUEST_MAX_WAIT_MS, Math.max(0, Date.now() - timer.startedAt)));
+      setShowExtendedWait(false);
+      setThinkingComplete(true);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, ANSWER_REVEAL_DELAY_MS));
+      if (controller.signal.aborted || activeGuestRequestRef.current !== activeRequest) return;
 
       setResponse(result);
       if (result.requestId && result.recoveryToken) {
@@ -292,18 +368,24 @@ export function PublicHomePage() {
           recoveryToken: result.recoveryToken
         });
       }
+      activeGuestRequestRef.current = null;
+      setBusy(false);
+      setThinkingStartedAt(null);
+      setThinkingComplete(false);
       navigate("/guest-answer", {
         state: { guestResponse: publicGuestAnswerForHistory(result) }
       });
     } catch (err) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || activeGuestRequestRef.current !== activeRequest) return;
       setError(err instanceof Error ? err.message : "訪客問答暫時無法使用，請稍後再試。");
     } finally {
-      if (requestAbortRef.current === controller) {
-        requestAbortRef.current = null;
+      if (activeGuestRequestRef.current === activeRequest) {
+        activeGuestRequestRef.current = null;
+        activeRequest.timer.cancel();
         setBusy(false);
-        setStartedAt(null);
-        setProgressComplete(false);
+        setThinkingStartedAt(null);
+        setShowExtendedWait(false);
+        setThinkingComplete(false);
       }
     }
   }
@@ -319,39 +401,53 @@ export function PublicHomePage() {
   }
 
   function stopThinking() {
-    requestAbortRef.current?.abort("user_cancelled");
-    requestAbortRef.current = null;
+    invalidateActiveRequest("guest_answer_cancelled");
     setBusy(false);
-    setStartedAt(null);
-    setProgressComplete(false);
+    setThinkingStartedAt(null);
+    setElapsedMs(0);
+    setShowExtendedWait(false);
+    setThinkingComplete(false);
+    setTimedOut(false);
+    setResponse(null);
     setError("已停止解題，題目內容仍保留，可再次送出。");
   }
 
   function resetQuestion() {
-    requestAbortRef.current?.abort();
-    requestAbortRef.current = null;
+    invalidateActiveRequest("question_reset");
     setBusy(false);
     setQuestion("");
     setResponse(null);
     setError("");
     setFeedback("");
     setLastSourceType("manual");
-    setStartedAt(null);
+    setThinkingStartedAt(null);
     setElapsedMs(0);
-    setProgressComplete(false);
+    setShowExtendedWait(false);
+    setThinkingComplete(false);
+    setTimedOut(false);
     clearGuestAnswerCredential();
     navigate("/", { replace: true, state: null });
   }
 
   function retryGuestQuestion() {
-    requestAbortRef.current?.abort();
+    invalidateActiveRequest("guest_answer_retry");
     setResponse(null);
+    setTimedOut(false);
     setError("");
     void submitGuestQuestion(lastSourceType);
   }
 
+  function returnToQuestionEditor() {
+    setTimedOut(false);
+    setError("");
+    setElapsedMs(0);
+    setShowExtendedWait(false);
+    setThinkingComplete(false);
+    setResponse(null);
+  }
+
   useEffect(() => () => {
-    requestAbortRef.current?.abort();
+    invalidateActiveRequest("page_unmounted");
   }, []);
 
   return (
@@ -377,7 +473,20 @@ export function PublicHomePage() {
           )}
 
           {!response && !restoringAnswer ? (
-            busy ? null : (
+            busy ? (
+              <ExtendedWaitDialog
+                open={showExtendedWait}
+                progress={thinkingProgress}
+                remainingMs={remainingExtendedWaitMs}
+                onContinue={() => {
+                  activeGuestRequestRef.current?.timer.acknowledgeExtendedWait();
+                  setShowExtendedWait(false);
+                }}
+                onStop={stopThinking}
+              />
+            ) : timedOut ? (
+              <GuestTimeoutCard onEdit={returnToQuestionEditor} onRetry={retryGuestQuestion} />
+            ) : (
               <>
                 <HomeAIComposer
                   value={question}
