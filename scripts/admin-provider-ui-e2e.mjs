@@ -19,7 +19,7 @@ const screenshotPath = process.env.E2E_SCREENSHOT_PATH?.trim()
   ? resolve(process.env.E2E_SCREENSHOT_PATH.trim())
   : join(root, "release-artifacts", "phase3a", "admin-provider-e2e.png");
 const allowNoSandbox = /^(?:1|true|yes)$/i.test(process.env.E2E_CHROME_NO_SANDBOX || "");
-const TOTAL_ASSERTIONS = 23;
+const TOTAL_ASSERTIONS = 24;
 const testKey = ["fixture", "credential", "only"].join("-");
 const sensitiveResponseTokens = [testKey, "encryptedApiKey", "authorization", "Bearer "];
 
@@ -482,6 +482,17 @@ async function main() {
 
     await clickButton(cdp, "編輯", "E2E Credential");
     check("editing credential leaves key blank", Boolean(await evaluate(cdp, `document.querySelector('input[type="password"]')?.value === ""`)));
+    await clickButton(cdp, "新增模型配額");
+    const quotaAddMode = await evaluate(cdp, `(() => {
+      const defaultModelLabel = [...document.querySelectorAll("label")].find((item) => item.textContent.includes("設為預設模型"));
+      return {
+        editing: document.body.innerText.includes("預設模型與配額"),
+        keyBlank: document.querySelector('input[type="password"]')?.value === "",
+        newModelIsNotDefault: defaultModelLabel?.querySelector("input")?.checked === false
+      };
+    })()`);
+    check("quota list add action enters new quota mode without changing credential key", quotaAddMode?.editing === true && quotaAddMode?.keyBlank === true && quotaAddMode?.newModelIsNotDefault === true);
+    await clickButton(cdp, "取消編輯");
     await fillInput(cdp, "名稱", "E2E Credential Edited");
     await fillInput(cdp, "狀態", "standby");
     await fillInput(cdp, "Priority", "5", 1);
