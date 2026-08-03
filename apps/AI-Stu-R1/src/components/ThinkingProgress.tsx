@@ -1,5 +1,11 @@
 import type { CSSProperties } from "react";
 import "./ThinkingProgress.css";
+export {
+  ANSWER_REVEAL_DELAY_MS,
+  GUEST_EXTENDED_WAIT_AFTER_MS,
+  GUEST_EXTENDED_WAIT_MS,
+  GUEST_MAX_WAIT_MS
+} from "../guestAnswerRequest";
 
 export function estimateThinkingProgress(elapsedMs: number): number {
   if (elapsedMs <= 0) return 5;
@@ -10,19 +16,34 @@ export function estimateThinkingProgress(elapsedMs: number): number {
   return 99;
 }
 
-function formatElapsed(elapsedMs: number): string {
+export function formatElapsedTime(elapsedMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function progressStage(progress: number): string {
+export function formatProgressBar(progress: number, size = 22): string {
+  const safeSize = Math.max(1, Math.floor(size));
+  const bounded = Math.max(0, Math.min(100, Math.round(progress)));
+  const filled = Math.round((bounded / 100) * safeSize);
+  return `${"█".repeat(filled)}${"░".repeat(safeSize - filled)}`;
+}
+
+export function getThinkingStage(progress: number): string {
   if (progress >= 100) return "答案完成";
-  if (progress < 20) return "正在讀取題目";
-  if (progress < 50) return "正在分析解題方向";
-  if (progress < 80) return "正在產生完整答案";
+  if (progress <= 20) return "正在讀取題目";
+  if (progress <= 50) return "正在分析解題方向";
+  if (progress <= 80) return "正在產生完整答案";
   return "正在整理答案格式";
+}
+
+function formatElapsed(elapsedMs: number): string {
+  return formatElapsedTime(elapsedMs);
+}
+
+function progressStage(progress: number): string {
+  return getThinkingStage(progress);
 }
 
 function BrandBookIcon() {
@@ -190,5 +211,49 @@ export function ThinkingProgress({ progress, elapsedMs, onCancel }: ThinkingProg
         </div>
       </div>
     </section>
+  );
+}
+
+export type ExtendedWaitDialogProps = {
+  open: boolean;
+  progress: number;
+  remainingMs: number;
+  onContinue: () => void;
+  onStop: () => void;
+};
+
+export function ExtendedWaitDialog({
+  open,
+  progress,
+  remainingMs,
+  onContinue,
+  onStop
+}: ExtendedWaitDialogProps) {
+  if (!open) return null;
+
+  const percentage = Math.max(0, Math.min(99, Math.round(progress)));
+  const countdown = formatElapsed(Math.ceil(Math.max(0, remainingMs) / 1000) * 1000);
+
+  return (
+    <div className="thinking-dialog-backdrop">
+      <section className="thinking-dialog" role="dialog" aria-modal="true" aria-labelledby="extended-wait-title">
+        <div className="thinking-dialog-icon" aria-hidden="true">✦</div>
+        <h2 id="extended-wait-title">這題需要較多處理時間</h2>
+        <p>
+          AI 仍在完成答案，預計還需要約 60 秒。目前的解題進度不會中斷，也不會重新送出題目。
+        </p>
+        <div className="thinking-dialog-stats">
+          <div><span>預估完成度</span><strong>{percentage}%</strong></div>
+          <div><span>剩餘等候時間</span><strong>{countdown}</strong></div>
+        </div>
+        <div className="thinking-dialog-progress" aria-hidden="true">
+          <span style={{ width: `${percentage}%` }} />
+        </div>
+        <div className="thinking-dialog-actions">
+          <button type="button" className="thinking-continue-button" onClick={onContinue}>繼續等候</button>
+          <button type="button" className="thinking-stop-button thinking-stop-button-secondary" onClick={onStop}>停止解題</button>
+        </div>
+      </section>
+    </div>
   );
 }
