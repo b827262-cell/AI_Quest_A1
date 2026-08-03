@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useId, type CSSProperties } from "react";
 import "./ThinkingProgress.css";
 export {
   ANSWER_REVEAL_DELAY_MS,
@@ -47,16 +47,18 @@ function progressStage(progress: number): string {
 }
 
 function BrandBookIcon() {
+  const gradientId = `brand-book-gradient-${useId().replace(/:/g, "")}`;
+
   return (
     <svg viewBox="0 0 48 48" aria-hidden="true">
       <defs>
-        <linearGradient id="brand-book-gradient" x1="6" y1="8" x2="42" y2="40" gradientUnits="userSpaceOnUse">
+        <linearGradient id={gradientId} x1="6" y1="8" x2="42" y2="40" gradientUnits="userSpaceOnUse">
           <stop stopColor="#2396F3" />
           <stop offset="1" stopColor="#6037D8" />
         </linearGradient>
       </defs>
-      <path d="M5 11.5 21.2 16v24L5 34.5v-23Z" fill="url(#brand-book-gradient)" />
-      <path d="M43 11.5 26.8 16v24L43 34.5v-23Z" fill="url(#brand-book-gradient)" />
+      <path d="M5 11.5 21.2 16v24L5 34.5v-23Z" fill={`url(#${gradientId})`} />
+      <path d="M43 11.5 26.8 16v24L43 34.5v-23Z" fill={`url(#${gradientId})`} />
       <path d="M24 7.5 28.1 16l8.4 4.1-8.4 4.1L24 32.7l-4.1-8.5-8.4-4.1 8.4-4.1L24 7.5Z" fill="white" />
     </svg>
   );
@@ -86,6 +88,10 @@ type PuzzleBrainProps = {
 };
 
 function PuzzleBrain({ progress }: PuzzleBrainProps) {
+  const idSuffix = useId().replace(/:/g, "");
+  const shadowId = `brain-soft-shadow-${idSuffix}`;
+  const clipId = `brain-progress-clip-${idSuffix}`;
+  const ghostId = `brain-ghost-${idSuffix}`;
   const bounded = Math.max(0, Math.min(100, progress));
   const clipY = 420 - (bounded / 100) * 420;
   const clipHeight = (bounded / 100) * 420;
@@ -105,13 +111,13 @@ function PuzzleBrain({ progress }: PuzzleBrainProps) {
   return (
     <svg className="thinking-puzzle-brain" viewBox="0 0 460 460" role="img" aria-label={`拼圖大腦預估完成度 ${Math.round(bounded)}%`}>
       <defs>
-        <filter id="brain-soft-shadow" x="-30%" y="-30%" width="160%" height="180%">
+        <filter id={shadowId} x="-30%" y="-30%" width="160%" height="180%">
           <feDropShadow dx="0" dy="18" stdDeviation="18" floodColor="#5f6ac8" floodOpacity=".18" />
         </filter>
-        <clipPath id="brain-progress-clip">
+        <clipPath id={clipId}>
           <rect x="0" y={clipY} width="460" height={clipHeight} />
         </clipPath>
-        <linearGradient id="brain-ghost" x1="80" y1="55" x2="360" y2="420" gradientUnits="userSpaceOnUse">
+        <linearGradient id={ghostId} x1="80" y1="55" x2="360" y2="420" gradientUnits="userSpaceOnUse">
           <stop stopColor="#f5f7ff" />
           <stop offset="1" stopColor="#dde4f4" />
         </linearGradient>
@@ -135,11 +141,11 @@ function PuzzleBrain({ progress }: PuzzleBrainProps) {
         <circle cx="169" cy="187" r="12" fill="#df2f73" />
       </g>
 
-      <g transform="translate(18 4)" filter="url(#brain-soft-shadow)">
-        <g className="brain-ghost-layer" fill="url(#brain-ghost)" stroke="#ffffff" strokeWidth="5" strokeLinejoin="round">
+      <g transform="translate(18 4)" filter={`url(#${shadowId})`}>
+        <g className="brain-ghost-layer" fill={`url(#${ghostId})`} stroke="#ffffff" strokeWidth="5" strokeLinejoin="round">
           {puzzlePieces}
         </g>
-        <g clipPath="url(#brain-progress-clip)" stroke="#ffffff" strokeWidth="5" strokeLinejoin="round">
+        <g clipPath={`url(#${clipId})`} stroke="#ffffff" strokeWidth="5" strokeLinejoin="round">
           <path fill="#34a7df" d="M139 54c-29 8-52 31-61 60l42 10c-2 14 8 27 22 29 15 2 28-8 30-23 1-7-1-14-5-20l41-29c-18-22-43-32-69-27Z" />
           <path fill="#ec1688" d="M211 77 168 108c6 6 8 14 6 22-3 14-17 23-31 20-8-2-15-7-18-14l-49 10c-2 27 7 52 24 72l45-21c5 12 19 18 31 13 13-5 19-19 14-32-3-7-8-12-15-15l36-86Z" />
           <path fill="#f9b719" d="M213 77c34 2 64 18 85 44l-24 36c8 4 14 12 14 21 0 13-11 24-24 24-8 0-15-4-20-10l-54 18c5 13-1 27-14 32-13 5-27-1-32-14-3-7-2-15 1-21l-44 21c17 21 39 34 65 39l47 9V77Z" />
@@ -165,7 +171,12 @@ export function ThinkingProgress({ progress, elapsedMs, onCancel }: ThinkingProg
   const style = { "--thinking-progress": `${bounded}%` } as CSSProperties;
 
   return (
-    <section className={`thinking-progress-card${bounded >= 100 ? " is-complete" : ""}`} aria-live="polite" aria-busy={bounded < 100}>
+    <section
+      className={`thinking-progress-card${bounded >= 100 ? " is-complete" : ""}`}
+      data-thinking-progress={rounded}
+      aria-live="polite"
+      aria-busy={bounded < 100}
+    >
       <div className="thinking-card-brand">
         <span className="thinking-brand-icon"><BrandBookIcon /></span>
         <strong>AI-SmartBook</strong>
@@ -198,17 +209,17 @@ export function ThinkingProgress({ progress, elapsedMs, onCancel }: ThinkingProg
 
           <div className="thinking-tip">
             <span className="thinking-tip-icon"><BulbIcon /></span>
-            <p><strong>小提醒：</strong>AI 正在深度分析內容，為你提供更精準的答案。</p>
-          </div>
-
-          <div className="thinking-status-row">
-            <span>{progressStage(bounded)}</span>
-            <span>已經過 {formatElapsed(elapsedMs)}</span>
-            {bounded < 100 ? (
-              <button type="button" onClick={onCancel}>停止解題</button>
-            ) : null}
+            <p><strong>小提醒：</strong>AI 正在仔細整理答案。</p>
           </div>
         </div>
+      </div>
+
+      <div className="thinking-status-row">
+        <span>{progressStage(bounded)}</span>
+        <span>已經過 {formatElapsed(elapsedMs)}</span>
+        {bounded < 100 ? (
+          <button type="button" onClick={onCancel}>停止解題</button>
+        ) : null}
       </div>
     </section>
   );

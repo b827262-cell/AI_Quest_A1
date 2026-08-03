@@ -22,6 +22,10 @@ import {
   saveGuestAnswerCredential
 } from "../guestAnswerNavigation";
 import {
+  createGuestAnswerBindingCoordinator,
+  hasDisplayableGuestAnswer
+} from "../guestAnswerBinding";
+import {
   studentClient,
   type GuestAskResponse,
   type GuestProviderPreference,
@@ -198,6 +202,7 @@ export function PublicHomePage() {
   const [lastSourceType, setLastSourceType] = useState<"manual" | "image" | "file">("manual");
   const [restoringAnswer, setRestoringAnswer] = useState(isAnswerRoute);
   const activeGuestRequestRef = useRef<ActiveGuestRequest | null>(null);
+  const answerBindingCoordinator = useMemo(createGuestAnswerBindingCoordinator, []);
   const studentName = useMemo(readStudentName, []);
   const thinkingProgress = thinkingComplete ? 100 : estimateThinkingProgress(elapsedMs);
   const remainingExtendedWaitMs = Math.max(
@@ -238,8 +243,12 @@ export function PublicHomePage() {
   }, [busy, thinkingStartedAt]);
 
   useEffect(() => {
-    let active = true;
     invalidateActiveRequest("route_changed");
+
+    const routeState = location.state as { guestResponse?: GuestAskResponse } | null;
+    const stateResponse = isAnswerRoute ? routeState?.guestResponse : undefined;
+    const credential = isAnswerRoute ? readGuestAnswerCredential() : null;
+    const binding = answerBindingCoordinator.begin(stateResponse, credential);
 
     if (!isAnswerRoute) {
       clearGuestAnswerCredential();
@@ -255,47 +264,43 @@ export function PublicHomePage() {
       setFeedback("");
       setLastSourceType("manual");
       setRestoringAnswer(false);
-      return () => {
-        active = false;
-      };
+      return binding.cancel;
     }
 
-    setRestoringAnswer(true);
-    const routeState = location.state as { guestResponse?: GuestAskResponse } | null;
-    const stateResponse = routeState?.guestResponse;
     if (stateResponse) {
       setQuestion(stateResponse.question || "");
       setResponse(stateResponse);
-    }
-    const cred = readGuestAnswerCredential();
-    if (!cred) {
       setRestoringAnswer(false);
-      if (!stateResponse) navigate("/", { replace: true, state: null });
-      return () => {
-        active = false;
-      };
+      if (!binding.credentialMatchesRoute) clearGuestAnswerCredential();
+      return binding.cancel;
     }
-    studentClient.getSavedGuestAnswer(cred.requestId, cred.recoveryToken).then((saved) => {
-      if (!active) return;
-      if (!saved.answer) {
+
+    setRestoringAnswer(true);
+    if (!credential || !binding.shouldRecoverSavedAnswer) {
+      setRestoringAnswer(false);
+      navigate("/", { replace: true, state: null });
+      return binding.cancel;
+    }
+
+    studentClient.getSavedGuestAnswer(credential.requestId, credential.recoveryToken).then((saved) => {
+      if (!binding.isCurrent()) return;
+      if (!binding.acceptsSavedAnswer(saved) || !hasDisplayableGuestAnswer(saved)) {
         clearGuestAnswerCredential();
         setRestoringAnswer(false);
-        if (!stateResponse) navigate("/", { replace: true, state: null });
+        navigate("/", { replace: true, state: null });
         return;
       }
       setQuestion(saved.question || "");
       setResponse(saved);
       setRestoringAnswer(false);
     }).catch(() => {
-      if (!active) return;
+      if (!binding.isCurrent()) return;
       clearGuestAnswerCredential();
       setRestoringAnswer(false);
-      if (!stateResponse) navigate("/", { replace: true, state: null });
+      navigate("/", { replace: true, state: null });
     });
-    return () => {
-      active = false;
-    };
-  }, [isAnswerRoute, location.key, location.state, navigate]);
+    return binding.cancel;
+  }, [answerBindingCoordinator, isAnswerRoute, location.key, location.state, navigate]);
 
   async function submitGuestQuestion(nextSourceType: "manual" | "image" | "file") {
     setLastSourceType(nextSourceType);
