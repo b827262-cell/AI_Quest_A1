@@ -7,6 +7,7 @@ import { AdminPageHeader } from "../components/admin/AdminPageHeader";
 import { quotaMetric, quotaStatus, usageSourceLabel, SYSTEM_DAILY_RESET_LABEL } from "./aiQuotaDisplay";
 import { providerErrorMessage } from "../providerErrorMessage";
 import { credentialErrorMessage, credentialFieldErrors, credentialFormAfterFailure, credentialTestResultMessage } from "../credentialErrorMessage";
+import { formatAdminErrorMessage } from "../adminErrorMessage";
 
 type ProviderId = "openai" | "gemini" | "kimi" | "qwen" | "zai";
 type CredentialStatus = "active" | "standby" | "disabled";
@@ -288,8 +289,8 @@ export function AiProvidersPage() {
       setProviders(rows);
       setSelectedProviderId((current) => current && rows.some((row) => row.id === current) ? current : rows[0]?.id ?? null);
       if (rows.length === 0) setProviderForm(EMPTY_PROVIDER);
-    } catch {
-      setError("無法讀取 Provider 設定，請確認管理 API 與授權狀態。");
+    } catch (err) {
+      setError(formatAdminErrorMessage(err, "無法讀取 Provider 設定，請確認管理 API 與授權狀態。"));
     } finally {
       setLoading(false);
     }
@@ -301,9 +302,9 @@ export function AiProvidersPage() {
     try {
       const response = await adminApi.listAiCredentials(providerId);
       setCredentials(response.credentials as Credential[]);
-    } catch {
+    } catch (err) {
       setCredentials([]);
-      setError("無法讀取 Credential 清單。");
+      setError(formatAdminErrorMessage(err, "無法讀取 Credential 清單。"));
     } finally {
       setCredentialsLoading(false);
     }

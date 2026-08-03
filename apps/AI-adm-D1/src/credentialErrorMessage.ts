@@ -1,4 +1,5 @@
 import { ApiHttpError, type CredentialTestDetails, type CredentialTestResponse } from "./api";
+import { categorizeAdminError } from "./adminErrorMessage";
 
 const FIELD_LABELS: Record<string, string> = {
   name: "名稱",
@@ -59,10 +60,20 @@ export function credentialTestResultMessage(result: CredentialTestResponse | Cre
 }
 
 export function credentialErrorMessage(error: unknown, operation: "save" | "test" | "delete"): string {
+  if (operation === "test" && error instanceof ApiHttpError && error.details) {
+    return credentialTestResultMessage(error.details);
+  }
+  const categorized = categorizeAdminError(error);
+  if (categorized.category === "auth_required" || categorized.category === "origin_forbidden" || categorized.category === "network_error") {
+    return categorized.message;
+  }
   if (!(error instanceof ApiHttpError)) {
     return operation === "test"
       ? "Credential 連線測試失敗；第三方錯誤內容已隱去。"
       : "Credential 操作失敗，請稍後再試。";
+  }
+  if (error.status >= 500 && error.status !== 503) {
+    return categorized.message;
   }
   if (error.code === "validation_error") {
     const fields = Object.keys(error.fields ?? {}).map(credentialFieldLabel);
@@ -70,7 +81,6 @@ export function credentialErrorMessage(error: unknown, operation: "save" | "test
       ? `Credential 欄位格式不正確：${[...new Set(fields)].join("、")}。`
       : "Credential 欄位格式不正確，請檢查輸入內容。";
   }
-  if (operation === "test" && error.details) return credentialTestResultMessage(error.details);
   if (error.code === "provider_not_found") return "Provider 已不存在，請重新整理清單。";
   if (error.code === "credential_already_exists" || error.status === 409) {
     return "Credential 名稱或 API Key 已存在，請更換後再試。";
