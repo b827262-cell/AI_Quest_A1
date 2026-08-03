@@ -30,6 +30,23 @@ const INTERNAL_FIELD_PATTERN = /\b(?:edges|degrees|articulationPoints|routingMet
 const INTERNAL_SECTION_PATTERN = /(?:GRAPH_ANSWER|debug metadata|routing metadata|completeness evaluation|內部處理|內部資料|安全分類|問題分類|工具結果)/i;
 const GRAPH_TEXT_PATTERN = /(?:\b(?:graph\s+analysis|vertices?|edges?|degrees?|degree|articulation\s+points?|cut\s+vertices?)\b|圖論分析|頂點|邊集合|Degree|割點|連通分量)/i;
 
+/** Headings belong to the structured answer shell, not to a field's content. */
+export const SECTION_HEADING_PATTERN =
+  /^(?:#{1,6}\s*)?(題意摘要|解題步驟|完整程式碼|範例(?:輸入輸出|驗證)?|複雜度分析?|補充說明)\s*[:：]?\s*$/;
+
+const GENERIC_SUMMARY_FALLBACK = "請依序整理輸入、處理流程與輸出結果。";
+const RECTANGLE_SUMMARY_FALLBACK =
+  "給定兩個守衛負責的矩形區域，計算兩矩形交集面積、恰好被一個矩形覆蓋的面積，以及整塊土地未被覆蓋的面積。";
+
+/** Remove pure section labels before text is assigned to a structured field. */
+export function removeSectionHeading(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !SECTION_HEADING_PATTERN.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
 const ARMSTRONG_PYTHON = `def is_armstrong(number):
     digits = str(number)
     power = len(digits)
@@ -115,22 +132,102 @@ function extractCode(text: string): { language?: string; code?: string; prose: s
   return { language, code, prose };
 }
 
+type AnswerSectionKey = "preamble" | "summary" | "steps" | "code" | "examples" | "complexity" | "explanation";
+type AnswerSections = Record<AnswerSectionKey, string[]>;
+
+function sectionKeyForHeading(line: string): Exclude<AnswerSectionKey, "preamble"> | null {
+  const match = line.trim().match(SECTION_HEADING_PATTERN);
+  if (!match) return null;
+  const heading = match[1];
+  if (heading === "題意摘要") return "summary";
+  if (heading === "解題步驟") return "steps";
+  if (heading === "完整程式碼") return "code";
+  if (heading.startsWith("範例")) return "examples";
+  if (heading.startsWith("複雜度")) return "complexity";
+  if (heading === "補充說明") return "explanation";
+  return null;
+}
+
+function splitAnswerSections(text: string): AnswerSections {
+  const sections: AnswerSections = {
+    preamble: [],
+    summary: [],
+    steps: [],
+    code: [],
+    examples: [],
+    complexity: [],
+    explanation: []
+  };
+  let current: AnswerSectionKey = "preamble";
+  for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const nextSection = sectionKeyForHeading(line);
+    if (nextSection) {
+      current = nextSection;
+      continue;
+    }
+    sections[current].push(line);
+  }
+  return sections;
+}
+
 function numberedOrBulletedLines(text: string): string[] {
   return text
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => /^(?:[-*+]\s+|\d+[.)、:：]\s+)/.test(line))
     .map(plainText)
-    .filter(Boolean)
-    .slice(0, 6);
+    .filter(Boolean);
 }
 
-function firstParagraph(text: string): string {
-  const candidate = text
+function firstParagraph(text: string, fallback = GENERIC_SUMMARY_FALLBACK): string {
+  const sections = splitAnswerSections(text);
+  const parsedSummary = (sections.summary.length > 0 ? sections.summary : sections.preamble).join("\n");
+  const cleanedSummary = removeSectionHeading(parsedSummary);
+  const candidate = cleanedSummary
     .split(/\n\s*\n/)
     .map((block) => plainText(block.replace(/\n/g, " ")))
+    .map((block) => removeSectionHeading(block))
     .find((block) => block && !/^(?:輸入|輸出|input|output|範例|example|解題步驟|步驟)/i.test(block));
-  return candidate ?? "請依序整理輸入、處理流程與輸出結果。";
+  return candidate || fallback;
+}
+
+function isRectangleCoverageQuestion(question: string): boolean {
+  return /守衛|矩形|交集面積|未被覆蓋|\b(?:strong|weak|unsecured|overlap[xy])\b/i.test(question);
+}
+
+function isSafetyZoneDefinition(step: string): boolean {
+  const normalized = step.trim();
+  return (
+    /^(?:(?:定義|令|計算)\s*)?(?:strong|weak|unsecured)\b/i.test(normalized) ||
+    /^(?:強覆蓋區|弱覆蓋區|未覆蓋區|未被覆蓋區|未保障區)\s*(?:[=:：]|為|是|代表)?/.test(normalized)
+  );
+}
+
+function isComplexityText(value: string): boolean {
+  return /複雜度|\bO\s*\([^\n)]*\)/i.test(value);
+}
+
+function cleanLineText(text: string): string {
+  return removeSectionHeading(text)
+    .split(/\r?\n/)
+    .map((line) => plainText(line))
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function parseComplexity(text: string, steps: string[]): { complexity?: string; steps: string[] } {
+  const sections = splitAnswerSections(text);
+  const sectionText = sections.complexity.join("\n");
+  const detectedLines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => isComplexityText(line));
+  const complexity = cleanLineText(sectionText || detectedLines.join("\n"));
+  return {
+    complexity: complexity ? complexity.slice(0, 500) : undefined,
+    steps: steps.filter((step) => !isComplexityText(step))
+  };
 }
 
 function parseExamples(text: string): StudentAnswerExample[] {
@@ -211,15 +308,42 @@ function armstrongContent(question: string): StudentAnswerContent {
   };
 }
 
-function genericContent(raw: string, classification: ProblemClassification): StudentAnswerContent {
+function genericContent(raw: string, classification: ProblemClassification, question: string): StudentAnswerContent {
   const { language, code, prose } = extractCode(raw);
-  const steps = numberedOrBulletedLines(prose);
-  const summary = firstParagraph(prose);
+  const sections = splitAnswerSections(prose);
+  const parsedSteps = numberedOrBulletedLines(
+    sections.steps.length > 0 ? sections.steps.join("\n") : prose
+  );
+  const cleanedSteps = parsedSteps
+    .map(removeSectionHeading)
+    .map((step) => step.trim())
+    .filter(Boolean);
+  const safetyZoneDefinitions = cleanedSteps.filter(isSafetyZoneDefinition);
+  const stepsWithoutDefinitions = cleanedSteps.filter((step) => !isSafetyZoneDefinition(step));
+  const parsedComplexity = parseComplexity(prose, stepsWithoutDefinitions);
+  const steps = parsedComplexity.steps.slice(0, 6);
+  const summary = firstParagraph(
+    prose,
+    isRectangleCoverageQuestion(question) ? RECTANGLE_SUMMARY_FALLBACK : GENERIC_SUMMARY_FALLBACK
+  );
   const examples = parseExamples(prose);
-  const explanation = prose
+  const legacyExplanation = prose
     .split(/\n\s*\n/)
     .slice(1)
-    .map((block) => block.trim())
+    .map((block) => removeSectionHeading(block).trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const structuredExplanation = removeSectionHeading(sections.explanation.join("\n")).trim();
+  const hasStructuredSectionHeading = prose
+    .split(/\r?\n/)
+    .some((line) => sectionKeyForHeading(line) !== null);
+  const definitionExplanation = safetyZoneDefinitions.length > 0
+    ? ["安全區定義：", ...safetyZoneDefinitions].join("\n")
+    : "";
+  const explanation = [
+    structuredExplanation || (!hasStructuredSectionHeading ? legacyExplanation : ""),
+    definitionExplanation
+  ]
     .filter(Boolean)
     .join("\n\n")
     .slice(0, 6000);
@@ -230,6 +354,7 @@ function genericContent(raw: string, classification: ProblemClassification): Stu
     codeLanguage: code ? language || (classification.problemType === "programming" ? "text" : undefined) : undefined,
     code,
     examples,
+    complexity: parsedComplexity.complexity,
     markdownText: raw.trim() || summary
   };
 }
@@ -280,7 +405,7 @@ export function buildStudentAnswer(question: string, rawAnswer: string): Student
   if (classification.topic === "number-theory") return armstrongContent(question);
 
   const cleaned = removeInternalArtifacts(rawAnswer, classification);
-  const content = genericContent(cleaned, classification);
+  const content = genericContent(cleaned, classification, question);
   const validation = validateStudentAnswer(question, content);
   if (!validation.valid) {
     // Never forward an answer object that failed the allowlist check. Keep only
