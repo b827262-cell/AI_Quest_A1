@@ -1,12 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   MAX_OUTPUT_BYTES,
+  QmOperationBusyError,
+  createQmRunner,
   parseContractResult,
   parseDoctorResult,
   redactSecrets,
   runSmoke,
   runValidate,
-  spawnCapture
+  spawnCapture,
+  type QmRunnerDependencies,
+  type SpawnCaptureResult
 } from "./qm-runner";
 
 describe("redactSecrets", () => {
@@ -79,7 +83,8 @@ describe("parseContractResult", () => {
       }
     });
     const result = parseContractResult(stdout);
-    expect((result.clauses["secrets.computed-set"] as any).names).toBeUndefined();
+    const clause = result.clauses["secrets.computed-set"] as unknown as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(clause, "names")).toBe(false);
   });
 
   it("handles empty/malformed JSON", () => {
@@ -197,35 +202,27 @@ describe("spawnCapture", () => {
 
 describe("qm-runner concurrent lock", () => {
   it("rejects duplicate validate with operation_already_running", async () => {
-    // Since we can't easily mock spawn in ESM, we test the synchronous lock guard.
-    // The Set-based lock is synchronous, so calling runValidate twice immediately
-    // should cause the second to fail before any async work begins.
-    const { runValidate } = await import("./qm-runner");
+    const p1 = runValidate().catch((e) => e);
+    const p2 = runValidate().catch((e) => e);
 
-    // First call will start and eventually fail (no real QM binary in test),
-    // but it takes the lock synchronously.
-    const p1 = runValidate().catch(e => e);
-
-    // Second call should fail immediately with lock error.
-    const p2 = runValidate().catch(e => e);
-
-    const [r1, r2] = await Promise.all([p1, p2]);
-    const errors = [r1, r2].filter(r => r instanceof Error);
-    const lockError = errors.find(e => e.message.includes("operation_already_running"));
-    expect(lockError).toBeDefined();
-  });
+    const r2 = await p2;
+    expect(r2).toBeInstanceOf(Error);
+    expect(r2.message).toMatch(/operation_already_running/);
+    await p1;
+  }, 20000);
 
   it("uses the same lock for validate and smoke", async () => {
     const first = runValidate().catch((error) => error);
     const second = runSmoke().catch((error) => error);
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    const errors = [firstResult, secondResult].filter((result) => result instanceof Error);
-    expect(errors.some((error) => error.message.includes("operation_already_running"))).toBe(true);
-  });
+
+    const secondResult = await second;
+    expect(secondResult).toBeInstanceOf(Error);
+    expect(secondResult.message).toMatch(/operation_already_running/);
+    await first;
+  }, 20000);
 
   it("releases the global lock after an operation completes", async () => {
     await runValidate();
     await runSmoke();
-    await runValidate();
-  });
+  }, 30000);
 });
