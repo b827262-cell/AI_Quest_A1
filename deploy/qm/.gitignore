@@ -1,0 +1,12 @@
+.env
+node_modules/
+.generated/
+runtime/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfplan
