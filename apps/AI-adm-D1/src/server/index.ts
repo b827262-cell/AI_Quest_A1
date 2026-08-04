@@ -29,6 +29,7 @@ import {
 import { buildGateway } from "./ai/gateway-instance";
 import { makeAnalyticsService, todayTaipei } from "./ai/analytics-service";
 import { registerQmAdminBoundary } from "./ai/qm-admin-boundary";
+import { candidateAdminToken, isAcceptedAdminToken, resolveAdminAuthConfig, sendAdminAuthRequired } from "./ai/admin-auth";
 import { createQmRuntimeConfigService } from "./ai/qm-runtime-config";
 import type { QmRuntimeConfigDeps } from "./ai/qm-status-api";
 import { EvaluationServiceError, makeEvaluationService } from "./ai/evaluation-service";
@@ -956,27 +957,25 @@ function getPublicSiteConfig() {
 }
 
 function requireAdminAccess(req: Request, res: Response): boolean {
-  // Kept as a defence-in-depth guard for the newer handlers. The canonical
-  // policy is the `/api/admin` middleware registered above.
-  if (process.env.NODE_ENV !== "production" && process.env.ADMIN_ALLOW_INSECURE_DEV === "true") {
-    return true;
-  }
-  const expected = String(process.env.ADMIN_API_TOKEN || "").trim();
-  if (!expected) {
-    if (process.env.NODE_ENV === "production") {
-      fail(res, 503, "admin API authentication is not configured");
-      return false;
-    }
-    fail(res, 401, "admin authentication required");
+  // Kept as a defence-in-depth guard for the newer handlers. Delegates to the
+  // exact same accepted-secret policy as the canonical `/api/admin`
+  // middleware registered above (isAcceptedAdminToken) so a dev-password
+  // login that middleware already accepted is never rejected here — this
+  // guard previously compared only against the production ADMIN_API_TOKEN,
+  // which rejected every non-production dev-password session and produced
+  // spurious 401s on the routes that call this function.
+  const config = resolveAdminAuthConfig(process.env);
+  if (config.allowInsecureDev) return true;
+
+  const candidate = candidateAdminToken(req);
+  if (isAcceptedAdminToken(candidate, config)) return true;
+
+  if (!config.token && config.production) {
+    fail(res, 503, "admin API authentication is not configured");
     return false;
   }
-  const candidate = (req.header("x-admin-token") || "").trim() ||
-    (req.header("authorization") || "").replace(/^Bearer\s+/i, "").trim();
-  if (candidate !== expected) {
-    fail(res, 401, "admin authentication required");
-    return false;
-  }
-  return true;
+  sendAdminAuthRequired(res);
+  return false;
 }
 
 /** Stable non-secret actor identifier for audit/preflight binding. */

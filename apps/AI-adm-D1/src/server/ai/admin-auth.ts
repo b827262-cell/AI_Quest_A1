@@ -3,6 +3,16 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 
 const DEFAULT_ADMIN_DEV_PASSWORD = "827827";
 
+/**
+ * Marks a 401 as a genuine admin-authentication failure (bad/missing token),
+ * as opposed to a business-logic 401 elsewhere. The browser fetch
+ * interceptor (`apps/AI-adm-D1/src/adminAuth.tsx`) only clears the session on
+ * a 401 carrying this exact code and/or header — keep both copies of these
+ * two literals in sync if either changes.
+ */
+export const ADMIN_AUTH_REQUIRED_CODE = "ADMIN_AUTH_REQUIRED";
+export const ADMIN_AUTH_STATE_HEADER = "X-Admin-Auth-State";
+
 export type AdminAuthConfig = {
   production: boolean;
   token: string | undefined;
@@ -28,12 +38,36 @@ function sameSecret(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function candidateToken(req: Request): string | undefined {
+export function candidateAdminToken(req: Request): string | undefined {
   const header = req.header("x-admin-token")?.trim();
   if (header) return header;
   const authorization = req.header("authorization")?.trim() ?? "";
   const match = authorization.match(/^Bearer\s+(.+)$/i);
   return match?.[1]?.trim() || undefined;
+}
+
+/**
+ * The one canonical accepted-secret check: production compares against
+ * `ADMIN_API_TOKEN`, non-production compares against the dev password. Every
+ * admin auth guard (the shared `/api/admin` middleware below, and any
+ * route-local defence-in-depth guard) must call this instead of
+ * re-implementing its own comparison, so a valid dev-password login is never
+ * accepted by one guard and rejected by another.
+ */
+export function isAcceptedAdminToken(candidate: string | undefined, config: AdminAuthConfig): boolean {
+  const acceptedSecret = config.production ? config.token : config.devPassword;
+  return Boolean(acceptedSecret && candidate && sameSecret(candidate, acceptedSecret));
+}
+
+/**
+ * Send the exact, safe "admin auth required" response. Only ever call this
+ * for a genuine authentication failure (bad/missing token) — never for a
+ * business-logic 401 — since the browser interceptor treats this exact
+ * shape as its sole signal to clear the session.
+ */
+export function sendAdminAuthRequired(res: Response): void {
+  res.setHeader(ADMIN_AUTH_STATE_HEADER, "invalid");
+  res.status(401).json({ error: "admin authentication required", code: ADMIN_AUTH_REQUIRED_CODE });
 }
 
 /** One boundary for every `/api/admin/*` route. */
@@ -51,15 +85,14 @@ export function createAdminAuthMiddleware(
   return (req: Request, res: Response, next: NextFunction) => {
     if (config.allowInsecureDev) return next();
 
-    const candidate = candidateToken(req);
-    const acceptedSecret = config.production ? config.token : config.devPassword;
-    if (acceptedSecret && candidate && sameSecret(candidate, acceptedSecret)) {
+    const candidate = candidateAdminToken(req);
+    if (isAcceptedAdminToken(candidate, config)) {
       return next();
     }
 
     if (!config.token && config.production) {
       return res.status(503).json({ error: "admin API authentication is not configured" });
     }
-    return res.status(401).json({ error: "admin authentication required" });
+    return sendAdminAuthRequired(res);
   };
 }
