@@ -101,4 +101,42 @@ describe("feedback persistence and integrity", () => {
     await expect(adapter.submitAssignment({ ...submission, submissionId: "bad-time", submittedAt: "yesterday" })).rejects.toThrow();
     adapter.close();
   });
+
+  it("preserves original editor metadata on no-op review", async () => {
+    const { adapter, trace } = await seededAdapter();
+    const firstReview = await adapter.reviewFeedback(
+      {
+        feedbackDraftId: trace.feedbackDraftId,
+        reviewerId: "teacher-1",
+        reviewerRole: "teacher",
+        decision: "request_changes",
+        editedBody: "Modified body text by teacher 1",
+        reviewedAt: "2026-08-04T00:01:00.000Z"
+      },
+      { actorId: "teacher-1", role: "teacher" }
+    );
+    expect(firstReview.trace.humanEdited).toBe(true);
+    expect(firstReview.trace.editedBy).toBe("teacher-1");
+    expect(firstReview.trace.editedAt).toBe("2026-08-04T00:01:00.000Z");
+
+    const secondReviewNoOp = await adapter.reviewFeedback(
+      {
+        feedbackDraftId: trace.feedbackDraftId,
+        reviewerId: "ta-1",
+        reviewerRole: "ta",
+        decision: "approve",
+        editedBody: "Modified body text by teacher 1",
+        reviewedAt: "2026-08-04T00:02:00.000Z"
+      },
+      { actorId: "ta-1", role: "ta" }
+    );
+    expect(secondReviewNoOp.trace.humanEdited).toBe(true);
+    expect(secondReviewNoOp.trace.editedBy).toBe("teacher-1");
+    expect(secondReviewNoOp.trace.editedAt).toBe("2026-08-04T00:01:00.000Z");
+    expect(secondReviewNoOp.trace.reviewedBy).toBe("ta-1");
+    expect(secondReviewNoOp.trace.reviewerRole).toBe("ta");
+    expect(secondReviewNoOp.trace.reviewedAt).toBe("2026-08-04T00:02:00.000Z");
+    adapter.close();
+  });
 });
+
