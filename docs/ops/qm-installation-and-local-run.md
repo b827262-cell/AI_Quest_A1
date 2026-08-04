@@ -216,3 +216,68 @@ Local runtime deployment (`qm up`) was **NOT** executed. Approval to run `qm up`
 - No cloud infrastructure or external provider credentials instantiated.
 - Valid credential-free mock/fixture harness verification.
 - Explicit user confirmation.
+
+---
+
+## 9. Doctor blocker remediation
+
+QM `0.1.4` computes these names from `qm.config.jsonc`. The Admin page reports
+only the names, category, and safe next step; it never returns values or raw CLI
+output. For this repository, `modelProvider: anthropic` and `HARNESS: pi` make
+the following seven settings required:
+
+| Name | QM source and purpose | Category | Local generation | Required external input |
+| :--- | :--- | :--- | :--- | :--- |
+| `ANTHROPIC_API_KEY` | Official QM provider credential used and billed when `modelProvider` is `anthropic` | Credential | No | Yes, from Anthropic |
+| `CAPABILITY_SECRET` | First-party signing key for scoped capabilities and egress grants | Local Secret | Yes, official QM `MINT_LOCALLY` rule | No |
+| `CONNECTOR_SECRET_KEY` | First-party encryption key for durable connector credentials | Local Secret | Yes, official QM `MINT_LOCALLY` rule | No |
+| `CORE_SIGNING_SECRET` | HMAC key shared by QM Core and surface plugins | Local Secret | Yes, official QM `MINT_LOCALLY` rule | No |
+| `PORTAL_IDENTITY_SECRET` | Signing key for portal-bound user identity | Local Secret | Yes, official QM `MINT_LOCALLY` rule | No |
+| `PUBLIC_API_URL` | Public QM Core self-API URL reachable from `pi` agent sandboxes | URL / configuration | Not a Secret; derive from the actual runtime network | A real reachable QM Core URL |
+| `SKILL_SIGNING_SECRET` | Stable signing key for reviewed skills | Local Secret | Yes, official QM `MINT_LOCALLY` rule | No |
+
+`PUBLIC_API_URL` is not `/api/admin/qm/*` and must never point at the Admin
+Dashboard merely to clear Doctor. The Admin endpoints observe and trigger checks;
+they are not the QM Core API used by sandboxes.
+
+### Private local setup
+
+QM documents `openssl rand -hex 32` for each of the five first-party local
+Secret names above. Generate a fresh independent value per name and insert it
+directly into the ignored `deploy/qm/.env` without echoing it to logs, chat,
+snapshots, or PR comments. Do not reuse one value for multiple names. Provider
+keys must come from the provider; never generate a dummy key to force PASS.
+
+Before editing, verify the file remains private and ignored:
+
+```bash
+cd deploy/qm
+install -m 600 /dev/null .env # only when .env does not already exist
+git check-ignore --quiet .env
+```
+
+The Admin runner invokes the pinned CLI from `deploy/qm`, uses QM's documented
+default `deploy/qm/.env` location, and passes that same path explicitly once the
+file exists. It provides only a small OS/runtime environment
+allowlist (`PATH`, home/temp, locale/timezone, and CI metadata). Browser requests
+cannot supply command, arguments, cwd, or environment. The response schema
+contains no raw stdout/stderr, absolute path, stack trace, process environment,
+or Secret value.
+
+After authorized configuration changes, restart Admin API and Web using the
+normal development commands, then run `pnpm run qm:validate` and use
+**重新驗證** on `/admin/qm-status`. A nonzero validate exit remains correct when
+Doctor is honestly blocked.
+
+### State meanings
+
+- **Contract PASS**: committed QM config and computed contract are structurally valid.
+- **Doctor BLOCKED**: one or more honest prerequisites are absent; this is not runtime readiness.
+- **Runtime READY**: the real QM runtime and its external dependencies have been exercised successfully. This task does not claim it.
+
+Do not run `qm up`, `qm secrets push`, Fly/AWS/Slack deployment, cloud mutation,
+or any production secret mutation as part of local remediation without explicit
+approval. After local investigation, remove scratch profiles/logs and any
+generated runtime state that is no longer needed. Avoid putting Secret-bearing
+commands into shell history; do not delete or rewrite shared history without the
+operator's approval.

@@ -66,7 +66,8 @@ describe("qm-status schemas", () => {
           category: "tool",
           code: "missing_tool",
           name: "docker",
-          message: "docker is missing"
+          message: "docker is missing",
+          remediation: "Install docker"
         }
       ],
       message: "missing docker"
@@ -79,7 +80,8 @@ describe("qm-status schemas", () => {
       category: "credential",
       code: "missing_or_placeholder",
       names: ["SECRET_KEY"],
-      message: "Missing key"
+      message: "Missing key",
+      remediation: "Set it privately"
     };
     expect(qmDoctorBlockerSchema.parse(data)).toEqual(data);
   });
@@ -89,7 +91,8 @@ describe("qm-status schemas", () => {
       category: "tool",
       code: "missing_tool",
       name: "flyctl",
-      message: "Missing tool"
+      message: "Missing tool",
+      remediation: "Install tool"
     };
     expect(qmDoctorBlockerSchema.parse(data)).toEqual(data);
   });
@@ -128,7 +131,12 @@ describe("deriveOverallStatus", () => {
       {
         status: "fail",
         exitCode: -1,
-        blockers: [{ category: "unknown", code: "doctor_failed", message: "safe failure" }],
+        blockers: [{
+          category: "unknown",
+          code: "doctor_failed",
+          message: "safe failure",
+          remediation: "Inspect server logs"
+        }],
         message: "safe failure"
       },
       { status: "pass", checkedAt: null, message: null }

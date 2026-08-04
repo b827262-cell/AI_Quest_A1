@@ -7,8 +7,9 @@ export function AdminLoginPage() {
   const { login } = useAdminAuth();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const candidate = password.trim();
     if (!candidate) {
@@ -16,10 +17,26 @@ export function AdminLoginPage() {
       return;
     }
 
+    setSubmitting(true);
     setError(null);
-    login(candidate);
-    setPassword("");
-    navigate("/admin", { replace: true });
+    try {
+      const response = await fetch("/api/admin/qm/status", {
+        headers: { "x-admin-token": candidate }
+      });
+      if (!response.ok) {
+        setError(response.status === 401
+          ? "管理員憑證無效或已過期，請重新輸入。"
+          : "登入驗證失敗，請確認 Admin API 狀態後重試。");
+        return;
+      }
+      login(candidate);
+      setPassword("");
+      navigate("/admin", { replace: true });
+    } catch {
+      setError("無法連線至 Admin API，請確認服務是否啟動。");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -57,6 +74,7 @@ export function AdminLoginPage() {
           onChange={(event) => setPassword(event.target.value)}
           autoComplete="current-password"
           aria-invalid={Boolean(error)}
+          disabled={submitting}
           autoFocus
         />
 
@@ -69,9 +87,10 @@ export function AdminLoginPage() {
         <button
           type="submit"
           className="admin-btn"
+          disabled={submitting}
           style={{ width: "100%", marginTop: 18 }}
         >
-          登入管理後台
+          {submitting ? "驗證中..." : "登入管理後台"}
         </button>
       </form>
     </main>

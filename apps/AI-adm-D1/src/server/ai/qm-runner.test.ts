@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   MAX_OUTPUT_BYTES,
   QmOperationBusyError,
+  buildQmChildEnv,
   createQmRunner,
   parseContractResult,
   parseDoctorResult,
@@ -101,29 +102,23 @@ describe("parseDoctorResult", () => {
     expect(result.blockers).toEqual([]);
   });
 
-  it("detects credential blocker from bulk missing secrets message", () => {
-    const stdout = "error: required secrets are missing or placeholders: ANTHROPIC_API_KEY, CAPABILITY_SECRET, CORE_SIGNING_SECRET";
+  it("classifies provider credentials, local secrets, and runtime URL separately", () => {
+    const stdout = "error: required secrets are missing or placeholders: ANTHROPIC_API_KEY, CAPABILITY_SECRET, CORE_SIGNING_SECRET, PUBLIC_API_URL";
     const result = parseDoctorResult(stdout, "", 1);
     expect(result.status).toBe("blocked");
-    expect(result.blockers).toHaveLength(1);
-    expect(result.blockers[0].category).toBe("credential");
-    if (result.blockers[0].category === "credential") {
-      expect(result.blockers[0].code).toBe("missing_or_placeholder");
-      expect(result.blockers[0].names).toContain("ANTHROPIC_API_KEY");
-      expect(result.blockers[0].names).toContain("CORE_SIGNING_SECRET");
-    }
+    expect(result.blockers).toHaveLength(3);
+    expect(result.blockers.find((blocker) => blocker.category === "credential")).toMatchObject({ names: ["ANTHROPIC_API_KEY"] });
+    expect(result.blockers.find((blocker) => blocker.category === "local_secret")).toMatchObject({ names: ["CAPABILITY_SECRET", "CORE_SIGNING_SECRET"] });
+    expect(result.blockers.find((blocker) => blocker.category === "configuration")).toMatchObject({ names: ["PUBLIC_API_URL"] });
   });
 
   it("detects credential blocker from individual missing secret lines", () => {
     const stdout = "OPENAI_API_KEY is missing\nCORE_SIGNING_SECRET is still a placeholder";
     const result = parseDoctorResult(stdout, "", 1);
     expect(result.status).toBe("blocked");
-    expect(result.blockers).toHaveLength(1);
-    expect(result.blockers[0].category).toBe("credential");
-    if (result.blockers[0].category === "credential") {
-      expect(result.blockers[0].names).toContain("OPENAI_API_KEY");
-      expect(result.blockers[0].names).toContain("CORE_SIGNING_SECRET");
-    }
+    expect(result.blockers).toHaveLength(2);
+    expect(result.blockers.find((blocker) => blocker.category === "credential")).toMatchObject({ names: ["OPENAI_API_KEY"] });
+    expect(result.blockers.find((blocker) => blocker.category === "local_secret")).toMatchObject({ names: ["CORE_SIGNING_SECRET"] });
   });
 
   it("does not leak credential values — only names", () => {
@@ -170,6 +165,21 @@ describe("parseDoctorResult", () => {
     const result = parseDoctorResult("node crashed with an unexpected error", "", 127);
     expect(result.status).toBe("fail");
     expect(result.blockers[0].category).toBe("unknown");
+  });
+});
+
+describe("QM child environment boundary", () => {
+  it("keeps only runtime variables and excludes Admin or credential values", () => {
+    const env = buildQmChildEnv({
+      PATH: "/usr/bin",
+      HOME: "/home/operator",
+      LANG: "zh_TW.UTF-8",
+      ADMIN_API_TOKEN: "must-not-cross",
+      ANTHROPIC_API_KEY: "must-not-cross",
+      CUSTOM_ENV: "must-not-cross"
+    });
+    expect(env).toEqual({ PATH: "/usr/bin", HOME: "/home/operator", LANG: "zh_TW.UTF-8" });
+    expect(JSON.stringify(env)).not.toContain("must-not-cross");
   });
 });
 

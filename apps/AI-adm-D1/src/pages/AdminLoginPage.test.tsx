@@ -25,6 +25,12 @@ async function renderLogin(): Promise<{ root: Root; container: HTMLDivElement }>
   return { root, container };
 }
 
+function enterValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+}
+
 describe("AdminLoginPage", () => {
   const mounted: Root[] = [];
 
@@ -45,21 +51,19 @@ describe("AdminLoginPage", () => {
     const rendered = await renderLogin();
     mounted.push(rendered.root);
 
-    const input = rendered.container.querySelector<HTMLInputElement>("#admin-token");
+    const input = rendered.container.querySelector<HTMLInputElement>("#admin-password");
     const form = rendered.container.querySelector<HTMLFormElement>("form");
     expect(input).not.toBeNull();
     expect(form).not.toBeNull();
 
     await act(async () => {
       if (input) {
-        input.value = "verified-token";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
+        enterValue(input, "verified-token");
       }
     });
     await act(async () => {
       form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     expect(getAdminToken()).toBe("verified-token");
@@ -70,19 +74,17 @@ describe("AdminLoginPage", () => {
     const rendered = await renderLogin();
     mounted.push(rendered.root);
 
-    const input = rendered.container.querySelector<HTMLInputElement>("#admin-token");
+    const input = rendered.container.querySelector<HTMLInputElement>("#admin-password");
     const form = rendered.container.querySelector<HTMLFormElement>("form");
 
     await act(async () => {
       if (input) {
-        input.value = "wrong-token";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
+        enterValue(input, "wrong-token");
       }
     });
     await act(async () => {
       form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     expect(getAdminToken()).toBeNull();

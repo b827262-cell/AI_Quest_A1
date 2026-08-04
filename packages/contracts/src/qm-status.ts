@@ -32,29 +32,43 @@ export const qmDoctorBlockerSchema = z.discriminatedUnion("category", [
   z.object({
     category: z.literal("credential"),
     code: z.literal("missing_or_placeholder"),
-    names: z.array(z.string()).optional(),
+    names: z.array(z.string()).min(1),
     message: z.string(),
+    remediation: z.string(),
+  }),
+  z.object({
+    category: z.literal("local_secret"),
+    code: z.literal("missing_or_placeholder"),
+    names: z.array(z.string()).min(1),
+    message: z.string(),
+    remediation: z.string(),
   }),
   z.object({
     category: z.literal("tool"),
     code: z.literal("missing_tool"),
     name: z.string(),
     message: z.string(),
+    remediation: z.string(),
   }),
   z.object({
     category: z.literal("configuration"),
     code: z.string(),
+    names: z.array(z.string()).optional(),
     message: z.string(),
+    remediation: z.string(),
   }),
   z.object({
-    category: z.literal("environment"),
+    category: z.literal("runtime_dependency"),
     code: z.string(),
+    name: z.string().optional(),
     message: z.string(),
+    remediation: z.string(),
   }),
   z.object({
     category: z.literal("unknown"),
     code: z.literal("doctor_failed"),
     message: z.string(),
+    remediation: z.string(),
   }),
 ]);
 export type QmDoctorBlocker = z.infer<typeof qmDoctorBlockerSchema>;

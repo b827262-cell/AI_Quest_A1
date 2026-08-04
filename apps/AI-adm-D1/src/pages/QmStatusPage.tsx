@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { adminApi } from "../api";
-import type { QmStatusResponse } from "@ai-smartbook/contracts";
+import type { QmDoctorBlocker, QmStatusResponse } from "@ai-smartbook/contracts";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
@@ -12,12 +12,36 @@ const DOCTOR_LABELS: Record<string, string> = { pass: "通過", blocked: "環境
 const SMOKE_LABELS: Record<string, string> = { pass: "通過", fail: "失敗", not_run: "尚未執行" };
 
 const BLOCKER_CATEGORY_LABELS: Record<string, string> = {
-  credential: "缺少必要憑證或仍使用 Placeholder",
-  tool: "缺少系統工具",
-  configuration: "設定不完整",
-  environment: "其他環境阻擋",
-  unknown: "未知阻擋原因",
+  credential: "憑證",
+  local_secret: "本機 Secret",
+  configuration: "URL／設定",
+  tool: "缺少工具",
+  runtime_dependency: "Runtime 相依項目",
+  unknown: "未知錯誤",
 };
+
+const BLOCKER_CATEGORY_ORDER = [
+  "credential",
+  "local_secret",
+  "configuration",
+  "tool",
+  "runtime_dependency",
+  "unknown"
+] as const;
+
+function blockerName(blocker: QmDoctorBlocker): string {
+  if ("names" in blocker && blocker.names?.length) return blocker.names.join(", ");
+  if ("name" in blocker && blocker.name) return blocker.name;
+  return blocker.message;
+}
+
+function formatCheckedAt(value: string): string {
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    dateStyle: "medium",
+    timeStyle: "medium"
+  }).format(new Date(value));
+}
 
 function badgeClass(status: string): string {
   return `qm-badge qm-badge-${status.replace("_", "-")}`;
@@ -110,7 +134,7 @@ export function QmStatusPage() {
           </div>
           {status.checkedAt && (
             <div className="qm-checked-at">
-              最後檢查時間: {new Date(status.checkedAt).toLocaleString()}
+              最後檢查時間（Asia/Taipei）: {formatCheckedAt(status.checkedAt)}
             </div>
           )}
         </AdminCard>
@@ -161,19 +185,26 @@ export function QmStatusPage() {
               {status.doctor.blockers && status.doctor.blockers.length > 0 && (
                 <div className="qm-missing-tools">
                   <span className="qm-detail-label">阻擋原因</span>
-                  <ul>
-                    {status.doctor.blockers.map((blocker, idx) => (
-                      <li key={idx}>
-                        <strong>{BLOCKER_CATEGORY_LABELS[blocker.category] || blocker.category}</strong>
-                        {blocker.category === "credential" && "names" in blocker && blocker.names && blocker.names.length > 0 && (
-                          <span className="qm-blocker-names"> ({blocker.names.join(", ")})</span>
-                        )}
-                        {blocker.category === "tool" && "name" in blocker && (
-                          <span className="qm-blocker-names"> ({blocker.name})</span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="qm-blocker-groups">
+                    {BLOCKER_CATEGORY_ORDER.map((category) => {
+                      const group = status.doctor?.blockers.filter((blocker) => blocker.category === category) ?? [];
+                      if (group.length === 0) return null;
+                      return (
+                        <section className="qm-blocker-group" key={category}>
+                          <h4>{BLOCKER_CATEGORY_LABELS[category]}</h4>
+                          <ul>
+                            {group.map((blocker, idx) => (
+                              <li key={`${blocker.code}-${idx}`}>
+                                <code className="qm-blocker-name">{blockerName(blocker)}</code>
+                                <span>{blocker.message}</span>
+                                <span className="qm-blocker-remediation">下一步：{blocker.remediation}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               {status.doctor.message && (
@@ -197,7 +228,7 @@ export function QmStatusPage() {
               </div>
               {status.smoke.checkedAt && (
                 <div className="qm-checked-at">
-                  最後執行時間: {new Date(status.smoke.checkedAt).toLocaleString()}
+                  最後執行時間（Asia/Taipei）: {formatCheckedAt(status.smoke.checkedAt)}
                 </div>
               )}
               {status.smoke.message && (

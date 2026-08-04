@@ -22,6 +22,7 @@ const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(MODULE_DIR, "../../../../..");
 const DEPLOY_QM_DIR = resolve(PROJECT_ROOT, "deploy/qm");
 const QM_BIN = resolve(DEPLOY_QM_DIR, "node_modules/.bin/qm");
+const QM_ENV_FILE = resolve(DEPLOY_QM_DIR, ".env");
 
 export const RUNNER_TIMEOUT_MS = 30_000;
 export const TIMEOUT_GRACE_MS = 250;
@@ -48,6 +49,47 @@ export function redactSecrets(text: string): string {
 
 const SAFE_DOCTOR_UNKNOWN_MESSAGE = "QM Doctor failed for an unclassified reason.";
 const SAFE_DOCTOR_PROCESS_MESSAGE = "QM Doctor could not complete because the process failed.";
+const SAFE_DOCTOR_FAILURE_REMEDIATION = "Inspect the server-side diagnostic log; no raw CLI output is exposed to the browser.";
+
+const LOCAL_SECRET_NAMES = new Set([
+  "CAPABILITY_SECRET",
+  "CONNECTOR_SECRET_KEY",
+  "CORE_SIGNING_SECRET",
+  "PORTAL_IDENTITY_SECRET",
+  "SKILL_SIGNING_SECRET"
+]);
+const CONFIGURATION_NAMES = new Set(["PUBLIC_API_URL"]);
+
+function namedBlockers(names: string[]): QmDoctorBlocker[] {
+  const unique = [...new Set(names)];
+  const credentials = unique.filter((name) => !LOCAL_SECRET_NAMES.has(name) && !CONFIGURATION_NAMES.has(name));
+  const localSecrets = unique.filter((name) => LOCAL_SECRET_NAMES.has(name));
+  const configuration = unique.filter((name) => CONFIGURATION_NAMES.has(name));
+  const blockers: QmDoctorBlocker[] = [];
+
+  if (credentials.length > 0) blockers.push({
+    category: "credential",
+    code: "missing_or_placeholder",
+    names: credentials,
+    message: "Required external provider credentials are missing or placeholders.",
+    remediation: "Obtain the credential from the external provider and set it only in the untracked deploy/qm/.env file."
+  });
+  if (localSecrets.length > 0) blockers.push({
+    category: "local_secret",
+    code: "missing_or_placeholder",
+    names: localSecrets,
+    message: "Required first-party signing or encryption secrets are missing or placeholders.",
+    remediation: "Generate independent values locally as documented by QM, store them only in deploy/qm/.env, and never print or commit them."
+  });
+  if (configuration.length > 0) blockers.push({
+    category: "configuration",
+    code: "runtime_url_missing",
+    names: configuration,
+    message: "The QM Core self-API URL required by the selected harness is missing.",
+    remediation: "Set the sandbox-reachable QM Core URL in deploy/qm/.env; the Admin Dashboard API URL is not a valid substitute."
+  });
+  return blockers;
+}
 
 /* ── Contract parsing ──────────────────────────────────────── */
 
@@ -117,7 +159,8 @@ function configurationBlocker(combined: string): QmDoctorBlocker | null {
   return {
     category: "configuration",
     code: "configuration_incomplete",
-    message: "QM configuration is missing or incomplete"
+    message: "QM configuration is missing or incomplete.",
+    remediation: "Review deploy/qm/qm.config.jsonc and the untracked deploy/qm/.env file, then rerun validation."
   };
 }
 
@@ -138,12 +181,7 @@ export function parseDoctorResult(stdout: string, stderr: string, exitCode: numb
       .split(",")
       .map((value) => value.trim())
       .filter((value) => /^[A-Z][A-Z0-9_]+$/.test(value));
-    blockers.push({
-      category: "credential",
-      code: "missing_or_placeholder",
-      names,
-      message: "Required secrets are missing or placeholders"
-    });
+    blockers.push(...namedBlockers(names));
   }
 
   // Detect individual secret issues without ever retaining their values.
@@ -154,12 +192,7 @@ export function parseDoctorResult(stdout: string, stderr: string, exitCode: numb
     additionalNames.push(match[1]);
   }
   if (additionalNames.length > 0 && !credentialBulkMatch) {
-    blockers.push({
-      category: "credential",
-      code: "missing_or_placeholder",
-      names: additionalNames,
-      message: "Required secrets are missing or placeholders"
-    });
+    blockers.push(...namedBlockers(additionalNames));
   }
 
   // Detect missing tools only when the output actually mentions a tool as missing.
@@ -174,7 +207,8 @@ export function parseDoctorResult(stdout: string, stderr: string, exitCode: numb
         category: "tool",
         code: "missing_tool",
         name: tool,
-        message: `${tool} is not installed or not in PATH`
+        message: `${tool} is not installed or not in PATH.`,
+        remediation: `Install ${tool} only when it is required by the configured deployment target, then rerun Doctor.`
       });
     }
   }
@@ -188,7 +222,8 @@ export function parseDoctorResult(stdout: string, stderr: string, exitCode: numb
     blockers.push({
       category: "unknown",
       code: "doctor_failed",
-      message: SAFE_DOCTOR_UNKNOWN_MESSAGE
+      message: SAFE_DOCTOR_UNKNOWN_MESSAGE,
+      remediation: SAFE_DOCTOR_FAILURE_REMEDIATION
     });
   }
 
@@ -210,7 +245,8 @@ function processFailureDoctor(exitCode: number): QmDoctorResult {
     blockers: [{
       category: "unknown",
       code: "doctor_failed",
-      message: SAFE_DOCTOR_PROCESS_MESSAGE
+      message: SAFE_DOCTOR_PROCESS_MESSAGE,
+      remediation: SAFE_DOCTOR_FAILURE_REMEDIATION
     }],
     message: SAFE_DOCTOR_PROCESS_MESSAGE
   });
@@ -293,7 +329,7 @@ export function spawnCapture(
         cwd,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env }
+        env: buildQmChildEnv(process.env)
       }) as ChildProcessByStdio<null, Readable, Readable>;
     } catch {
       finish(result(-1, true));
@@ -323,6 +359,17 @@ export function spawnCapture(
   });
 }
 
+/**
+ * Child processes receive only OS/runtime settings needed to locate Node and
+ * tools. QM reads deployment values from the explicit deploy/qm/.env file;
+ * unrelated Admin API credentials and arbitrary server environment variables
+ * never cross this boundary.
+ */
+export function buildQmChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const allowed = ["PATH", "HOME", "USERPROFILE", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL", "TZ", "CI"];
+  return Object.fromEntries(allowed.flatMap((name) => source[name] === undefined ? [] : [[name, source[name]]]));
+}
+
 /* ── Node 24 wrapper for QM CLI ────────────────────────────── */
 
 function qmArgs(cliArgs: string[]): { command: string; args: string[] } {
@@ -334,6 +381,12 @@ function qmArgs(cliArgs: string[]): { command: string; args: string[] } {
     command: "npx",
     args: ["--yes", "--package=node@24", "--", QM_BIN, ...cliArgs]
   };
+}
+
+function withDeploymentEnv(cliArgs: string[]): string[] {
+  // QM's documented default is deploy/qm/.env. Passing an absent --env-file
+  // turns an honest missing-prerequisite diagnosis into a CLI file error.
+  return existsSync(QM_ENV_FILE) ? [...cliArgs, "--env-file", QM_ENV_FILE] : cliArgs;
 }
 
 /* ── Read pinned QM CLI version ────────────────────────────── */
@@ -445,7 +498,7 @@ export function createQmRunner(overrides: Partial<QmRunnerDependencies> = {}): Q
         return updateCachedStatus(status) as QmSystemStatus;
       }
 
-      const { command: checkCmd, args: checkArgs } = qmArgs(["check", "--json"]);
+      const { command: checkCmd, args: checkArgs } = qmArgs(withDeploymentEnv(["check", "--json"]));
       const checkResult = await deps.spawnCapture(checkCmd, checkArgs, DEPLOY_QM_DIR);
       const checkParseable = isContractOutputParseable(checkResult.stdout);
       const parsedContract = parseContractResult(checkResult.stdout);
@@ -460,7 +513,7 @@ export function createQmRunner(overrides: Partial<QmRunnerDependencies> = {}): Q
       if (checkResult.spawnError || checkResult.timedOut) {
         doctor = processFailureDoctor(checkResult.timedOut ? -1 : checkResult.exitCode);
       } else {
-        const { command: doctorCmd, args: doctorArgs } = qmArgs(["doctor"]);
+        const { command: doctorCmd, args: doctorArgs } = qmArgs(withDeploymentEnv(["doctor"]));
         const doctorProcess = await deps.spawnCapture(doctorCmd, doctorArgs, DEPLOY_QM_DIR);
         doctor = doctorProcess.spawnError || doctorProcess.timedOut
           ? processFailureDoctor(doctorProcess.timedOut ? -1 : doctorProcess.exitCode)

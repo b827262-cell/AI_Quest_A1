@@ -6,6 +6,9 @@ import { QM_CLI_VERSION, QM_PACKAGE } from "./qm-version.mjs";
 const deploymentDir = resolve(process.env.QM_DEPLOYMENT_DIR ?? "deploy/qm");
 const packagePath = resolve(deploymentDir, "package.json");
 const configPath = resolve(deploymentDir, "qm.config.jsonc");
+const envPath = resolve(deploymentDir, ".env");
+const childEnvNames = ["PATH", "HOME", "USERPROFILE", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL", "TZ", "CI"];
+const childEnv = Object.fromEntries(childEnvNames.flatMap((name) => process.env[name] === undefined ? [] : [[name, process.env[name]]]));
 
 if (!existsSync(packagePath) || !existsSync(configPath)) {
   console.error(`QM deployment is incomplete: expected ${packagePath} and ${configPath}`);
@@ -37,16 +40,17 @@ if (!existsSync(localBin)) {
 const currentMajor = Number(process.versions.node.split(".")[0] ?? 0);
 const useNode24Wrapper = currentMajor < 24;
 const command = useNode24Wrapper ? "npx" : localBin;
+const envArgs = existsSync(envPath) ? ["--env-file", envPath] : [];
 const checkArgs = useNode24Wrapper
-  ? ["--yes", "--package=node@24", "--", localBin, "check", "--json"]
-  : ["check", "--json"];
+  ? ["--yes", "--package=node@24", "--", localBin, "check", "--json", ...envArgs]
+  : ["check", "--json", ...envArgs];
 
 console.log(`Validating QM deployment with ${QM_PACKAGE}`);
 const result = spawnSync(command, checkArgs, {
   cwd: deploymentDir,
   stdio: ["ignore", "pipe", "pipe"],
   encoding: "utf8",
-  env: { ...process.env }
+  env: childEnv
 });
 if (result.error) {
   console.error("Unable to run the pinned QM CLI: process failure");
@@ -61,14 +65,14 @@ try {
 }
 
 const doctorArgs = useNode24Wrapper
-  ? ["--yes", "--package=node@24", "--", localBin, "doctor"]
-  : ["doctor"];
+  ? ["--yes", "--package=node@24", "--", localBin, "doctor", ...envArgs]
+  : ["doctor", ...envArgs];
 
 const doctor = spawnSync(command, doctorArgs, {
   cwd: deploymentDir,
   stdio: ["ignore", "pipe", "pipe"],
   encoding: "utf8",
-  env: { ...process.env }
+  env: childEnv
 });
 
 const doctorOutput = `${doctor.stdout ?? ""}\n${doctor.stderr ?? ""}`;

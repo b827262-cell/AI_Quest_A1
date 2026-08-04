@@ -36,7 +36,8 @@ function readyStatus(overrides: Partial<QmStatusResponse> = {}): QmStatusRespons
         category: "credential",
         code: "missing_or_placeholder",
         names: ["ANTHROPIC_API_KEY"],
-        message: "Required secrets are missing or placeholders"
+        message: "Required secrets are missing or placeholders",
+        remediation: "Set it in the untracked environment file"
       }],
       message: "Required secrets are missing or placeholders"
     },
@@ -117,7 +118,12 @@ describe("QmStatusPage behavior", () => {
       doctor: {
         status: "fail",
         exitCode: -1,
-        blockers: [{ category: "unknown", code: "doctor_failed", message: "QM Doctor failed safely." }],
+        blockers: [{
+          category: "unknown",
+          code: "doctor_failed",
+          message: "QM Doctor failed safely.",
+          remediation: "Inspect server logs"
+        }],
         message: "QM Doctor failed safely."
       }
     }));
@@ -146,6 +152,48 @@ describe("QmStatusPage behavior", () => {
     await act(async () => resolveValidate(readyStatus({ overallStatus: "fail" })));
     expect(rendered.container.textContent).toContain("QM CLI Version");
     expect(rendered.container.querySelector(".qm-badge-fail")).not.toBeNull();
+  });
+
+  it("groups blockers with safe remediation and wraps long names", async () => {
+    api.getQmStatus.mockResolvedValue(readyStatus({
+      doctor: {
+        status: "blocked",
+        exitCode: 1,
+        blockers: [
+          {
+            category: "credential",
+            code: "missing_or_placeholder",
+            names: ["ANTHROPIC_API_KEY"],
+            message: "External credential is missing.",
+            remediation: "Set it only in the untracked environment file."
+          },
+          {
+            category: "local_secret",
+            code: "missing_or_placeholder",
+            names: ["VERY_LONG_LOCAL_SIGNING_SECRET_NAME_THAT_MUST_WRAP_ON_NARROW_SCREENS"],
+            message: "Local secret is missing.",
+            remediation: "Generate it locally without printing it."
+          },
+          {
+            category: "configuration",
+            code: "runtime_url_missing",
+            names: ["PUBLIC_API_URL"],
+            message: "Core URL is missing.",
+            remediation: "Use the sandbox-reachable QM Core URL."
+          }
+        ],
+        message: "Environment remains blocked."
+      }
+    }));
+    const rendered = await render(<MemoryRouter><QmStatusPage /></MemoryRouter>);
+    mounted.push(rendered.root);
+
+    expect(rendered.container.textContent).toContain("憑證");
+    expect(rendered.container.textContent).toContain("本機 Secret");
+    expect(rendered.container.textContent).toContain("URL／設定");
+    expect(rendered.container.textContent).toContain("下一步：");
+    expect(rendered.container.querySelector(".qm-blocker-name")?.className).toContain("qm-blocker-name");
+    expect(rendered.container.textContent).not.toContain("sk-ant-");
   });
 
   it("calls smoke, shows loading/disabled state, and updates the result", async () => {
@@ -183,6 +231,24 @@ describe("QmStatusPage behavior", () => {
     mounted.push(failed.root);
     expect(failed.container.textContent).toContain("讀取 QM 狀態失敗");
     expect(failed.container.textContent).toContain("Invalid response from server");
+  });
+
+  it.each([
+    ["401", "Unauthorized"],
+    ["403", "Forbidden"],
+    ["409", "Another QM operation is already in progress"],
+    ["500", "QM validation failed"]
+  ])("renders a safe %s action error", async (_status, message) => {
+    api.runQmValidate.mockRejectedValue(new Error(message));
+    const rendered = await render(<MemoryRouter><QmStatusPage /></MemoryRouter>);
+    mounted.push(rendered.root);
+
+    await act(async () => {
+      button(rendered.container, "重新驗證").click();
+      await settle();
+    });
+    expect(rendered.container.textContent).toContain(message);
+    expect(rendered.container.textContent).not.toContain("at /home/");
   });
 
   it("navigates from the sidebar to the actual QM route", async () => {
