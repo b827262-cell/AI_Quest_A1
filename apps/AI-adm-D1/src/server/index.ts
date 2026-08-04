@@ -30,6 +30,7 @@ import { buildGateway } from "./ai/gateway-instance";
 import { makeAnalyticsService, todayTaipei } from "./ai/analytics-service";
 import { createAdminAuthMiddleware } from "./ai/admin-auth";
 import { createAdminOriginMiddleware } from "./ai/admin-origin";
+import { registerQmStatusRoutes } from "./ai/qm-status-api";
 import { EvaluationServiceError, makeEvaluationService } from "./ai/evaluation-service";
 import { LiveEvaluationServiceError, makeLiveEvaluationService } from "./ai/live-evaluation-service";
 import { EvaluationGovernanceError, makeEvaluationGovernanceService } from "./ai/evaluation-governance-service";
@@ -313,6 +314,7 @@ app.use("/api/uploads/appearance", express.static(APPEARANCE_UPLOAD_DIR));
 // Security boundary: every current and future admin route is protected here.
 // Public and student routes are mounted outside this prefix and are unaffected.
 app.use("/api/admin", createAdminAuthMiddleware());
+registerQmStatusRoutes(app);
 
 function fail(res: Response, status: number, message: string) {
   res.status(status).json({ error: message });

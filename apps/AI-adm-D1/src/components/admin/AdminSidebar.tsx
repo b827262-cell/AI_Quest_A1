@@ -45,6 +45,9 @@ export function AdminSidebar({
         <NavLink end to="/admin/ai-quality-evaluations" className={NAV_CLASS}>
           AI 品質評測
         </NavLink>
+        <NavLink end to="/admin/qm-status" className={NAV_CLASS}>
+          QM 系統狀態
+        </NavLink>
       </nav>
 
       <p className="admin-nav-subgroup">智能書本管理</p>

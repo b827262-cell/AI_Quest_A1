@@ -312,7 +312,20 @@ export interface UploadBookFileOptions {
   relatedFileId?: string | null;
 }
 
+export type QmStatusResponse = {
+  overallStatus: string;
+  checkedAt: string | null;
+  qmCliVersion: string | null;
+  contract: Record<string, unknown> | null;
+  doctor: Record<string, unknown> | null;
+  smoke: Record<string, unknown> | null;
+  message?: string;
+};
+
 export const adminApi = {
+  getQmStatus: () => http<QmStatusResponse>("/api/admin/qm/status"),
+  runQmValidate: () => http<QmStatusResponse>("/api/admin/qm/validate", { method: "POST" }),
+  runQmSmoke: () => http<QmStatusResponse>("/api/admin/qm/smoke", { method: "POST" }),
   getAiEvaluationSettings: () => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings"),
   saveAiEvaluationSettings: (settings: Omit<AiLiveEvaluationSettings, "updatedAt">) => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings", { method: "PUT", body: JSON.stringify(settings) }),
   preflightAiEvaluation: (input: { datasetId: string; maxCases: number; maxTokenBudget: number; logicalModelIds: string[] }) => http<AiLivePreflight>("/api/admin/ai-evaluations/live-preflight", { method: "POST", body: JSON.stringify(input) }),

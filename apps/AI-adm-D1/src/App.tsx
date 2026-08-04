@@ -14,6 +14,7 @@ import { NewBookPage } from "./pages/NewBookPage";
 import { BookDetail } from "./pages/BookDetail";
 import { ChaptersPage } from "./pages/ChaptersPage";
 import { QaPage } from "./pages/QaPage";
+import { QmStatusPage } from "./pages/QmStatusPage";
 
 export function App() {
   return (
@@ -36,6 +37,7 @@ export function App() {
             <Route path="/admin/books/:bookId/chapters" element={<ChaptersPage />} />
             <Route path="/admin/books/:bookId/qa" element={<QaPage />} />
             <Route path="/admin/books/:bookId/*" element={<BookDetail />} />
+            <Route path="/admin/qm-status" element={<QmStatusPage />} />
             <Route path="*" element={<Navigate to="/admin" replace />} />
           </Routes>
         </AdminShell>
