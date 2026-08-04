@@ -20,6 +20,11 @@
       "types": "./src/server.ts",
       "import": "./src/server.ts",
       "default": "./src/server.ts"
+    },
+    "./knowledge": {
+      "types": "./src/knowledge/index.ts",
+      "import": "./src/knowledge/index.ts",
+      "default": "./src/knowledge/index.ts"
     }
   },
   "scripts": {
