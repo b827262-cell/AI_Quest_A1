@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "typeRoots": ["../apps/AI-adm-D1/node_modules/@types", "../node_modules/@types"]
+  },
+  "files": [
+    "provider-live-smoke.ts",
+    "phase3a-staging-smoke.ts",
+    "credential-key-rotation.ts",
+    "qm-feedback-smoke.ts"
+  ]
+}

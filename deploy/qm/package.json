@@ -1,0 +1,20 @@
+{
+  "name": "ai-quest-a1-qm-deployment",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@yc-software/qm": "0.1.4"
+  },
+  "scripts": {
+    "qm": "qm",
+    "check": "qm check",
+    "doctor": "qm doctor",
+    "plan": "qm plan",
+    "deploy": "qm up",
+    "status": "qm status",
+    "conformance": "qm conformance --static"
+  }
+}

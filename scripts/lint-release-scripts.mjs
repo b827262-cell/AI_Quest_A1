@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 const root = resolve(new URL("..", import.meta.url).pathname);
 const scriptsDir = join(root, "scripts");
 const releaseScriptNames = new Set([
+  "admin-navigation-smoke.mjs",
   "admin-provider-ui-e2e.mjs",
   "credential-key-rotation.ts",
   "phase3a-release-gate.mjs",

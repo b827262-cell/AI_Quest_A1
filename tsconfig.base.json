@@ -12,6 +12,12 @@
     "noEmit": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "paths": {
+      "@ai-smartbook/ai-orchestration": ["./packages/ai-orchestration/src/index.ts"],
+      "@ai-smartbook/ai-orchestration/browser": ["./packages/ai-orchestration/src/browser.ts"],
+      "@ai-smartbook/ai-orchestration/server": ["./packages/ai-orchestration/src/server.ts"],
+      "@ai-smartbook/contracts": ["./packages/contracts/src/index.ts"]
+    }
   }
 }

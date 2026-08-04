@@ -451,7 +451,7 @@ describe("AI repos integration", () => {
     const reservation = handle.repos.aiCredentialModelQuotas.reserve(credential.id, "glm-test", 10).reservation!;
     handle.repos.aiCredentialModelQuotas.settle(reservation, 10);
     const afterReset = handle.repos.aiCredentialModelQuotas.reserve(
-      credential.id, "glm-test", 1, new Date(Date.now() + 86_400_000)
+      credential.id, "glm-test", 1, new Date(Date.parse(quota.dailyResetAt) + 1000)
     );
     expect(afterReset.allowed).toBe(true);
     const resetRow = handle.repos.aiCredentialModelQuotas.find(quota.id)!;

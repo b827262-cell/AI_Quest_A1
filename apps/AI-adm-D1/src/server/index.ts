@@ -28,8 +28,10 @@ import {
 } from "@ai-smartbook/ai/server";
 import { buildGateway } from "./ai/gateway-instance";
 import { makeAnalyticsService, todayTaipei } from "./ai/analytics-service";
-import { createAdminAuthMiddleware } from "./ai/admin-auth";
-import { createAdminOriginMiddleware } from "./ai/admin-origin";
+import { registerQmAdminBoundary } from "./ai/qm-admin-boundary";
+import { candidateAdminToken, isAcceptedAdminToken, resolveAdminAuthConfig, sendAdminAuthRequired } from "./ai/admin-auth";
+import { createQmRuntimeConfigService } from "./ai/qm-runtime-config";
+import type { QmRuntimeConfigDeps } from "./ai/qm-status-api";
 import { EvaluationServiceError, makeEvaluationService } from "./ai/evaluation-service";
 import { LiveEvaluationServiceError, makeLiveEvaluationService } from "./ai/live-evaluation-service";
 import { EvaluationGovernanceError, makeEvaluationGovernanceService } from "./ai/evaluation-governance-service";
@@ -305,14 +307,68 @@ const appearanceUpload = multer({
   }
 });
 
+/**
+ * Wire the QM runtime-config service + bounded test probe to the live
+ * repositories. The service stores only references in app_settings; the probe
+ * reuses the same CredentialBackedProvider path as the credential-test route so
+ * QM never guesses an unverified endpoint. The decrypted key lives only inside
+ * the per-call adapter and is never written to process.env or returned.
+ */
+function createQmRuntimeConfigDeps(): QmRuntimeConfigDeps {
+  const service = createQmRuntimeConfigService(repos.settings, {
+    findProvider: (id) => {
+      const row = repos.aiProviders.findConfig(id);
+      return row ? {
+        id: row.id, provider: row.provider, slug: row.slug, displayName: row.displayName,
+        baseUrl: row.baseUrl, model: row.model, enabled: row.enabled
+      } : null;
+    },
+    findCredential: (id) => {
+      const row = repos.aiProviders.findCredential(id);
+      return row ? {
+        id: row.id, providerConfigId: row.providerConfigId, name: row.name,
+        maskedApiKey: row.maskedApiKey, baseUrl: row.baseUrl, model: row.model,
+        status: row.status as "active" | "standby" | "disabled", cooldownUntil: row.cooldownUntil
+      } : null;
+    },
+    enabledModelsForCredential: (credentialId) => repos.aiCredentialModelQuotas.list(credentialId)
+      .filter((quota) => quota.enabled)
+      .map((quota) => quota.model)
+  });
+  return {
+    service,
+    buildProbe: (credentialId, carrier) => async (signal) => {
+      const credential = repos.aiProviders.findCredential(credentialId);
+      if (!credential) throw new Error("credential_not_found");
+      const provider = repos.aiProviders.findConfig(credential.providerConfigId);
+      if (!provider) throw new Error("provider_not_found");
+      const managedProvider = provider.provider as "openai" | "gemini" | "kimi" | "qwen" | "zai";
+      const adapter = new CredentialBackedProvider(
+        managedProvider,
+        repos,
+        provider.model || defaultModelForManagedProvider(managedProvider),
+        credential.id,
+        "development_interactive",
+        () => { carrier.setUpstreamRequestSent(); }
+      );
+      await adapter.generate({
+        requestId: `qm_runtime_test_${randomUUID()}`,
+        prompt: "Reply with OK.",
+        maxOutputTokens: 8,
+        signal
+      });
+      return { upstreamRequestSent: true };
+    }
+  };
+}
+
 const app = express();
 app.use(express.json({ limit: "2mb" }));
-app.use("/api/admin", createAdminOriginMiddleware());
 // Serve uploaded appearance images read-only (rides the /api proxy in both apps).
 app.use("/api/uploads/appearance", express.static(APPEARANCE_UPLOAD_DIR));
 // Security boundary: every current and future admin route is protected here.
 // Public and student routes are mounted outside this prefix and are unaffected.
-app.use("/api/admin", createAdminAuthMiddleware());
+registerQmAdminBoundary(app, process.env, createQmRuntimeConfigDeps());
 
 function fail(res: Response, status: number, message: string) {
   res.status(status).json({ error: message });
@@ -901,32 +957,30 @@ function getPublicSiteConfig() {
 }
 
 function requireAdminAccess(req: Request, res: Response): boolean {
-  // Kept as a defence-in-depth guard for the newer handlers. The canonical
-  // policy is the `/api/admin` middleware registered above.
-  if (process.env.NODE_ENV !== "production" && process.env.ADMIN_ALLOW_INSECURE_DEV === "true") {
-    return true;
-  }
-  const expected = String(process.env.ADMIN_API_TOKEN || "").trim();
-  if (!expected) {
-    if (process.env.NODE_ENV === "production") {
-      fail(res, 503, "admin API authentication is not configured");
-      return false;
-    }
-    fail(res, 401, "admin authentication required");
+  // Kept as a defence-in-depth guard for the newer handlers. Delegates to the
+  // exact same accepted-secret policy as the canonical `/api/admin`
+  // middleware registered above (isAcceptedAdminToken) so a dev-password
+  // login that middleware already accepted is never rejected here — this
+  // guard previously compared only against the production ADMIN_API_TOKEN,
+  // which rejected every non-production dev-password session and produced
+  // spurious 401s on the routes that call this function.
+  const config = resolveAdminAuthConfig(process.env);
+  if (config.allowInsecureDev) return true;
+
+  const candidate = candidateAdminToken(req);
+  if (isAcceptedAdminToken(candidate, config)) return true;
+
+  if (!config.token && config.production) {
+    fail(res, 503, "admin API authentication is not configured");
     return false;
   }
-  const candidate = (req.header("x-admin-token") || "").trim() ||
-    (req.header("authorization") || "").replace(/^Bearer\s+/i, "").trim();
-  if (candidate !== expected) {
-    fail(res, 401, "admin authentication required");
-    return false;
-  }
-  return true;
+  sendAdminAuthRequired(res);
+  return false;
 }
 
 /** Stable non-secret actor identifier for audit/preflight binding. */
 function adminActorId(req: Request): string {
-  const candidate = (req.header("x-admin-token") || req.header("authorization") || "").trim();
+  const candidate = candidateAdminToken(req) || "";
   return `admin:${createHash("sha256").update(candidate).digest("hex").slice(0, 24)}`;
 }
 

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createAdminAuthMiddleware, resolveAdminAuthConfig } from "./admin-auth";
+import { ADMIN_AUTH_REQUIRED_CODE, ADMIN_AUTH_STATE_HEADER, createAdminAuthMiddleware, resolveAdminAuthConfig } from "./admin-auth";
 
 function invoke(env: NodeJS.ProcessEnv, headers: Record<string, string> = {}) {
   let nextCalled = false;
   let statusCode = 200;
   let body: unknown;
+  const responseHeaders: Record<string, string> = {};
   const req = {
     header(name: string) {
       return headers[name.toLowerCase()];
@@ -18,12 +19,16 @@ function invoke(env: NodeJS.ProcessEnv, headers: Record<string, string> = {}) {
     json(value: unknown) {
       body = value;
       return this;
+    },
+    setHeader(name: string, value: string) {
+      responseHeaders[name.toLowerCase()] = value;
+      return this;
     }
   } as never;
   createAdminAuthMiddleware(env, () => {})(req, res, () => {
     nextCalled = true;
   });
-  return { nextCalled, statusCode, body };
+  return { nextCalled, statusCode, body, responseHeaders };
 }
 
 describe("admin auth boundary", () => {
@@ -31,8 +36,24 @@ describe("admin auth boundary", () => {
     expect(invoke({ NODE_ENV: "production" }).statusCode).toBe(503);
   });
 
-  it("rejects development without explicit insecure opt-in", () => {
-    expect(invoke({ NODE_ENV: "development" }).statusCode).toBe(401);
+  it("accepts the default development password", () => {
+    expect(invoke(
+      { NODE_ENV: "development" },
+      { "x-admin-token": "827827" }
+    ).nextCalled).toBe(true);
+  });
+
+  it("rejects an incorrect development password", () => {
+    expect(invoke(
+      { NODE_ENV: "development" },
+      { "x-admin-token": "wrong" }
+    ).statusCode).toBe(401);
+  });
+
+  it("allows overriding the development password", () => {
+    const env = { NODE_ENV: "development", ADMIN_DEV_PASSWORD: "local-secret" };
+    expect(invoke(env, { "x-admin-token": "local-secret" }).nextCalled).toBe(true);
+    expect(invoke(env, { "x-admin-token": "827827" }).statusCode).toBe(401);
   });
 
   it("allows only explicit development insecure mode", () => {
@@ -49,17 +70,32 @@ describe("admin auth boundary", () => {
     expect(invoke(env).nextCalled).toBe(true);
   });
 
-  it("accepts the correct bearer token and rejects the wrong one", () => {
+  it("accepts the correct bearer token and rejects the wrong one in production", () => {
     const env = { NODE_ENV: "production", ADMIN_API_TOKEN: "admin-secret" };
     expect(invoke(env, { authorization: "Bearer admin-secret" }).nextCalled).toBe(true);
     expect(invoke(env, { authorization: "Bearer wrong" }).statusCode).toBe(401);
   });
 
-  it("never treats the insecure flag as production configuration", () => {
+  it("marks a genuine auth failure with the ADMIN_AUTH_REQUIRED code and the auth-state header", () => {
+    const result = invoke({ NODE_ENV: "development" }, { "x-admin-token": "wrong" });
+    expect(result.statusCode).toBe(401);
+    expect(result.body).toMatchObject({ code: ADMIN_AUTH_REQUIRED_CODE });
+    expect(result.responseHeaders[ADMIN_AUTH_STATE_HEADER.toLowerCase()]).toBe("invalid");
+  });
+
+  it("does not set the auth-state header on the unconfigured-production 503", () => {
+    const result = invoke({ NODE_ENV: "production" });
+    expect(result.statusCode).toBe(503);
+    expect(result.responseHeaders[ADMIN_AUTH_STATE_HEADER.toLowerCase()]).toBeUndefined();
+  });
+
+  it("never exposes the development password in production configuration", () => {
     const config = resolveAdminAuthConfig({
       NODE_ENV: "production",
+      ADMIN_DEV_PASSWORD: "827827",
       ADMIN_ALLOW_INSECURE_DEV: "true"
     });
+    expect(config.devPassword).toBeUndefined();
     expect(config.allowInsecureDev).toBe(false);
   });
 });

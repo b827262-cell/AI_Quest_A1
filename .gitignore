@@ -25,6 +25,19 @@ release-artifacts/
 tmp_*.ts
 .aider*
 
+# Standalone QM deployment secrets and durable runtime state
+deploy/qm/.env
+deploy/qm/node_modules/
+deploy/qm/.generated/
+deploy/qm/runtime/
+deploy/qm/logs/
+deploy/qm/*.db
+deploy/qm/*.sqlite*
+deploy/qm/infra/.terraform/
+deploy/qm/infra/*.tfstate
+deploy/qm/infra/*.tfstate.*
+deploy/qm/infra/*.tfplan
+
 # Local IDE and agent state
 .codewhale/
 .run/
