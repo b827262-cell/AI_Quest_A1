@@ -1,8 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppearanceProvider } from "./appearance";
+import { AdminAuthProvider, useAdminAuth } from "./adminAuth";
 import { AdminShell } from "./components/admin/AdminShell";
 import { AdminDashboardPage } from "./pages/AdminDashboardPage";
 import { AdminAccountsPage } from "./pages/AdminAccountsPage";
+import { AdminLoginPage } from "./pages/AdminLoginPage";
 import { AppearanceSettingsPage } from "./pages/AppearanceSettingsPage";
 import { SiteConfigPage } from "./pages/SiteConfigPage";
 import { AiAnalyticsPage } from "./pages/AiAnalyticsPage";
@@ -16,31 +18,51 @@ import { ChaptersPage } from "./pages/ChaptersPage";
 import { QaPage } from "./pages/QaPage";
 import { QmStatusPage } from "./pages/QmStatusPage";
 
+function AdminApplication() {
+  const { isAuthenticated } = useAdminAuth();
+
+  if (!isAuthenticated) {
+    return (
+      <Routes>
+        <Route path="/admin/login" element={<AdminLoginPage />} />
+        <Route path="*" element={<Navigate to="/admin/login" replace />} />
+      </Routes>
+    );
+  }
+
+  return (
+    <AdminShell>
+      <Routes>
+        <Route path="/admin/login" element={<Navigate to="/admin" replace />} />
+        <Route path="/" element={<Navigate to="/admin" replace />} />
+        <Route path="/admin" element={<AdminDashboardPage />} />
+        <Route path="/admin/accounts" element={<AdminAccountsPage />} />
+        <Route path="/admin/appearance" element={<AppearanceSettingsPage />} />
+        <Route path="/admin/site-config" element={<SiteConfigPage />} />
+        <Route path="/admin/ai-analytics" element={<AiAnalyticsPage />} />
+        <Route path="/admin/ai-providers" element={<AiProvidersPage />} />
+        <Route path="/admin/ai-quota-center" element={<AiQuotaCenterPage />} />
+        <Route path="/admin/ai-quality-evaluations" element={<AiQualityEvaluationsPage />} />
+        <Route path="/admin/books" element={<BooksPage />} />
+        <Route path="/admin/books/new" element={<NewBookPage />} />
+        {/* Dedicated reader-management pages take precedence over the tabbed detail. */}
+        <Route path="/admin/books/:bookId/chapters" element={<ChaptersPage />} />
+        <Route path="/admin/books/:bookId/qa" element={<QaPage />} />
+        <Route path="/admin/books/:bookId/*" element={<BookDetail />} />
+        <Route path="/admin/qm-status" element={<QmStatusPage />} />
+        <Route path="*" element={<Navigate to="/admin" replace />} />
+      </Routes>
+    </AdminShell>
+  );
+}
+
 export function App() {
   return (
     <BrowserRouter>
       <AppearanceProvider>
-        <AdminShell>
-          <Routes>
-            <Route path="/" element={<Navigate to="/admin" replace />} />
-            <Route path="/admin" element={<AdminDashboardPage />} />
-            <Route path="/admin/accounts" element={<AdminAccountsPage />} />
-            <Route path="/admin/appearance" element={<AppearanceSettingsPage />} />
-            <Route path="/admin/site-config" element={<SiteConfigPage />} />
-            <Route path="/admin/ai-analytics" element={<AiAnalyticsPage />} />
-            <Route path="/admin/ai-providers" element={<AiProvidersPage />} />
-            <Route path="/admin/ai-quota-center" element={<AiQuotaCenterPage />} />
-            <Route path="/admin/ai-quality-evaluations" element={<AiQualityEvaluationsPage />} />
-            <Route path="/admin/books" element={<BooksPage />} />
-            <Route path="/admin/books/new" element={<NewBookPage />} />
-            {/* Dedicated reader-management pages take precedence over the tabbed detail. */}
-            <Route path="/admin/books/:bookId/chapters" element={<ChaptersPage />} />
-            <Route path="/admin/books/:bookId/qa" element={<QaPage />} />
-            <Route path="/admin/books/:bookId/*" element={<BookDetail />} />
-            <Route path="/admin/qm-status" element={<QmStatusPage />} />
-            <Route path="*" element={<Navigate to="/admin" replace />} />
-          </Routes>
-        </AdminShell>
+        <AdminAuthProvider>
+          <AdminApplication />
+        </AdminAuthProvider>
       </AppearanceProvider>
     </BrowserRouter>
   );
