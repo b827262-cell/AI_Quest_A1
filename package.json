@@ -35,7 +35,8 @@
     "admin:build": "pnpm --filter AI-adm-D1 build",
     "qm:init": "node scripts/qm-init.mjs",
     "qm:validate": "node scripts/qm-validate.mjs",
-    "qm:smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/qm-feedback-smoke.ts"
+    "qm:smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/qm-feedback-smoke.ts",
+    "admin:navigation-smoke": "node scripts/admin-navigation-smoke.mjs"
   },
   "devDependencies": {
     "happy-dom": "^20.11.1",

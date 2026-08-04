@@ -980,7 +980,7 @@ function requireAdminAccess(req: Request, res: Response): boolean {
 
 /** Stable non-secret actor identifier for audit/preflight binding. */
 function adminActorId(req: Request): string {
-  const candidate = (req.header("x-admin-token") || req.header("authorization") || "").trim();
+  const candidate = candidateAdminToken(req) || "";
   return `admin:${createHash("sha256").update(candidate).digest("hex").slice(0, 24)}`;
 }
 

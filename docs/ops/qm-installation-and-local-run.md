@@ -9,7 +9,7 @@
 
 All static contracts, typechecks, lint rules, boundary constraints, application smoke tests, and secret scans have **PASSED**. Container runtime startup (`qm up`) remains blocked pending external credential provision and explicit execution authorization.
 
-Round 2 (test stabilization + lint gate fixes) resolved the 25 `explicit any` lint errors in `apps/AI-adm-D1` and the `qm-runner.test.ts` global-lock pollution under Vitest's default 5s timeout — see §7. Round 3 (independent security/contract review of the `/admin/ai-providers` QM Runtime Settings integration) found and fixed a real SSRF gap on `baseUrlOverride`, an unreachable `upstream_error` classification branch, a missing browser-side response schema validation, and a silently-skipped `packages/contracts` test suite — see §8.
+Round 2 (test stabilization + lint gate fixes) resolved the 25 `explicit any` lint errors in `apps/AI-adm-D1` and the `qm-runner.test.ts` global-lock pollution under Vitest's default 5s timeout — see §7. Round 3 (independent security/contract review of the `/admin/ai-providers` QM Runtime Settings integration) found and fixed a real SSRF gap on `baseUrlOverride`, an unreachable `upstream_error` classification branch, a missing browser-side response schema validation, and a silently-skipped `packages/contracts` test suite — see §8. Round 4 fixed a real user-reported bug where admin sidebar navigation repeatedly bounced to `/admin/login` (a duplicated, out-of-sync server auth check plus an over-eager browser session-invalidation rule) — see §9. Phase 5 turned that fix's manual Chrome verification into a repeatable `pnpm admin:navigation-smoke` regression gate and performed a final cross-layer audit of the auth contract and the QM/API-key boundary — see §10.
 
 ---
 
@@ -88,7 +88,8 @@ pnpm run typecheck:release-scripts    # PASS
 pnpm run lint                         # PASS (13 workspace projects, 0 errors, 0 warnings)
 pnpm run lint:release-scripts         # PASS (8 scripts checked, 0 errors, 0 warnings)
 pnpm run build                        # PASS
-pnpm run test                         # PASS (82 test files, 1118 unit/integration tests) — see §8
+pnpm run test                         # PASS (82 test files, 1132 unit/integration tests) — see §8, §9
+pnpm run admin:navigation-smoke       # PASS (real headless Chrome, 11 routes x 3 rounds) — see §10
 pnpm run qm:smoke                     # PASS (submission -> draft -> review -> publish)
 node scripts/qm-browser-boundary.mjs                       # PASS (root, server-free browser boundary)
 (cd apps/AI-Stu-R1 && node ../../scripts/qm-browser-boundary.mjs)  # PASS (apps/AI-Stu-R1, server-free browser boundary)
@@ -242,9 +243,99 @@ pnpm --filter AI-adm-D1 exec tsc --noEmit                                       
 Full gate re-run after all fixes: typecheck / typecheck:release-scripts / lint / lint:release-scripts / build / qm:smoke / `node scripts/qm-browser-boundary.mjs` (root + `apps/AI-Stu-R1`) / `npm exec @yc-software/qm@0.1.4 -- qm --help` / `git diff --check` all **PASS**; `pnpm run test` **PASS 1118/1118** across 82 files; `pnpm run qm:validate` returns Contract PASS / Doctor ENVIRONMENT BLOCKED / exit 1 (expected, no real credentials, no deployment attempted); filename-only secret scan found 0 exposed files and `deploy/qm/.env` remains untracked.
 
 `qm up` was **not** executed. No cloud resources were created. No credentials, real or placeholder, were added. Final verdict remains `CONTRACT_ONLY_ACCEPTED_RUNTIME_BLOCKED`.
+
 ---
 
-## 9. Next Steps & Approval Gate
+## 9. Round 4 — Admin Navigation Login-Bounce Fix
+
+Starting state for this round (remote head `69b02b2`): a real user report that switching between `/admin/*` sidebar sections repeatedly bounced back to `/admin/login`, forcing repeated re-login, even with a valid dev-password session. Chrome Network evidence showed `ai-evaluation-alerts`, `retention`, `governance`, `settings`, `live-readiness`, and `production-readiness` returning 401 while `ai-providers`/`runtime-config`/`credentials` succeeded in the same window.
+
+### Root cause
+
+Two independent, additive defects:
+
+1. **Server — duplicated auth policy.** `apps/AI-adm-D1/src/server/index.ts`'s route-local `requireAdminAccess()` guard (called by every evaluation/governance/pilot/analytics route) re-implemented its own token comparison against only the production `ADMIN_API_TOKEN`, ignoring the non-production dev-password fallback that the canonical `/api/admin` middleware (`createAdminAuthMiddleware`) already accepted. A valid dev-password login therefore passed the global boundary but was rejected by this second, stricter, out-of-sync guard on every route that called it — reproduced live via `git stash` (pre-fix: 401 on the affected routes; post-fix: 200 on all of them).
+2. **Browser — over-eager session invalidation.** `apps/AI-adm-D1/src/adminAuth.tsx`'s fetch interceptor treated *any* same-origin `/api/admin/*` 401 as "session expired" and cleared the token immediately, so the first false-positive 401 from defect 1 logged the user out everywhere, even on tabs/routes that never made the failing call.
+
+### Fixes
+
+- `apps/AI-adm-D1/src/server/ai/admin-auth.ts`: extracted the single canonical accepted-secret check (`isAcceptedAdminToken`), a shared candidate-token reader (`candidateAdminToken`), and the exact safe-failure response (`sendAdminAuthRequired`, which sets `code: "ADMIN_AUTH_REQUIRED"` and the `X-Admin-Auth-State: invalid` header) as the one source of truth both the global middleware and `requireAdminAccess` now call.
+- `apps/AI-adm-D1/src/server/index.ts`: `requireAdminAccess` rewritten to delegate entirely to the shared policy — no more hand-rolled comparison.
+- `apps/AI-adm-D1/src/adminAuth.tsx`: the interceptor now clears the session only when **all four** hold: a token was actually dispatched with the request, the response is 401, the response carries the `ADMIN_AUTH_REQUIRED` marker (header or body code — business 401s never carry it), and `getAdminToken()` still equals the dispatched token at the moment of the check (checked before and after the async marker read). This same token-snapshot check makes concurrent marked-401s single-flight without an extra dedupe flag, and rejects a late/stale response for a token that a fresh login has already superseded.
+
+### Real HTTP/Chrome acceptance
+
+`curl` against the live (pre-fix vs. post-fix, via `git stash`/`git stash pop`) server reproduced and then resolved the exact 8-endpoint symptom set; a wrong dev password returns `401` with `X-Admin-Auth-State: invalid` and `code: ADMIN_AUTH_REQUIRED`. In real Chrome: logged in, then performed 3 full rounds of navigation across all 10 sidebar sections with **zero 401s** observed on any `/api/admin/*` call; manually corrupted the stored token via `sessionStorage.setItem` and confirmed exactly one logout/redirect to `/admin/login`.
+
+### Targeted verification
+
+`adminAuth.test.ts` (browser) gained 15 tests covering: marked-401-via-header/-via-body-code clears the session; unmarked business 401 and parameterized 403/409/422/500 responses do not; a no-token marked-401 does not clear an unrelated session; a stale token's late 401 does not clear a freshly-logged-in token; 10 concurrent marked 401s produce exactly one clear and one event; a wrong-password login probe does not clear a different, still-valid session; `Request` object vs. string-URL calls preserve method/body/signal. `admin-auth.test.ts` (server) gained 2 tests for the `ADMIN_AUTH_REQUIRED` code/header pairing and its absence on the unconfigured-production 503. Full gate: **PASS 1132/1132** across 82 files (up from 1118 — 15 browser + 2 server new tests, minus none removed).
+
+`qm up` was **not** executed in this round either. Final verdict remained `CONTRACT_ONLY_ACCEPTED_RUNTIME_BLOCKED`.
+
+---
+
+## 10. Phase 5 — Admin Navigation Regression Automation & Final Cross-Layer Audit
+
+Starting state for this round (remote head `e065741`): Round 4's fix was verified only by a one-off manual real-Chrome session. This round turns that manual evidence into a repeatable, unattended regression gate, and performs a final cross-layer audit of everything landed today (QM Runtime Settings, API-key boundary, and the Round 4 auth-contract fix) before handoff.
+
+### A. `pnpm admin:navigation-smoke`
+
+`scripts/admin-navigation-smoke.mjs` (registered as `pnpm admin:navigation-smoke`) is a self-contained, dependency-free (Chrome DevTools Protocol over the platform `WebSocket` global — no Playwright/Puppeteer added) regression smoke that:
+
+1. Spawns an isolated Admin API instance (`tsx src/server/index.ts`) on a dedicated port against a fresh temporary SQLite file (`SQLITE_PATH`), and an isolated Vite dev server on a dedicated port — both distinct from the conventional dev ports so the smoke never collides with (or reads/writes) a real local dev session or its database. Readiness is polled over HTTP (`/api/appearance-settings`, `/`), never a fixed sleep.
+2. Sets `ADMIN_ALLOWED_ORIGINS` to its own isolated web origin so the admin API's CORS/origin boundary (`admin-origin.ts`, otherwise hardcoded to the conventional port 5174) accepts it, and unsets `ADMIN_API_TOKEN` for the child process only (never touching the invoking shell's `process.env`) so the isolated server runs the same dev-password path exercised throughout this branch's testing.
+3. Launches headless Chrome via raw CDP and logs in through the real `/admin/login` form using the local dev password (never printed, logged, or written to the JSON artifact — only pass/fail booleans and status codes are recorded).
+4. Drives the same browser tab through all 11 current `AdminSidebar` routes, 3 full rounds, clicking the real sidebar `<a>` elements (not URL-bar navigation) so it exercises the same client-side route-switch path as the original bug report.
+5. Every navigation waits for the page to be free of a loading indicator **and** for the fetch interceptor's install marker to be present on the current document — the latter closes a real race discovered while stabilizing this script: Vite's dev client can trigger its own `location.reload()` (e.g. right after first-run dependency pre-bundling) independently of any reload the script initiates, and checking only `document.readyState` can observe the outgoing document mid-teardown.
+6. Asserts, from captured `Network.responseReceived` events, zero `ADMIN_AUTH_REQUIRED`-marked and zero unexpected 401 responses across all `/api/admin/*` traffic during the valid-session phase, and that the session token is still present after the full sweep.
+7. Reloads 2 representative pages (`/admin/ai-providers`, `/admin/qm-status`) and confirms the session survives a hard refresh.
+8. Fires a real POST to a non-existent alert's acknowledge endpoint (a genuine, unmarked business `404` from live server code, not a mock) and confirms it does **not** clear the session — the full `401/403/409/422/500`-non-invalidation matrix is exhaustively parameterized at the unit level in `adminAuth.test.ts` (§9); this live check adds one real end-to-end confirmation on top, since deterministically producing each of 403/409/422/500 from the real server requires seeded fixture rows a fresh smoke database does not have.
+9. Corrupts the stored token, fires 5 concurrent requests to distinct real admin endpoints, and asserts all 5 return a marked 401, exactly **one** `ai-quest:admin-auth-expired` event fires (no event storm), and the SPA auto-redirects to `/admin/login` exactly once.
+10. Cleans up unconditionally in a `finally` block — closes the CDP socket, terminates the Chrome, Admin API, and Vite child processes (SIGTERM then SIGKILL fallback), and removes the temporary directory (SQLite file + Chrome profile) — even on failure or a thrown assertion.
+11. Writes a redacted JSON artifact via the existing `writeSanitizedArtifact` helper (same secret-scanning/redaction path used by `admin-provider-ui-e2e.mjs`) and prints only route/status/pass-fail counts to stdout; never a token, password, cookie, or `Authorization`/`X-Admin-Token` header value.
+
+If no headless Chrome binary is available, the script exits `2` (`BLOCKED`) with a redacted diagnostic rather than silently passing — it never substitutes a `happy-dom` stub for this check. In this environment Chrome is present and the smoke runs against a real browser and real server.
+
+**Verified locally**: 10 consecutive runs, 10/10 pass, 0 leaked ports/processes after each run (`ss -ltnp` clean, temp dirs removed).
+
+### B. Auth contract final audit
+
+- Confirmed exactly one code path in the entire server emits a `401` (`sendAdminAuthRequired` in `admin-auth.ts`) — there is no other hand-rolled `401` anywhere in `apps/AI-adm-D1/src/server`, so "business 401 never carries the marker" holds by construction, not by convention.
+- Confirmed `registerQmAdminBoundary` mounts `createAdminOriginMiddleware` then `createAdminAuthMiddleware` on `/api/admin` before any admin route is registered (`index.ts:371`, first admin route at `:1779`), so every `/api/admin/*` request passes the canonical policy at least once regardless of whether the specific route also calls the route-local `requireAdminAccess` defense-in-depth guard.
+- Found and fixed one remaining minor inconsistency: `adminActorId()` (used only to derive a non-secret, one-way-hashed audit-log actor id — never an authentication decision) read `x-admin-token`/`authorization` directly instead of the shared `candidateAdminToken()` reader, so an `Authorization: Bearer ...` caller's audit hash included the literal `"Bearer "` prefix while `x-admin-token` callers did not. Switched it to `candidateAdminToken(req)` for a single consistent source. Not a security gap (nothing was bypassable), just a latent inconsistency.
+- Re-ran `apps/AI-adm-D1`'s full suite after the change: 319/319 tests pass, no regression.
+
+### C. QM / API-key boundary final audit
+
+Re-confirmed, by reading the current code and re-running its dedicated tests (not by re-trusting the Round 3 writeup):
+
+- `qmRuntimeConfigPublicViewSchema` (the only shape the browser ever receives) exposes `maskedApiKey: z.string().nullable()` and no plaintext key field.
+- `QM_RUNTIME_CONFIG_ERROR_CODES` still lists exactly the 9 fail-closed codes end to end.
+- `isSafeQmBaseUrl` SSRF guard is still wired into both the Zod schema (reject at PUT) and `resolveQmRuntimeConfig` (defense in depth at read/test time).
+- `packages/contracts` and `apps/AI-adm-D1`'s QM runtime-config test suites (48 tests across `qm-runtime-config.test.ts`, `qm-runtime-config-http.test.ts`, `qm-status-api.test.ts`, and the contracts package's own suite) all pass unchanged.
+
+No gaps were found in this pass; nothing in Round 4's auth fix touched the QM secret/SSRF boundary, so this section is a confirmation, not a remediation.
+
+### D. Verified / Blocked / Not-attempted matrix
+
+| Layer | State | Evidence |
+| :--- | :--- | :--- |
+| Contract (`qm.config.jsonc` schema) | **Verified** | `qm:validate` → Contract PASS |
+| Doctor (7 runtime secrets) | **Blocked** | `qm:validate` → Doctor ENVIRONMENT BLOCKED, exit 1 (expected — no real credentials provisioned) |
+| Admin UI — QM Runtime Settings card, provider/credential/key masking | **Verified** | Round 3 real Chrome session + this round's contract re-check |
+| Admin UI — sidebar navigation session stability | **Verified** | `pnpm admin:navigation-smoke`, 10/10 real-Chrome runs, plus the one-off manual session in §9 |
+| Admin auth contract (`ADMIN_AUTH_REQUIRED` marker, single-clear, no event storm) | **Verified** | `adminAuth.test.ts`/`admin-auth.test.ts` unit suites + live concurrent-401 assertion in the navigation smoke |
+| QM Core API, Web UI, Session, Sandbox, Memory, Files | **Not attempted** | `qm up` never executed; these layers do not exist without a running container |
+| Real model inference (Anthropic/OpenAI/etc.) | **Not attempted** | No live credentials configured; `mock`/`local-feedback-fixture` providers only |
+
+### Full gate re-run
+
+`pnpm typecheck`, `typecheck:release-scripts`, `lint`, `lint:release-scripts`, `build`, `test` (1132/1132, unchanged from §9 — no test count regression from this round's server audit fix or the new smoke script, which is intentionally outside the `vitest` suites), `admin:navigation-smoke` (PASS), `qm:smoke` (PASS), `qm:validate` (Contract PASS / Doctor ENVIRONMENT BLOCKED / exit 1, expected), the browser-boundary check, `qm --help`, and `git diff --check` all passed. Filename-only secret scan: 0 exposed files. `qm up` was **not** executed. No real or placeholder QM secrets were added. Final verdict remains `CONTRACT_ONLY_ACCEPTED_RUNTIME_BLOCKED`.
+
+---
+
+## 11. Next Steps & Approval Gate
 
 Local runtime deployment (`qm up`) was **NOT** executed. Approval to run `qm up` requires:
 - Target configured as `docker`.
@@ -254,7 +345,7 @@ Local runtime deployment (`qm up`) was **NOT** executed. Approval to run `qm up`
 
 ---
 
-## 10. Doctor blocker remediation
+## 12. Doctor blocker remediation
 
 QM `0.1.4` computes these names from `qm.config.jsonc`. The Admin page reports
 only the names, category, and safe next step; it never returns values or raw CLI
