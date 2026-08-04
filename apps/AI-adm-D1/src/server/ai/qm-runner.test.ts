@@ -3,6 +3,7 @@ import {
   MAX_OUTPUT_BYTES,
   QmOperationBusyError,
   buildQmChildEnv,
+  buildQmRunEnv,
   createQmRunner,
   parseContractResult,
   parseDoctorResult,
@@ -180,6 +181,32 @@ describe("QM child environment boundary", () => {
     });
     expect(env).toEqual({ PATH: "/usr/bin", HOME: "/home/operator", LANG: "zh_TW.UTF-8" });
     expect(JSON.stringify(env)).not.toContain("must-not-cross");
+  });
+});
+
+describe("buildQmRunEnv per-run secret isolation", () => {
+  it("merges run secrets onto the minimal child env without touching process.env", () => {
+    const sentinel = "RUN_SECRET_SENTINEL_VALUE";
+    delete process.env.RUN_SECRET;
+    try {
+      const env = buildQmRunEnv({ RUN_SECRET: sentinel }, { PATH: "/usr/bin", HOME: "/h" });
+      expect(env.RUN_SECRET).toBe(sentinel);
+      expect(env.PATH).toBe("/usr/bin");
+      // The shared process.env is never mutated.
+      expect(process.env.RUN_SECRET).toBeUndefined();
+    } finally {
+      delete process.env.RUN_SECRET;
+    }
+  });
+
+  it("produces independent env objects for concurrent runs (no cross-contamination)", () => {
+    const envA = buildQmRunEnv({ RUN_SECRET: "A" });
+    const envB = buildQmRunEnv({ RUN_SECRET: "B" });
+    expect(envA.RUN_SECRET).toBe("A");
+    expect(envB.RUN_SECRET).toBe("B");
+    expect(envA).not.toBe(envB);
+    expect("A" in envB).toBe(false);
+    expect("B" in envA).toBe(false);
   });
 });
 

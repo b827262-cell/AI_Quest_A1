@@ -370,6 +370,29 @@ export function buildQmChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(allowed.flatMap((name) => source[name] === undefined ? [] : [[name, source[name]]]));
 }
 
+/**
+ * Build a fresh, isolated per-run child env for a QM run that needs a runtime
+ * secret. The secret is merged into a *brand-new* object derived from the
+ * minimal {@link buildQmChildEnv} allowlist — the shared `process.env` is never
+ * read for secrets and never mutated.
+ *
+ * This is the explicit countermeasure to the cross-Run secret-pollution
+ * anti-pattern `process.env.OPENAI_API_KEY = decryptedKey;`. Each concurrent
+ * run calls this with its own `secretEnv`, so the secret for run A can never be
+ * observed by run B (or by any code that later reads `process.env`). The
+ * returned object is only handed to the single spawned subprocess and then
+ * discarded.
+ *
+ * Secrets must never be passed via command-line arguments (visible in `ps`),
+ * and all captured stdout/stderr is still passed through {@link redactSecrets}.
+ */
+export function buildQmRunEnv(
+  secretEnv: Record<string, string>,
+  source: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  return { ...buildQmChildEnv(source), ...secretEnv };
+}
+
 /* ── Node 24 wrapper for QM CLI ────────────────────────────── */
 
 function qmArgs(cliArgs: string[]): { command: string; args: string[] } {
