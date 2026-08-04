@@ -1,0 +1,23 @@
+{
+  // QM deployment contract major. The exact CLI pin lives in package.json.
+  "contract": 1,
+  "orgId": "ai-quest-a1",
+  // Local-only baseline. A cloud public URL is intentionally not configured here.
+  "publicUrl": "http://localhost:8082",
+  "target": "docker",
+  // The model provider is a deployment choice; the key remains in .env only.
+  "modelProvider": "anthropic",
+  "services": ["core", "web-ui"],
+  "plugins": [],
+  "skills": [],
+  "env": {
+    "core": {
+      "HARNESS": "pi",
+      "HARNESS_SECURITY_POSTURE": "auto"
+    }
+  },
+  // Docker QM agents use a separately published sandbox image/app.
+  "sandbox": {
+    "app": "ai-quest-a1-sandboxes"
+  }
+}
