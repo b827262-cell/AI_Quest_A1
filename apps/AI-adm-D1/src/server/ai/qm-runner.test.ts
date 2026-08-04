@@ -6,8 +6,6 @@ import {
   parseContractResult,
   parseDoctorResult,
   redactSecrets,
-  runSmoke,
-  runValidate,
   spawnCapture,
   type QmRunnerDependencies,
   type SpawnCaptureResult
@@ -200,29 +198,172 @@ describe("spawnCapture", () => {
   });
 });
 
+/* ── Deterministic lock tests via injected dependencies ───────
+ * These tests never touch a real QM binary, npx/Node-24 download, local
+ * credentials, or subprocess timing: `spawnCapture` is replaced with a
+ * stub returning deferred promises the test resolves/rejects explicitly. */
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function okSpawnResult(stdout = ""): SpawnCaptureResult {
+  return { stdout, stderr: "", exitCode: 0, timedOut: false, spawnError: false };
+}
+
+function timedOutSpawnResult(): SpawnCaptureResult {
+  return { stdout: "", stderr: "", exitCode: -1, timedOut: true, spawnError: false };
+}
+
+/** Fake `spawnCapture` that hands the test a deferred promise per call. */
+function createControlledSpawnCapture(): {
+  spawnCapture: QmRunnerDependencies["spawnCapture"];
+  calls: Array<Deferred<SpawnCaptureResult>>;
+} {
+  const calls: Array<Deferred<SpawnCaptureResult>> = [];
+  const spawnCapture: QmRunnerDependencies["spawnCapture"] = () => {
+    const deferred = createDeferred<SpawnCaptureResult>();
+    calls.push(deferred);
+    return deferred.promise;
+  };
+  return { spawnCapture, calls };
+}
+
+function createTestRunner(overrides: Partial<QmRunnerDependencies> = {}) {
+  return createQmRunner({
+    existsQmBin: () => true,
+    readQmCliVersion: () => "0.1.4",
+    now: () => "2024-01-01T00:00:00.000Z",
+    ...overrides
+  });
+}
+
+const VALID_CONTRACT_JSON = JSON.stringify({ contract: 1, valid: true, clauses: {} });
+
+/**
+ * `runValidate` issues its second `spawnCapture` call (doctor) only after
+ * the first call's deferred promise resolves and the async function
+ * resumes. Resolving `calls[index]` requires first waiting for that call to
+ * exist; flushing microtasks (no real timers, no polling delay) makes that
+ * deterministic instead of racing vitest's own timeout.
+ */
+async function resolveCall(
+  calls: Array<Deferred<SpawnCaptureResult>>,
+  index: number,
+  result: SpawnCaptureResult
+): Promise<void> {
+  while (calls.length <= index) {
+    await Promise.resolve();
+  }
+  calls[index].resolve(result);
+}
+
 describe("qm-runner concurrent lock", () => {
-  it("rejects duplicate validate with operation_already_running", async () => {
-    const p1 = runValidate().catch((e) => e);
-    const p2 = runValidate().catch((e) => e);
+  it("rejects a duplicate validate call before any async work resolves", async () => {
+    const { spawnCapture, calls } = createControlledSpawnCapture();
+    const runner = createTestRunner({ spawnCapture });
 
-    const r2 = await p2;
-    expect(r2).toBeInstanceOf(Error);
-    expect(r2.message).toMatch(/operation_already_running/);
-    await p1;
-  }, 20000);
-
-  it("uses the same lock for validate and smoke", async () => {
-    const first = runValidate().catch((error) => error);
-    const second = runSmoke().catch((error) => error);
+    const first = runner.runValidate();
+    const second = runner.runValidate().catch((error: unknown) => error);
 
     const secondResult = await second;
-    expect(secondResult).toBeInstanceOf(Error);
-    expect(secondResult.message).toMatch(/operation_already_running/);
-    await first;
-  }, 20000);
+    expect(secondResult).toBeInstanceOf(QmOperationBusyError);
+    expect((secondResult as Error).message).toContain("operation_already_running");
 
-  it("releases the global lock after an operation completes", async () => {
-    await runValidate();
-    await runSmoke();
-  }, 30000);
+    // Unblock the first call's two spawnCapture invocations (check, doctor)
+    // so the deferred promises this test created don't leak into others.
+    await resolveCall(calls, 0, okSpawnResult(VALID_CONTRACT_JSON));
+    await resolveCall(calls, 1, okSpawnResult());
+    await first;
+  });
+
+  it("uses the same lock for validate and smoke", async () => {
+    const { spawnCapture, calls } = createControlledSpawnCapture();
+    const runner = createTestRunner({ spawnCapture });
+
+    const first = runner.runValidate();
+    const second = runner.runSmoke().catch((error: unknown) => error);
+
+    const secondResult = await second;
+    expect(secondResult).toBeInstanceOf(QmOperationBusyError);
+
+    await resolveCall(calls, 0, okSpawnResult(VALID_CONTRACT_JSON));
+    await resolveCall(calls, 1, okSpawnResult());
+    await first;
+  });
+
+  it("releases the lock once the operation resolves", async () => {
+    const { spawnCapture, calls } = createControlledSpawnCapture();
+    const runner = createTestRunner({ spawnCapture });
+
+    const first = runner.runValidate();
+    await resolveCall(calls, 0, okSpawnResult(VALID_CONTRACT_JSON));
+    await resolveCall(calls, 1, okSpawnResult());
+    await first;
+
+    // The lock must be free now; a second call should proceed to spawn again
+    // instead of rejecting with QmOperationBusyError.
+    const second = runner.runValidate();
+    await resolveCall(calls, 2, okSpawnResult(VALID_CONTRACT_JSON));
+    await resolveCall(calls, 3, okSpawnResult());
+    await expect(second).resolves.toBeDefined();
+  });
+
+  it("releases the lock after the operation rejects", async () => {
+    const { spawnCapture, calls } = createControlledSpawnCapture();
+    const runner = createTestRunner({ spawnCapture });
+
+    const first = runner.runValidate().catch((error: unknown) => error);
+    calls[0]?.reject(new Error("boom"));
+    const firstResult = await first;
+    expect(firstResult).toBeInstanceOf(Error);
+    expect((firstResult as Error).message).toBe("boom");
+
+    // The lock must be released even though the operation threw.
+    const second = runner.runValidate();
+    await resolveCall(calls, 1, okSpawnResult(VALID_CONTRACT_JSON));
+    await resolveCall(calls, 2, okSpawnResult());
+    await expect(second).resolves.toBeDefined();
+  });
+
+  it("releases the lock after a simulated timeout/process failure", async () => {
+    const { spawnCapture, calls } = createControlledSpawnCapture();
+    const runner = createTestRunner({ spawnCapture });
+
+    const first = runner.runValidate();
+    await resolveCall(calls, 0, timedOutSpawnResult());
+    const firstStatus = await first;
+    expect(firstStatus.contract.valid).toBe(false);
+    expect(firstStatus.doctor.status).toBe("fail");
+
+    const second = runner.runValidate();
+    await resolveCall(calls, 1, okSpawnResult(VALID_CONTRACT_JSON));
+    await resolveCall(calls, 2, okSpawnResult());
+    await expect(second).resolves.toBeDefined();
+  });
+
+  it("does not touch a real QM binary when existsQmBin reports it missing", async () => {
+    const runner = createTestRunner({
+      existsQmBin: () => false,
+      spawnCapture: () => {
+        throw new Error("spawnCapture must not be called when the QM binary is absent");
+      }
+    });
+
+    const status = await runner.runValidate();
+    expect(status.contract.valid).toBe(false);
+    expect(status.doctor.status).toBe("fail");
+  });
 });

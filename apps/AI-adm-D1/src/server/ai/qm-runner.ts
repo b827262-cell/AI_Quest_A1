@@ -216,36 +216,13 @@ function processFailureDoctor(exitCode: number): QmDoctorResult {
   });
 }
 
-/* ── In-memory state and global operation coordinator ───────── */
-
-let cachedStatus: QmStatusResponse | null = null;
-let runningOperation: "validate" | "smoke" | null = null;
+/* ── Operation lock error ────────────────────────────────────── */
 
 export class QmOperationBusyError extends Error {
   constructor(operation: "validate" | "smoke") {
     super(`operation_already_running: ${operation}`);
     this.name = "QmOperationBusyError";
   }
-}
-
-function acquireOperation(operation: "validate" | "smoke"): void {
-  if (runningOperation) throw new QmOperationBusyError(runningOperation);
-  runningOperation = operation;
-}
-
-function releaseOperation(): void {
-  runningOperation = null;
-}
-
-/** Return the last computed status. Returns null before any operation runs. */
-export function getCachedQmStatus(): QmStatusResponse | null {
-  return cachedStatus ? qmStatusResponseSchema.parse(cachedStatus) : null;
-}
-
-function updateCachedStatus(next: QmStatusResponse): QmStatusResponse {
-  const validated = qmStatusResponseSchema.parse(next);
-  cachedStatus = validated;
-  return qmStatusResponseSchema.parse(validated);
 }
 
 /* ── Child process helper ──────────────────────────────────── */
@@ -363,8 +340,10 @@ function qmArgs(cliArgs: string[]): { command: string; args: string[] } {
 
 function readQmCliVersion(): string {
   try {
-    const pkg = JSON.parse(readFileSync(resolve(DEPLOY_QM_DIR, "package.json"), "utf8"));
-    return pkg.dependencies?.["@yc-software/qm"] ?? "unknown";
+    const pkg: unknown = JSON.parse(readFileSync(resolve(DEPLOY_QM_DIR, "package.json"), "utf8"));
+    const dependencies = isRecord(pkg) && isRecord(pkg.dependencies) ? pkg.dependencies : {};
+    const version = dependencies["@yc-software/qm"];
+    return typeof version === "string" ? version : "unknown";
   } catch {
     return "unknown";
   }
@@ -374,104 +353,167 @@ function notRunSmoke(): QmSmokeResult {
   return { status: "not_run", checkedAt: null, message: null };
 }
 
-function readyStatus(
-  contract: QmContractResult,
-  doctor: QmDoctorResult,
-  smoke: QmSmokeResult,
-  qmCliVersion: string
-): QmSystemStatus {
-  return qmStatusResponseSchema.parse({
-    state: "ready",
-    overallStatus: deriveOverallStatus(contract, doctor, smoke),
-    checkedAt: new Date().toISOString(),
-    qmCliVersion,
-    contract,
-    doctor,
-    smoke
-  }) as QmSystemStatus;
-}
-
 function smokeFailureMessage(result: SpawnCaptureResult): string {
   if (result.timedOut) return "QM smoke test timed out.";
   if (result.spawnError) return "QM smoke test could not start.";
   return "QM smoke test failed.";
 }
 
-/* ── Public API ────────────────────────────────────────────── */
+/* ── Injectable runner boundary ──────────────────────────────
+ * `runValidate`/`runSmoke` depend on subprocess execution, QM binary
+ * presence, the pinned CLI version, and wall-clock time. Bundling those as
+ * an overridable dependency set lets unit tests drive the operation lock
+ * deterministically with stub promises instead of a real `qm` subprocess. */
 
-/** Run `qm check --json` and `qm doctor` in the deploy/qm directory. */
-export async function runValidate(): Promise<QmSystemStatus> {
-  acquireOperation("validate");
-  try {
-    const qmCliVersion = readQmCliVersion();
-    if (!existsSync(QM_BIN)) {
-      const status = readyStatus(
-        { valid: false, version: 0, clauses: {} },
-        processFailureDoctor(-1),
-        cachedStatus?.smoke ?? notRunSmoke(),
-        qmCliVersion
+export type QmRunnerDependencies = {
+  spawnCapture: typeof spawnCapture;
+  existsQmBin: () => boolean;
+  readQmCliVersion: () => string;
+  now: () => string;
+};
+
+function defaultQmRunnerDependencies(): QmRunnerDependencies {
+  return {
+    spawnCapture,
+    existsQmBin: () => existsSync(QM_BIN),
+    readQmCliVersion,
+    now: () => new Date().toISOString()
+  };
+}
+
+export type QmRunner = {
+  runValidate(): Promise<QmSystemStatus>;
+  runSmoke(): Promise<QmStatusResponse>;
+  getCachedQmStatus(): QmStatusResponse | null;
+};
+
+/** Build a QM runner. Production code uses the default (real) dependencies. */
+export function createQmRunner(overrides: Partial<QmRunnerDependencies> = {}): QmRunner {
+  const deps: QmRunnerDependencies = { ...defaultQmRunnerDependencies(), ...overrides };
+
+  let cachedStatus: QmStatusResponse | null = null;
+  let runningOperation: "validate" | "smoke" | null = null;
+
+  function acquireOperation(operation: "validate" | "smoke"): void {
+    if (runningOperation) throw new QmOperationBusyError(runningOperation);
+    runningOperation = operation;
+  }
+
+  function releaseOperation(): void {
+    runningOperation = null;
+  }
+
+  function getCachedQmStatus(): QmStatusResponse | null {
+    return cachedStatus ? qmStatusResponseSchema.parse(cachedStatus) : null;
+  }
+
+  function updateCachedStatus(next: QmStatusResponse): QmStatusResponse {
+    const validated = qmStatusResponseSchema.parse(next);
+    cachedStatus = validated;
+    return qmStatusResponseSchema.parse(validated);
+  }
+
+  function readyStatus(
+    contract: QmContractResult,
+    doctor: QmDoctorResult,
+    smoke: QmSmokeResult,
+    qmCliVersion: string
+  ): QmSystemStatus {
+    return qmStatusResponseSchema.parse({
+      state: "ready",
+      overallStatus: deriveOverallStatus(contract, doctor, smoke),
+      checkedAt: deps.now(),
+      qmCliVersion,
+      contract,
+      doctor,
+      smoke
+    }) as QmSystemStatus;
+  }
+
+  /** Run `qm check --json` and `qm doctor` in the deploy/qm directory. */
+  async function runValidate(): Promise<QmSystemStatus> {
+    acquireOperation("validate");
+    try {
+      const qmCliVersion = deps.readQmCliVersion();
+      if (!deps.existsQmBin()) {
+        const status = readyStatus(
+          { valid: false, version: 0, clauses: {} },
+          processFailureDoctor(-1),
+          cachedStatus?.smoke ?? notRunSmoke(),
+          qmCliVersion
+        );
+        return updateCachedStatus(status) as QmSystemStatus;
+      }
+
+      const { command: checkCmd, args: checkArgs } = qmArgs(["check", "--json"]);
+      const checkResult = await deps.spawnCapture(checkCmd, checkArgs, DEPLOY_QM_DIR);
+      const checkParseable = isContractOutputParseable(checkResult.stdout);
+      const parsedContract = parseContractResult(checkResult.stdout);
+      const contractResult: QmContractResult = {
+        ...parsedContract,
+        valid: !checkResult.spawnError && !checkResult.timedOut && checkParseable
+          ? parsedContract.valid && checkResult.exitCode === 0
+          : false
+      };
+
+      let doctor: QmDoctorResult;
+      if (checkResult.spawnError || checkResult.timedOut) {
+        doctor = processFailureDoctor(checkResult.timedOut ? -1 : checkResult.exitCode);
+      } else {
+        const { command: doctorCmd, args: doctorArgs } = qmArgs(["doctor"]);
+        const doctorProcess = await deps.spawnCapture(doctorCmd, doctorArgs, DEPLOY_QM_DIR);
+        doctor = doctorProcess.spawnError || doctorProcess.timedOut
+          ? processFailureDoctor(doctorProcess.timedOut ? -1 : doctorProcess.exitCode)
+          : parseDoctorResult(doctorProcess.stdout, doctorProcess.stderr, doctorProcess.exitCode);
+      }
+
+      const smoke = cachedStatus?.smoke ?? notRunSmoke();
+      return updateCachedStatus(readyStatus(contractResult, doctor, smoke, qmCliVersion)) as QmSystemStatus;
+    } finally {
+      releaseOperation();
+    }
+  }
+
+  /** Run the feedback workflow smoke test and update only the smoke result. */
+  async function runSmoke(): Promise<QmStatusResponse> {
+    acquireOperation("smoke");
+    try {
+      const tsxLoader = resolve(PROJECT_ROOT, "apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs");
+      const smokeScript = resolve(PROJECT_ROOT, "scripts/qm-feedback-smoke.ts");
+      const result = await deps.spawnCapture(
+        process.execPath,
+        ["--import", tsxLoader, smokeScript],
+        PROJECT_ROOT
       );
-      return updateCachedStatus(status) as QmSystemStatus;
+      const passed = !result.spawnError && !result.timedOut && result.exitCode === 0 && result.stdout.includes("PASS");
+      const smokeResult: QmSmokeResult = {
+        status: passed ? "pass" : "fail",
+        checkedAt: deps.now(),
+        message: passed ? null : smokeFailureMessage(result)
+      };
+
+      if (cachedStatus?.state === "ready") {
+        return updateCachedStatus(readyStatus(
+          cachedStatus.contract,
+          cachedStatus.doctor,
+          smokeResult,
+          cachedStatus.qmCliVersion
+        ));
+      }
+
+      return updateCachedStatus(makeQmNotCheckedStatus(smokeResult));
+    } finally {
+      releaseOperation();
     }
-
-    const { command: checkCmd, args: checkArgs } = qmArgs(["check", "--json"]);
-    const checkResult = await spawnCapture(checkCmd, checkArgs, DEPLOY_QM_DIR);
-    const checkParseable = isContractOutputParseable(checkResult.stdout);
-    const parsedContract = parseContractResult(checkResult.stdout);
-    const contractResult: QmContractResult = {
-      ...parsedContract,
-      valid: !checkResult.spawnError && !checkResult.timedOut && checkParseable
-        ? parsedContract.valid && checkResult.exitCode === 0
-        : false
-    };
-
-    let doctor: QmDoctorResult;
-    if (checkResult.spawnError || checkResult.timedOut) {
-      doctor = processFailureDoctor(checkResult.timedOut ? -1 : checkResult.exitCode);
-    } else {
-      const { command: doctorCmd, args: doctorArgs } = qmArgs(["doctor"]);
-      const doctorProcess = await spawnCapture(doctorCmd, doctorArgs, DEPLOY_QM_DIR);
-      doctor = doctorProcess.spawnError || doctorProcess.timedOut
-        ? processFailureDoctor(doctorProcess.timedOut ? -1 : doctorProcess.exitCode)
-        : parseDoctorResult(doctorProcess.stdout, doctorProcess.stderr, doctorProcess.exitCode);
-    }
-
-    const smoke = cachedStatus?.smoke ?? notRunSmoke();
-    return updateCachedStatus(readyStatus(contractResult, doctor, smoke, qmCliVersion)) as QmSystemStatus;
-  } finally {
-    releaseOperation();
   }
+
+  return { runValidate, runSmoke, getCachedQmStatus };
 }
 
-/** Run the feedback workflow smoke test and update only the smoke result. */
-export async function runSmoke(): Promise<QmStatusResponse> {
-  acquireOperation("smoke");
-  try {
-    const tsxLoader = resolve(PROJECT_ROOT, "apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs");
-    const smokeScript = resolve(PROJECT_ROOT, "scripts/qm-feedback-smoke.ts");
-    const result = await spawnCapture(
-      process.execPath,
-      ["--import", tsxLoader, smokeScript],
-      PROJECT_ROOT
-    );
-    const passed = !result.spawnError && !result.timedOut && result.exitCode === 0 && result.stdout.includes("PASS");
-    const smokeResult: QmSmokeResult = {
-      status: passed ? "pass" : "fail",
-      checkedAt: new Date().toISOString(),
-      message: passed ? null : smokeFailureMessage(result)
-    };
+/* ── Public API (production singleton, real dependencies) ───── */
 
-    if (cachedStatus?.state === "ready") {
-      return updateCachedStatus(readyStatus(
-        cachedStatus.contract,
-        cachedStatus.doctor,
-        smokeResult,
-        cachedStatus.qmCliVersion
-      ));
-    }
+const defaultRunner = createQmRunner();
 
-    return updateCachedStatus(makeQmNotCheckedStatus(smokeResult));
-  } finally {
-    releaseOperation();
-  }
-}
+export const runValidate: () => Promise<QmSystemStatus> = defaultRunner.runValidate;
+export const runSmoke: () => Promise<QmStatusResponse> = defaultRunner.runSmoke;
+export const getCachedQmStatus: () => QmStatusResponse | null = defaultRunner.getCachedQmStatus;
