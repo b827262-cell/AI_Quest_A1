@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { parseContractResult, parseDoctorResult, redactSecrets } from "./qm-runner";
+import {
+  MAX_OUTPUT_BYTES,
+  parseContractResult,
+  parseDoctorResult,
+  redactSecrets,
+  runSmoke,
+  runValidate,
+  spawnCapture
+} from "./qm-runner";
 
 describe("redactSecrets", () => {
   it("removes sk-ant-* keys", () => {
@@ -34,6 +42,12 @@ describe("redactSecrets", () => {
   it("strips values after = signs to prevent secret leakage", () => {
     const result = redactSecrets("ANTHROPIC_API_KEY=sk-ant-secret123");
     expect(result).not.toContain("sk-ant-secret123");
+  });
+
+  it("redacts unknown token-shaped values and secret-looking output", () => {
+    const output = redactSecrets("token=opaque-token-value-1234567890 SECRET_VALUE=plain-secret-value");
+    expect(output).not.toContain("opaque-token-value-1234567890");
+    expect(output).not.toContain("plain-secret-value");
   });
 });
 
@@ -136,16 +150,48 @@ describe("parseDoctorResult", () => {
 
   it("produces unknown blocker for unrecognised errors", () => {
     const result = parseDoctorResult("some random error output", "", 1);
-    expect(result.status).toBe("blocked");
+    expect(result.status).toBe("fail");
     expect(result.blockers).toHaveLength(1);
     expect(result.blockers[0].category).toBe("unknown");
     expect(result.blockers[0].code).toBe("doctor_failed");
   });
 
-  it("redacts absolute paths in unknown blocker message", () => {
-    const result = parseDoctorResult("error at /home/user/project/file.ts", "", 1);
+  it("does not expose raw paths or unknown output in a failure", () => {
+    const result = parseDoctorResult("error at /home/user/project/file.ts SECRET_VALUE=never-return-this", "", 1);
     expect(result.blockers[0].message).not.toContain("/home/user");
-    expect(result.blockers[0].message).toContain("[PATH]");
+    expect(result.blockers[0].message).not.toContain("SECRET_VALUE");
+    expect(result.message).toBe("QM Doctor failed for an unclassified reason.");
+  });
+
+  it("classifies a doctor process failure as fail", () => {
+    const result = parseDoctorResult("node crashed with an unexpected error", "", 127);
+    expect(result.status).toBe("fail");
+    expect(result.blockers[0].category).toBe("unknown");
+  });
+});
+
+describe("spawnCapture", () => {
+  it("caps stdout/stderr by actual UTF-8 bytes", async () => {
+    const result = await spawnCapture(
+      process.execPath,
+      ["-e", "const s = '中文字'.repeat(10000); process.stdout.write(s); process.stderr.write(s)"],
+      process.cwd()
+    );
+    expect(result.spawnError).toBe(false);
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(MAX_OUTPUT_BYTES);
+    expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(MAX_OUTPUT_BYTES);
+  });
+
+  it("terminates a timed-out process with SIGTERM then SIGKILL grace", async () => {
+    const result = await spawnCapture(
+      process.execPath,
+      ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+      process.cwd(),
+      20,
+      20
+    );
+    expect(result.timedOut).toBe(true);
+    expect(result.spawnError).toBe(false);
   });
 });
 
@@ -167,5 +213,19 @@ describe("qm-runner concurrent lock", () => {
     const errors = [r1, r2].filter(r => r instanceof Error);
     const lockError = errors.find(e => e.message.includes("operation_already_running"));
     expect(lockError).toBeDefined();
+  });
+
+  it("uses the same lock for validate and smoke", async () => {
+    const first = runValidate().catch((error) => error);
+    const second = runSmoke().catch((error) => error);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    const errors = [firstResult, secondResult].filter((result) => result instanceof Error);
+    expect(errors.some((error) => error.message.includes("operation_already_running"))).toBe(true);
+  });
+
+  it("releases the global lock after an operation completes", async () => {
+    await runValidate();
+    await runSmoke();
+    await runValidate();
   });
 });

@@ -28,9 +28,7 @@ import {
 } from "@ai-smartbook/ai/server";
 import { buildGateway } from "./ai/gateway-instance";
 import { makeAnalyticsService, todayTaipei } from "./ai/analytics-service";
-import { createAdminAuthMiddleware } from "./ai/admin-auth";
-import { createAdminOriginMiddleware } from "./ai/admin-origin";
-import { registerQmStatusRoutes } from "./ai/qm-status-api";
+import { registerQmAdminBoundary } from "./ai/qm-admin-boundary";
 import { EvaluationServiceError, makeEvaluationService } from "./ai/evaluation-service";
 import { LiveEvaluationServiceError, makeLiveEvaluationService } from "./ai/live-evaluation-service";
 import { EvaluationGovernanceError, makeEvaluationGovernanceService } from "./ai/evaluation-governance-service";
@@ -308,13 +306,11 @@ const appearanceUpload = multer({
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
-app.use("/api/admin", createAdminOriginMiddleware());
 // Serve uploaded appearance images read-only (rides the /api proxy in both apps).
 app.use("/api/uploads/appearance", express.static(APPEARANCE_UPLOAD_DIR));
 // Security boundary: every current and future admin route is protected here.
 // Public and student routes are mounted outside this prefix and are unaffected.
-app.use("/api/admin", createAdminAuthMiddleware());
-registerQmStatusRoutes(app);
+registerQmAdminBoundary(app);
 
 function fail(res: Response, status: number, message: string) {
   res.status(status).json({ error: message });

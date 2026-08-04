@@ -30,6 +30,8 @@ describe("QM Status Frontend Constraints", () => {
     expect(pageSource).toContain("執行 Smoke Test");
     expect(pageSource).toContain("disabled");
     expect(pageSource).toContain("AdminErrorCard");
+    expect(pageSource).not.toContain("type QmSystemStatus");
+    expect(pageSource).not.toContain("as unknown as QmSystemStatus");
   });
 
   it("API client registration", () => {
@@ -37,5 +39,7 @@ describe("QM Status Frontend Constraints", () => {
     expect(apiSource).toContain("getQmStatus");
     expect(apiSource).toContain("runQmValidate");
     expect(apiSource).toContain("runQmSmoke");
+    expect(apiSource).not.toContain("contract: Record<string, unknown>");
+    expect(apiSource).toContain("qmStatusResponseSchema");
   });
 });

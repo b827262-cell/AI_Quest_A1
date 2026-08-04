@@ -44,14 +44,21 @@ const checkArgs = useNode24Wrapper
 console.log(`Validating QM deployment with ${QM_PACKAGE}`);
 const result = spawnSync(command, checkArgs, {
   cwd: deploymentDir,
-  stdio: "inherit",
+  stdio: ["ignore", "pipe", "pipe"],
+  encoding: "utf8",
   env: { ...process.env }
 });
 if (result.error) {
-  console.error(`Unable to run the pinned QM CLI: ${result.error.message}`);
-  process.exit(1);
+  console.error("Unable to run the pinned QM CLI: process failure");
 }
-if (result.status !== 0) process.exit(result.status ?? 1);
+
+let contractPass = false;
+try {
+  const parsed = JSON.parse(`${result.stdout ?? ""}`.trim());
+  contractPass = result.status === 0 && parsed?.valid === true;
+} catch {
+  contractPass = false;
+}
 
 const doctorArgs = useNode24Wrapper
   ? ["--yes", "--package=node@24", "--", localBin, "doctor"]
@@ -59,7 +66,23 @@ const doctorArgs = useNode24Wrapper
 
 const doctor = spawnSync(command, doctorArgs, {
   cwd: deploymentDir,
-  stdio: "inherit",
+  stdio: ["ignore", "pipe", "pipe"],
+  encoding: "utf8",
   env: { ...process.env }
 });
-process.exit(doctor.status ?? 1);
+
+const doctorOutput = `${doctor.stdout ?? ""}\n${doctor.stderr ?? ""}`;
+const doctorEnvironmentBlocked = doctor.status !== 0 && /(?:missing|placeholder|not installed|not found|required secret|configuration)/i.test(doctorOutput);
+const doctorLabel = doctor.status === 0
+  ? "PASS"
+  : doctorEnvironmentBlocked
+    ? "ENVIRONMENT BLOCKED"
+    : "FAIL";
+const overallExit = result.status === 0 && doctor.status === 0 ? 0 : 1;
+
+console.log(`Contract ${contractPass ? "PASS" : "FAIL"}`);
+console.log(`Doctor ${doctorLabel}`);
+console.log(`Overall exit ${overallExit}`);
+console.log("Deployment attempted No");
+console.log("Real credentials used No");
+process.exit(overallExit);

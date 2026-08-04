@@ -38,9 +38,12 @@
     "qm:smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/qm-feedback-smoke.ts"
   },
   "devDependencies": {
+    "happy-dom": "^20.11.1",
     "vitest": "^4.1.10"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

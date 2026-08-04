@@ -19,6 +19,7 @@ import type {
   UpdateBookInput
 } from "@ai-smartbook/schema";
 import type { SiteConfig, SiteConfigUpdate } from "@ai-smartbook/schema";
+import { qmStatusResponseSchema, type QmStatusResponse } from "@ai-smartbook/contracts";
 
 export interface ChapterInput {
   title: string;
@@ -264,7 +265,13 @@ export interface AiEvaluationDetail {
   };
 }
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
+type ResponseSchema<T> = {
+  safeParse: (input: unknown) =>
+    | { success: true; data: T }
+    | { success: false };
+};
+
+async function http<T>(path: string, init?: RequestInit, schema?: ResponseSchema<T>): Promise<T> {
   const res = await fetch(path, {
     headers: init?.body && !(init.body instanceof FormData)
       ? { "Content-Type": "application/json" }
@@ -304,7 +311,13 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  const body: unknown = await res.json();
+  if (!schema) return body as T;
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    throw new ApiHttpError(502, "Invalid response from server", "INVALID_API_RESPONSE");
+  }
+  return parsed.data;
 }
 
 export interface UploadBookFileOptions {
@@ -312,20 +325,10 @@ export interface UploadBookFileOptions {
   relatedFileId?: string | null;
 }
 
-export type QmStatusResponse = {
-  overallStatus: string;
-  checkedAt: string | null;
-  qmCliVersion: string | null;
-  contract: Record<string, unknown> | null;
-  doctor: Record<string, unknown> | null;
-  smoke: Record<string, unknown> | null;
-  message?: string;
-};
-
 export const adminApi = {
-  getQmStatus: () => http<QmStatusResponse>("/api/admin/qm/status"),
-  runQmValidate: () => http<QmStatusResponse>("/api/admin/qm/validate", { method: "POST" }),
-  runQmSmoke: () => http<QmStatusResponse>("/api/admin/qm/smoke", { method: "POST" }),
+  getQmStatus: () => http<QmStatusResponse>("/api/admin/qm/status", undefined, qmStatusResponseSchema),
+  runQmValidate: () => http<QmStatusResponse>("/api/admin/qm/validate", { method: "POST" }, qmStatusResponseSchema),
+  runQmSmoke: () => http<QmStatusResponse>("/api/admin/qm/smoke", { method: "POST" }, qmStatusResponseSchema),
   getAiEvaluationSettings: () => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings"),
   saveAiEvaluationSettings: (settings: Omit<AiLiveEvaluationSettings, "updatedAt">) => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings", { method: "PUT", body: JSON.stringify(settings) }),
   preflightAiEvaluation: (input: { datasetId: string; maxCases: number; maxTokenBudget: number; logicalModelIds: string[] }) => http<AiLivePreflight>("/api/admin/ai-evaluations/live-preflight", { method: "POST", body: JSON.stringify(input) }),

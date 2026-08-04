@@ -1,40 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { adminApi } from "../api";
-import type { QmStatusResponse } from "../api";
+import type { QmStatusResponse } from "@ai-smartbook/contracts";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
-
-/* ── Local types (browser-safe, no server imports) ─────────── */
-
-type QmDoctorBlocker =
-  | { category: "credential"; code: string; names?: string[]; message: string }
-  | { category: "tool"; code: string; name: string; message: string }
-  | { category: "configuration"; code: string; message: string }
-  | { category: "environment"; code: string; message: string }
-  | { category: "unknown"; code: string; message: string };
-
-type QmSystemStatus = {
-  overallStatus: "pass" | "warning" | "fail";
-  checkedAt: string | null;
-  qmCliVersion: string | null;
-  contract: {
-    valid: boolean;
-    version: number;
-    clauses: Record<string, { status: "pass" | "fail"; errors?: string[]; warnings?: string[]; count?: number }>;
-  } | null;
-  doctor: {
-    status: "pass" | "blocked" | "fail";
-    exitCode: number;
-    blockers: QmDoctorBlocker[];
-    message: string | null;
-  } | null;
-  smoke: {
-    status: "pass" | "fail" | "not_run";
-    checkedAt: string | null;
-    message: string | null;
-  } | null;
-};
 
 /* ── Label maps ────────────────────────────────────────────── */
 
@@ -57,7 +26,7 @@ function badgeClass(status: string): string {
 /* ── Component ─────────────────────────────────────────────── */
 
 export function QmStatusPage() {
-  const [status, setStatus] = useState<QmSystemStatus | null>(null);
+  const [status, setStatus] = useState<QmStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
@@ -68,7 +37,7 @@ export function QmStatusPage() {
       setLoading(true);
       setError(null);
       const res = await adminApi.getQmStatus();
-      setStatus(res as unknown as QmSystemStatus);
+      setStatus(res);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to fetch QM status");
     } finally {
@@ -83,7 +52,7 @@ export function QmStatusPage() {
       setValidating(true);
       setError(null);
       const res = await adminApi.runQmValidate();
-      setStatus(res as unknown as QmSystemStatus);
+      setStatus(res);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Validation failed");
     } finally {
@@ -96,7 +65,7 @@ export function QmStatusPage() {
       setRunningSmoke(true);
       setError(null);
       const res = await adminApi.runQmSmoke();
-      setStatus(res as unknown as QmSystemStatus);
+      setStatus(res);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Smoke test failed");
     } finally {

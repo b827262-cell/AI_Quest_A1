@@ -16,7 +16,14 @@ export const qmContractResultSchema = z.object({
   version: z.number().int().nonnegative(),
   clauses: z.record(z.string(), qmContractClauseSchema)
 });
-export type QmContractResult = z.infer<typeof qmContractResultSchema>;
+// Zod 4's record output is intentionally broad for arbitrary keys. Export the
+// precise DTO type alongside the runtime schema so all consumers still share
+// the clause contract without recreating it in an app.
+export type QmContractResult = {
+  valid: boolean;
+  version: number;
+  clauses: Record<string, QmContractClause>;
+};
 
 export const qmDoctorStatusSchema = z.enum(["pass", "blocked", "fail"]);
 export type QmDoctorStatus = z.infer<typeof qmDoctorStatusSchema>;
@@ -74,6 +81,7 @@ export const qmOverallStatusSchema = z.enum(["pass", "warning", "fail"]);
 export type QmOverallStatus = z.infer<typeof qmOverallStatusSchema>;
 
 export const qmSystemStatusSchema = z.object({
+  state: z.literal("ready"),
   overallStatus: qmOverallStatusSchema,
   checkedAt: z.string().datetime({ offset: true }),
   qmCliVersion: z.string(),
@@ -81,12 +89,52 @@ export const qmSystemStatusSchema = z.object({
   doctor: qmDoctorResultSchema,
   smoke: qmSmokeResultSchema
 });
-export type QmSystemStatus = z.infer<typeof qmSystemStatusSchema>;
+export type QmSystemStatus = Omit<z.infer<typeof qmSystemStatusSchema>, "contract"> & {
+  contract: QmContractResult;
+};
+
+/**
+ * A smoke run is useful before the QM CLI has been validated, but it must not
+ * invent a failed contract or a blocked doctor result. Keep that state
+ * explicit at the API boundary instead of relying on a nullable object shape.
+ */
+export const qmNotCheckedStatusSchema = z.object({
+  state: z.literal("not_checked"),
+  overallStatus: qmOverallStatusSchema,
+  checkedAt: z.null(),
+  qmCliVersion: z.null(),
+  contract: z.null(),
+  doctor: z.null(),
+  smoke: qmSmokeResultSchema,
+  message: z.string()
+});
+export type QmNotCheckedStatus = z.infer<typeof qmNotCheckedStatusSchema>;
+
+export const qmStatusResponseSchema = z.discriminatedUnion("state", [
+  qmNotCheckedStatusSchema,
+  qmSystemStatusSchema
+]);
+export type QmStatusResponse = QmNotCheckedStatus | QmSystemStatus;
+
+export function makeQmNotCheckedStatus(
+  smoke: QmSmokeResult = { status: "not_run", checkedAt: null, message: null }
+): QmNotCheckedStatus {
+  return qmNotCheckedStatusSchema.parse({
+    state: "not_checked",
+    overallStatus: "warning",
+    checkedAt: null,
+    qmCliVersion: null,
+    contract: null,
+    doctor: null,
+    smoke,
+    message: "QM status has not been checked yet."
+  });
+}
 
 /**
  * Derive the overall QM status from individual results.
- * Contract invalid → fail. Doctor blocked or smoke fail → warning. Otherwise pass.
- * Smoke not_run with everything else passing is still pass.
+ * Contract invalid or Doctor failure → fail. Doctor blocked or smoke fail → warning.
+ * Otherwise pass. Smoke not_run with everything else passing is still pass.
  */
 export function deriveOverallStatus(
   contract: QmContractResult,
@@ -94,6 +142,7 @@ export function deriveOverallStatus(
   smoke: QmSmokeResult
 ): QmOverallStatus {
   if (!contract.valid) return "fail";
+  if (doctor.status === "fail") return "fail";
   if (doctor.status === "blocked" || smoke.status === "fail") return "warning";
   return "pass";
 }

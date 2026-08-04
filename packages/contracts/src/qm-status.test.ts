@@ -10,6 +10,7 @@ import {
 describe("qm-status schemas", () => {
   it("qmSystemStatusSchema parses valid data", () => {
     const data = {
+      state: "ready",
       overallStatus: "pass",
       checkedAt: "2026-08-04T12:00:00Z",
       qmCliVersion: "1.0.0",
@@ -36,6 +37,7 @@ describe("qm-status schemas", () => {
 
   it("qmSystemStatusSchema rejects invalid overallStatus", () => {
     const data = {
+      state: "ready",
       overallStatus: "invalid_status",
       checkedAt: "2026-08-04T12:00:00Z",
       qmCliVersion: "1.0.0",
@@ -118,6 +120,19 @@ describe("deriveOverallStatus", () => {
       { status: "blocked", exitCode: 1, blockers: [], message: null },
       { status: "pass", checkedAt: null, message: null }
     )).toBe("warning");
+  });
+
+  it("returns fail when doctor fails", () => {
+    expect(deriveOverallStatus(
+      { valid: true, version: 1, clauses: {} },
+      {
+        status: "fail",
+        exitCode: -1,
+        blockers: [{ category: "unknown", code: "doctor_failed", message: "safe failure" }],
+        message: "safe failure"
+      },
+      { status: "pass", checkedAt: null, message: null }
+    )).toBe("fail");
   });
 
   it("returns pass when smoke not_run + contract valid + doctor pass", () => {
