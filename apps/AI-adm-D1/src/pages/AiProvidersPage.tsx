@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { adminApi, ApiHttpError } from "../api";
 import { priceFor, type AiProviderId } from "@ai-smartbook/ai/browser";
+import type { QmRuntimeConfigPublicView } from "@ai-smartbook/contracts";
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
@@ -92,19 +93,6 @@ type QmRuntimeConfigForm = {
   credentialId: string;
   model: string;
   baseUrlOverride: string;
-};
-
-type QmRuntimeConfigView = {
-  config: QmRuntimeConfigForm | null;
-  providerDisplayName: string | null;
-  providerSlug: string | null;
-  providerEnabled: boolean | null;
-  credentialName: string | null;
-  maskedApiKey: string | null;
-  credentialStatus: "active" | "standby" | "disabled" | null;
-  credentialInCooldown: boolean;
-  effectiveBaseUrl: string | null;
-  updatedAt: string | null;
 };
 
 type CredentialForm = {
@@ -296,7 +284,7 @@ export function AiProvidersPage() {
   const [message, setMessage] = useState("");
   const [credentialErrors, setCredentialErrors] = useState<Record<string, string>>({});
   const providerSaveInFlight = useRef(false);
-  const [qmRuntimeView, setQmRuntimeView] = useState<QmRuntimeConfigView | null>(null);
+  const [qmRuntimeView, setQmRuntimeView] = useState<QmRuntimeConfigPublicView | null>(null);
   const [qmForm, setQmForm] = useState<QmRuntimeConfigForm>({ providerConfigId: "", credentialId: "", model: "", baseUrlOverride: "" });
   const [qmTesting, setQmTesting] = useState(false);
   const [qmCredentials, setQmCredentials] = useState<Credential[]>([]);
@@ -361,7 +349,7 @@ export function AiProvidersPage() {
     setError("");
     try {
       const response = await adminApi.getQmRuntimeConfig();
-      const view = response.view as QmRuntimeConfigView;
+      const view = response.view;
       setQmRuntimeView(view);
       if (view.config) {
         setQmForm({

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   QM_RUNTIME_CONFIG_ERROR_CODES,
+  isSafeQmBaseUrl,
   qmRuntimeConfigSchema,
   qmRuntimeConfigPublicViewSchema,
   qmRuntimeConfigResolutionSchema,
@@ -44,6 +45,39 @@ describe("qm-runtime-config schemas", () => {
         baseUrlOverride: "not-a-url"
       })
     ).toThrow();
+  });
+
+  it("rejects SSRF-shaped baseUrlOverride targets (loopback, private, link-local, metadata)", () => {
+    for (const unsafe of [
+      "http://localhost/",
+      "http://127.0.0.1/",
+      "http://127.0.0.1:8080/admin",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://10.0.0.5/",
+      "http://172.16.0.1/",
+      "http://192.168.1.1/",
+      "http://100.64.0.1/",
+      "http://0.0.0.0/",
+      "http://[::1]/",
+      "http://[fe80::1]/",
+      "http://[fc00::1]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://metadata.google.internal/",
+      "ftp://proxy.example.com/"
+    ]) {
+      expect(() =>
+        qmRuntimeConfigSchema.parse({ providerConfigId: "p", credentialId: "c", model: "m", baseUrlOverride: unsafe })
+      ).toThrow();
+      expect(isSafeQmBaseUrl(unsafe)).toBe(false);
+    }
+  });
+
+  it("accepts a public HTTPS baseUrlOverride", () => {
+    expect(isSafeQmBaseUrl("https://api.example.com")).toBe(true);
+    const parsed = qmRuntimeConfigSchema.parse({
+      providerConfigId: "p", credentialId: "c", model: "m", baseUrlOverride: "https://api.example.com/v1"
+    });
+    expect(parsed.baseUrlOverride).toBe("https://api.example.com/v1");
   });
 
   it("resolution can be ok or blocked with an exact error code", () => {

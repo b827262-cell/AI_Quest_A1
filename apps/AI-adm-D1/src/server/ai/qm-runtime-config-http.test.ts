@@ -149,6 +149,23 @@ describe("QM runtime-config HTTP boundary", () => {
     assertNoPlaintextKey(body);
   });
 
+  it("PUT strips an api key field and any unknown command/args/cwd fields before saving", async () => {
+    const started = await startApp();
+    server = started.server;
+    const res = await authed(started.baseUrl, "/api/admin/qm/runtime-config", {
+      method: "PUT",
+      body: JSON.stringify({
+        providerConfigId: "p", credentialId: "c", model: "m", baseUrlOverride: null,
+        apiKey: "sk-should-never-be-saved", command: "rm -rf /", args: ["--force"], cwd: "/etc"
+      })
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.config).toEqual({ providerConfigId: "p", credentialId: "c", model: "m", baseUrlOverride: null });
+    expect(service.save).toHaveBeenCalledWith({ providerConfigId: "p", credentialId: "c", model: "m", baseUrlOverride: null });
+    assertNoPlaintextKey(body);
+  });
+
   it("PUT returns 400 for an invalid config body", async () => {
     const started = await startApp();
     server = started.server;

@@ -3,13 +3,13 @@
 ## Executive Status
 
 - **Validation State**: `CONTRACT_ONLY_ACCEPTED_RUNTIME_BLOCKED`
-- **Baseline Commit (this round's remote head at start)**: `453e3f5be8350862a038a819cc2069d0773c8375`
+- **Baseline Commit (Round 3's remote head at start)**: `36e0cfb498608757f5c131ffc218fc3f45770a20`
 - **Branch**: `agent/qm-feedback-platform`
 - **QM CLI Baseline Version**: `@yc-software/qm@0.1.4`
 
 All static contracts, typechecks, lint rules, boundary constraints, application smoke tests, and secret scans have **PASSED**. Container runtime startup (`qm up`) remains blocked pending external credential provision and explicit execution authorization.
 
-This round (test stabilization + lint gate fixes) resolved the two outstanding gate failures reported at baseline: the 25 `explicit any` lint errors in `apps/AI-adm-D1` and the `qm-runner.test.ts` global-lock pollution under Vitest's default 5s timeout. See §7.
+Round 2 (test stabilization + lint gate fixes) resolved the 25 `explicit any` lint errors in `apps/AI-adm-D1` and the `qm-runner.test.ts` global-lock pollution under Vitest's default 5s timeout — see §7. Round 3 (independent security/contract review of the `/admin/ai-providers` QM Runtime Settings integration) found and fixed a real SSRF gap on `baseUrlOverride`, an unreachable `upstream_error` classification branch, a missing browser-side response schema validation, and a silently-skipped `packages/contracts` test suite — see §8.
 
 ---
 
@@ -88,7 +88,7 @@ pnpm run typecheck:release-scripts    # PASS
 pnpm run lint                         # PASS (13 workspace projects, 0 errors, 0 warnings)
 pnpm run lint:release-scripts         # PASS (8 scripts checked, 0 errors, 0 warnings)
 pnpm run build                        # PASS
-pnpm run test                         # PASS (74 test files, 1037 unit/integration tests)
+pnpm run test                         # PASS (82 test files, 1118 unit/integration tests) — see §8
 pnpm run qm:smoke                     # PASS (submission -> draft -> review -> publish)
 node scripts/qm-browser-boundary.mjs                       # PASS (root, server-free browser boundary)
 (cd apps/AI-Stu-R1 && node ../../scripts/qm-browser-boundary.mjs)  # PASS (apps/AI-Stu-R1, server-free browser boundary)
@@ -207,9 +207,44 @@ pnpm --filter AI-adm-D1 exec vitest run \
 
 10x repeat of `qm-runner.test.ts` alone (flakiness / stray-subprocess check): **10/10 passed**, 28 tests each run, ~0.4s per run (down from a run that could hang to Vitest's 5s timeout per lock test).
 
+
 ---
 
-## 8. Next Steps & Approval Gate
+## 8. Round 3 — Independent Security/Contract Review of QM Runtime Settings
+
+Starting state for this round (remote head `36e0cfb`): the `/admin/ai-providers` → QM Runtime Settings integration (contracts, fail-closed service, admin routes, browser card, per-run secret isolation scaffolding, 42 new tests) was already merged to the branch. This round performed an independent review per the task's checklist (API key handling, fail-closed re-validation, SSRF surface, error-code/HTTP/contract consistency, test-endpoint timeout/abort/redaction, HTTP/UI acceptance) and fixed everything it found — it was not a text-only review.
+
+### Findings and fixes
+
+1. **SSRF via `baseUrlOverride` (real gap, fixed).** The field was validated with `z.string().url()` plus an `http(s)://` prefix check only — `http://127.0.0.1/`, `http://169.254.169.254/latest/meta-data/` (cloud metadata), RFC1918 private ranges, CGNAT, and `localhost` all passed. Added `isSafeQmBaseUrl` (`packages/contracts/src/qm-runtime-config.ts`) — a dependency-free scheme/host parser (no `URL` global, so the package stays ambient-lib-free and browser-bundlable) that blocks loopback, RFC1918/CGNAT private ranges, link-local (including the 169.254.169.254 metadata endpoint), IPv4-mapped-IPv6 equivalents, and well-known metadata hostnames. Wired into both the Zod schema (`qmRuntimeConfigSchema`, rejects at PUT time) and `resolveQmRuntimeConfig` (defense in depth for any already-persisted value). 6 new contract-level tests + 1 new service-level test + a live reproduction: submitted the payload through a real logged-in Chrome session against the running dev server — the UI showed `Invalid QM runtime config` and a follow-up `GET` confirmed `baseUrlOverride` was still `null` in the database.
+2. **`upstream_error` was unreachable (real bug, fixed).** In `runQmRuntimeConfigTest`, the internal `upstreamRequestSent` flag was only assigned after a successful probe resolve, so any post-dispatch failure was always misreported as `local_validation_failed`. Added an `isUpstreamRequestSent` side-channel option so the route's dispatch-tracking carrier (set the instant the adapter fires its request) is consulted on the catch path too. New test exercises the previously-dead branch and asserts the thrown error's message/stack/body never leaks into the safe result.
+3. **Runtime-config responses were not Zod-validated in the browser (real gap, fixed).** `adminApi.getQmRuntimeConfig` / `saveQmRuntimeConfig` / `testQmRuntimeConfig` trusted the HTTP body via a bare `body as T` cast — unlike the QM status endpoints, which already validate with `qmStatusResponseSchema`. Added `qmRuntimeConfigViewResponseSchema` / `qmRuntimeConfigSaveResponseSchema` to contracts and wired all three calls through the existing `schema.safeParse` path in `api.ts`'s `http()` helper. Removed `AiProvidersPage.tsx`'s redundant local `QmRuntimeConfigView` type and `as QmRuntimeConfigView` cast in favor of the real, now-validated contract type.
+4. **`packages/contracts` tests were never run by the gate (real gap, fixed).** The package has 3 test files (`qm-status.test.ts`, `qm-runtime-config.test.ts`, `feedback.test.ts`) but no `"test"` script, so `pnpm run test` (`pnpm -r --if-present test`) silently skipped all of them — including the new SSRF coverage above. Added `"test": "vitest run"` to `packages/contracts/package.json`. This is also why the workspace test total moves from 1037/1038 (previous rounds, contracts excluded) to 1118 (contracts now included, plus this round's new cases).
+5. **PUT input sanitization — verified, not a gap.** Added an explicit test confirming `apiKey`/`command`/`args`/`cwd` fields submitted in a PUT body are stripped by the non-strict Zod object schema before `save()` is ever called (`qm-runtime-config-http.test.ts`).
+6. **Per-run secret isolation (A2) and fail-closed re-validation (A3) — reviewed, already correct.** `buildQmRunEnv`/`buildIsolatedRunSecretEnv` never read or mutate the shared `process.env` and are covered by existing isolation tests; GET/PUT/test all call `resolve()` fresh against live provider/credential state on every request (no caching), confirmed by reading the route code and the existing post-save-disable/cooldown/cross-provider/model-invalid test coverage.
+
+### HTTP/UI acceptance (real, not just helpers)
+
+- Started the actual `apps/AI-adm-D1` server (`tsx src/server/index.ts`, port 4300) and Vite dev server (port 5174) locally.
+- `curl` against the live server confirmed: 401 with no token, 403 with a disallowed origin, 200 with the dev password, and 400 (`QM_RUNTIME_CONFIG_INVALID`) for the SSRF payload — matching the HTTP-level test suite.
+- Logged into `/admin/ai-providers` in a real Chrome session (via the dev admin password), confirmed the QM Runtime Settings card renders live provider/credential data, the masked key (`AIz****3ySE`) displays with no plaintext-key input anywhere, Provider→Credential→Model selects cascade correctly, and submitting the SSRF payload through the actual form is rejected end-to-end (`Invalid QM runtime config`) with no persistence.
+
+### Targeted verification
+
+```bash
+pnpm --filter @ai-smartbook/contracts exec vitest run src/qm-runtime-config.test.ts   # 9 passed
+pnpm --filter AI-adm-D1 exec vitest run src/server/ai/qm-runtime-config.test.ts \
+  src/server/ai/qm-runtime-config-http.test.ts                                        # 36 passed
+pnpm --filter AI-adm-D1 run lint                                                      # 91 files, 0 errors
+pnpm --filter AI-adm-D1 exec tsc --noEmit                                             # clean
+```
+
+Full gate re-run after all fixes: typecheck / typecheck:release-scripts / lint / lint:release-scripts / build / qm:smoke / `node scripts/qm-browser-boundary.mjs` (root + `apps/AI-Stu-R1`) / `npm exec @yc-software/qm@0.1.4 -- qm --help` / `git diff --check` all **PASS**; `pnpm run test` **PASS 1118/1118** across 82 files; `pnpm run qm:validate` returns Contract PASS / Doctor ENVIRONMENT BLOCKED / exit 1 (expected, no real credentials, no deployment attempted); filename-only secret scan found 0 exposed files and `deploy/qm/.env` remains untracked.
+
+`qm up` was **not** executed. No cloud resources were created. No credentials, real or placeholder, were added. Final verdict remains `CONTRACT_ONLY_ACCEPTED_RUNTIME_BLOCKED`.
+---
+
+## 9. Next Steps & Approval Gate
 
 Local runtime deployment (`qm up`) was **NOT** executed. Approval to run `qm up` requires:
 - Target configured as `docker`.
@@ -219,7 +254,7 @@ Local runtime deployment (`qm up`) was **NOT** executed. Approval to run `qm up`
 
 ---
 
-## 9. Doctor blocker remediation
+## 10. Doctor blocker remediation
 
 QM `0.1.4` computes these names from `qm.config.jsonc`. The Admin page reports
 only the names, category, and safe next step; it never returns values or raw CLI

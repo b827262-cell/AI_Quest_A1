@@ -105,6 +105,16 @@ describe("resolveQmRuntimeConfig fail-closed codes", () => {
     expect(result).toEqual({ ok: false, reason: "QM_RUNTIME_ENVIRONMENT_BLOCKED" });
   });
 
+  it("returns QM_RUNTIME_ENVIRONMENT_BLOCKED when baseUrlOverride targets a private/loopback/metadata host (SSRF)", () => {
+    for (const unsafe of ["http://127.0.0.1/", "http://169.254.169.254/latest/meta-data/", "http://10.0.0.5/", "http://localhost/"]) {
+      const result = resolveQmRuntimeConfig({
+        ...readerWith(),
+        getConfig: () => ({ ...baseConfig(), baseUrlOverride: unsafe })
+      });
+      expect(result).toEqual({ ok: false, reason: "QM_RUNTIME_ENVIRONMENT_BLOCKED" });
+    }
+  });
+
   it("resolves ok with effectiveBaseUrl from override when everything is valid", () => {
     const result = resolveQmRuntimeConfig({
       ...readerWith(),
@@ -262,5 +272,24 @@ describe("runQmRuntimeConfigTest bounded probe", () => {
     const result = await runQmRuntimeConfigTest("claude-3", async () => { throw new Error("boom"); });
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("local_validation_failed");
+  });
+
+  it("reports upstream_error (not local_validation_failed) and never leaks the thrown error's message when the probe fails after dispatch", async () => {
+    let dispatched = false;
+    const result = await runQmRuntimeConfigTest(
+      "claude-3",
+      async (signal) => {
+        void signal;
+        dispatched = true; // mirrors a real adapter firing its "request sent" callback
+        throw new Error("/home/runner/project SECRET_VALUE=do-not-leak\nupstream 500: {\"raw\":\"body\"}\n  at Object.<anonymous>");
+      },
+      { isUpstreamRequestSent: () => dispatched }
+    );
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("upstream_error");
+    expect(result.upstreamRequestSent).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("SECRET_VALUE");
+    expect(JSON.stringify(result)).not.toContain("/home/runner/project");
+    expect(JSON.stringify(result)).not.toContain("raw");
   });
 });

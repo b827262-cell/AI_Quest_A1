@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  isSafeQmBaseUrl,
   qmRuntimeConfigSchema,
   type QmRuntimeConfig,
   type QmRuntimeConfigErrorCode,
@@ -15,9 +16,6 @@ import type { SettingsRepo } from "@ai-smartbook/db";
  * referenced credential and is resolved transiently at execute time.
  */
 export const QM_RUNTIME_CONFIG_KEY = "qm_runtime_config_v1";
-
-/** HTTP(S) only — rejects ftp/file/etc. schemes even though they are valid URLs. */
-const HTTP_URL = /^https?:\/\//i;
 
 /**
  * Read-only row shapes the resolution needs. Kept structural (no db import) so
@@ -101,7 +99,7 @@ export function resolveQmRuntimeConfig(reader: QmRuntimeConfigReader): QmRuntime
   if (!modelAllowed) return blocked("QM_MODEL_NOT_CONFIGURED");
 
   if (config.baseUrlOverride !== null) {
-    if (!HTTP_URL.test(config.baseUrlOverride.trim())) {
+    if (!isSafeQmBaseUrl(config.baseUrlOverride.trim())) {
       return blocked("QM_RUNTIME_ENVIRONMENT_BLOCKED");
     }
   }
@@ -242,7 +240,7 @@ export type QmRuntimeConfigProbe = (signal: AbortSignal) => Promise<{ upstreamRe
 export async function runQmRuntimeConfigTest(
   model: string,
   probe: QmRuntimeConfigProbe,
-  options: { timeoutMs?: number; now?: () => number } = {}
+  options: { timeoutMs?: number; now?: () => number; isUpstreamRequestSent?: () => boolean } = {}
 ): Promise<{ status: "success" | "failed"; reason: string; latencyMs: number; upstreamRequestSent: boolean; model: string }> {
   const started = options.now?.() ?? Date.now();
   const controller = new AbortController();
@@ -259,13 +257,20 @@ export async function runQmRuntimeConfigTest(
       model
     };
   } catch (error) {
+    void error;
     const aborted = controller.signal.aborted;
-    const reason = aborted ? "provider_timeout" : !upstreamRequestSent ? "local_validation_failed" : "upstream_error";
+    // A probe that throws never reaches the `result.upstreamRequestSent`
+    // assignment above, so a post-dispatch failure would otherwise always be
+    // misclassified as local_validation_failed. `isUpstreamRequestSent` lets
+    // the caller report dispatch state via a side channel set *before* the
+    // probe can fail (e.g. a callback fired the instant the request left).
+    const sent = upstreamRequestSent || (options.isUpstreamRequestSent?.() ?? false);
+    const reason = aborted ? "provider_timeout" : !sent ? "local_validation_failed" : "upstream_error";
     return {
       status: "failed",
       reason,
       latencyMs: (options.now?.() ?? Date.now()) - started,
-      upstreamRequestSent,
+      upstreamRequestSent: sent,
       model
     };
   } finally {

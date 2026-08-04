@@ -119,7 +119,7 @@ export function registerQmRuntimeConfigRoutes(app: Express, deps: QmRuntimeConfi
       // upstreamRequestSent is tracked both via the carrier (for classification)
       // and returned by the probe (for the safe result).
       return { upstreamRequestSent: out.upstreamRequestSent || upstreamRequestSent };
-    });
+    }, { isUpstreamRequestSent: () => upstreamRequestSent });
     const payload = redactSecrets(JSON.stringify(result));
     const status = result.status === "success" ? 200 : result.reason === "provider_timeout" ? 504 : 502;
     return res.status(status).json(JSON.parse(payload));

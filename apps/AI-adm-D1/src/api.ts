@@ -19,7 +19,17 @@ import type {
   UpdateBookInput
 } from "@ai-smartbook/schema";
 import type { SiteConfig, SiteConfigUpdate } from "@ai-smartbook/schema";
-import { qmStatusResponseSchema, type QmStatusResponse, type QmRuntimeConfig, type QmRuntimeConfigPublicView, type QmRuntimeConfigTestResult } from "@ai-smartbook/contracts";
+import {
+  qmStatusResponseSchema,
+  qmRuntimeConfigViewResponseSchema,
+  qmRuntimeConfigSaveResponseSchema,
+  qmRuntimeConfigTestResultSchema,
+  type QmStatusResponse,
+  type QmRuntimeConfig,
+  type QmRuntimeConfigViewResponse,
+  type QmRuntimeConfigSaveResponse,
+  type QmRuntimeConfigTestResult
+} from "@ai-smartbook/contracts";
 
 export interface ChapterInput {
   title: string;
@@ -329,9 +339,9 @@ export const adminApi = {
   getQmStatus: () => http<QmStatusResponse>("/api/admin/qm/status", undefined, qmStatusResponseSchema),
   runQmValidate: () => http<QmStatusResponse>("/api/admin/qm/validate", { method: "POST" }, qmStatusResponseSchema),
   runQmSmoke: () => http<QmStatusResponse>("/api/admin/qm/smoke", { method: "POST" }, qmStatusResponseSchema),
-  getQmRuntimeConfig: () => http<{ view: QmRuntimeConfigPublicView; resolution: { ok: boolean; reason?: string } }>("/api/admin/qm/runtime-config"),
-  saveQmRuntimeConfig: (config: QmRuntimeConfig) => http<{ config: QmRuntimeConfig; resolution: { ok: boolean; reason?: string } }>("/api/admin/qm/runtime-config", { method: "PUT", body: JSON.stringify(config) }),
-  testQmRuntimeConfig: () => http<QmRuntimeConfigTestResult>("/api/admin/qm/runtime-config/test", { method: "POST" }),
+  getQmRuntimeConfig: () => http<QmRuntimeConfigViewResponse>("/api/admin/qm/runtime-config", undefined, qmRuntimeConfigViewResponseSchema),
+  saveQmRuntimeConfig: (config: QmRuntimeConfig) => http<QmRuntimeConfigSaveResponse>("/api/admin/qm/runtime-config", { method: "PUT", body: JSON.stringify(config) }, qmRuntimeConfigSaveResponseSchema),
+  testQmRuntimeConfig: () => http<QmRuntimeConfigTestResult>("/api/admin/qm/runtime-config/test", { method: "POST" }, qmRuntimeConfigTestResultSchema),
   getAiEvaluationSettings: () => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings"),
   saveAiEvaluationSettings: (settings: Omit<AiLiveEvaluationSettings, "updatedAt">) => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings", { method: "PUT", body: JSON.stringify(settings) }),
   preflightAiEvaluation: (input: { datasetId: string; maxCases: number; maxTokenBudget: number; logicalModelIds: string[] }) => http<AiLivePreflight>("/api/admin/ai-evaluations/live-preflight", { method: "POST", body: JSON.stringify(input) }),
