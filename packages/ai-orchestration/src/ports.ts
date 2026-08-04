@@ -21,8 +21,14 @@ export interface QmCompatibleOrchestrationPort {
   ensureWorkspace(input: EnsureWorkspaceInput): Promise<AgentWorkspace>;
   submitAssignment(input: SubmitAssignmentInput): Promise<AssignmentSubmission>;
   startFeedbackRun(input: StartFeedbackRunInput): Promise<AgentRunTrace>;
-  getRunTrace(runId: string): Promise<AgentRunTrace>;
-  getFeedbackDraft(feedbackDraftId: string): Promise<FeedbackDraft>;
-  reviewFeedback(input: ReviewFeedbackInput): Promise<FeedbackDraft>;
-  publishFeedback(input: PublishFeedbackInput): Promise<PublishResult>;
+  getRunTrace(runId: string, actor: AuthenticatedActor): Promise<AgentRunTrace>;
+  getFeedbackDraft(feedbackDraftId: string, actor: AuthenticatedActor): Promise<FeedbackDraft>;
+  reviewFeedback(input: ReviewFeedbackInput, actor: AuthenticatedActor): Promise<FeedbackDraft>;
+  publishFeedback(input: PublishFeedbackInput, actor: AuthenticatedActor): Promise<PublishResult>;
 }
+
+/** Identity asserted by trusted server authentication middleware, never request JSON. */
+export type AuthenticatedActor = {
+  actorId: string;
+  role: "learner" | "teacher" | "ta" | "admin";
+};

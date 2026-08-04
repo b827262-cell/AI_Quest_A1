@@ -211,7 +211,13 @@ importers:
       '@ai-smartbook/contracts':
         specifier: workspace:*
         version: link:../contracts
+      better-sqlite3:
+        specifier: latest
+        version: 13.0.2
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: latest
+        version: 7.6.13
       '@types/node':
         specifier: latest
         version: 26.1.2

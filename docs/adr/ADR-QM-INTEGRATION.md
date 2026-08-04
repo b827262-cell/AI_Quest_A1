@@ -84,17 +84,22 @@ Positive:
 
 Trade-offs:
 
-- The local adapter is not durable and is not a production implementation.
-- Phase 2 must implement a server-only QM HTTP/deployment client and a DB
-  repository for trace/draft persistence, plus an authorization review.
+- The server adapter is durable through a SQLite repository and commits
+  trace/draft/publication changes transactionally. SQLite remains an
+  application-owned store, not QM's Postgres runtime database.
+- QM 0.1.4 does not document a general-purpose feedback/run HTTP client API.
+  The only supported programmatic package export is
+  `@yc-software/qm/contract`, for deployment conformance. No network adapter or
+  endpoint is introduced until upstream publishes a suitable supported API.
 - The standalone deployment has an independent Node/npm lifecycle from the
   pnpm monorepo.
 
 ## Exit criteria for Phase 2
 
 - Pin is upgraded deliberately only after `qm check` and contract tests pass.
-- A server-only deployment adapter maps scope, run, review and publish events
-  with authenticated service credentials.
+- A server-only deployment adapter is added only after a supported upstream
+  runtime API is documented; endpoint paths must not be inferred from core
+  internals.
 - DB persistence and audit events are transactionally linked to publication.
 - Browser bundle inspection proves no Node/QM SDK/DB client reaches a SPA.
 - A staging-only deployment passes `qm check`, `qm doctor`, and the feedback

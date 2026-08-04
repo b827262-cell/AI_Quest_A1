@@ -9,6 +9,7 @@ import type {
   AssignmentSubmission
 } from "@ai-smartbook/contracts";
 import type { QmCompatibleOrchestrationPort } from "./ports";
+import type { AuthenticatedActor } from "./ports";
 
 export type EvaluateSubmissionInput = {
   submission: SubmitAssignmentInput;
@@ -31,22 +32,22 @@ export type EvaluatedSubmission = {
 export class FeedbackWorkflowService {
   public constructor(private readonly orchestration: QmCompatibleOrchestrationPort) {}
 
-  public async submitAndGenerate(input: EvaluateSubmissionInput): Promise<EvaluatedSubmission> {
+  public async submitAndGenerate(input: EvaluateSubmissionInput, actor: AuthenticatedActor): Promise<EvaluatedSubmission> {
     const submission = await this.orchestration.submitAssignment(input.submission);
     const trace = await this.orchestration.startFeedbackRun({
       ...input.run,
       submissionId: submission.submissionId,
       workspaceId: submission.workspaceId
     });
-    const draft = await this.orchestration.getFeedbackDraft(trace.feedbackDraftId);
+    const draft = await this.orchestration.getFeedbackDraft(trace.feedbackDraftId, actor);
     return { submission, trace, draft };
   }
 
-  public review(input: ReviewFeedbackInput): Promise<FeedbackDraft> {
-    return this.orchestration.reviewFeedback(input);
+  public review(input: ReviewFeedbackInput, actor: AuthenticatedActor): Promise<FeedbackDraft> {
+    return this.orchestration.reviewFeedback(input, actor);
   }
 
-  public publish(input: PublishFeedbackInput): Promise<PublishResult> {
-    return this.orchestration.publishFeedback(input);
+  public publish(input: PublishFeedbackInput, actor: AuthenticatedActor): Promise<PublishResult> {
+    return this.orchestration.publishFeedback(input, actor);
   }
 }

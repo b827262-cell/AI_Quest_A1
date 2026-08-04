@@ -81,6 +81,8 @@ Every feedback run contract records:
 - human edit/review actor, role, time and note;
 - publisher, role and publication time.
 
-The Phase 1 adapter keeps this in memory only. Phase 2 must persist the draft,
-trace and publication event transactionally and redact provider errors before
-they enter logs or learner responses.
+The application adapter persists workspace, submission, trace, draft and
+publication documents in SQLite. Review and publication update the trace and
+draft in one transaction; publication also inserts a unique publication event.
+Authorization uses a server-authenticated actor plus workspace membership and
+never treats request DTO role fields as authority.

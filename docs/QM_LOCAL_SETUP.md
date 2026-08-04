@@ -79,8 +79,18 @@ The teaching contract smoke test does not need the QM runtime or credentials:
 pnpm qm:smoke
 ```
 
-It runs the server-only local adapter through the same submit → draft → review
-→ publish port that a future QM deployment adapter must implement.
+It runs the server-only SQLite adapter through submit → draft → authorized
+review → publish. This is application verification, not an official QM network
+verification.
+
+## QM 0.1.4 API status
+
+The tagged 0.1.4 package declares only `@yc-software/qm/contract` as a supported
+programmatic export. Its CLI documentation describes that export as deployment
+config/conformance utilities. It does not publish a general feedback, run,
+workspace, review, or publication API. Consequently this repository contains
+no guessed QM URL or endpoint. A future network adapter is gated on an upstream
+supported API contract.
 
 ## Secret and runtime hygiene
 

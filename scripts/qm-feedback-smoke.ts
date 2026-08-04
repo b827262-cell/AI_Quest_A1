@@ -51,7 +51,7 @@ async function main(): Promise<void> {
       currency: "USD"
     }
   }
-  });
+  }, { actorId: "teacher-1", role: "teacher" });
   assert(generated.draft.status === "draft", "feedback draft was not created");
   assert(generated.trace.status === "succeeded", "feedback run did not succeed");
 
@@ -63,7 +63,7 @@ async function main(): Promise<void> {
   editedBody: "TA 已審核：補充教材來源後通過。",
   reviewNote: "來源補充完成",
   reviewedAt: "2026-08-04T00:01:00.000Z"
-  });
+  }, { actorId: "ta-1", role: "ta" });
   assert(reviewed.status === "approved", "review did not approve the draft");
   assert(reviewed.trace.humanEdited && reviewed.trace.reviewedBy === "ta-1", "review trace was not retained");
 
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
   publisherId: "teacher-1",
   publisherRole: "teacher",
   publishedAt: "2026-08-04T00:02:00.000Z"
-  });
+  }, { actorId: "teacher-1", role: "teacher" });
   assert(published.status === "published", "feedback was not published");
   assert(published.audience === "learner", "feedback audience was not learner-scoped");
   assert(published.trace.publishedBy === "teacher-1", "publisher trace was not retained");

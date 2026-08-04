@@ -28,11 +28,13 @@
     "test": "vitest run",
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
+  "dependencies": {
+    "@ai-smartbook/contracts": "workspace:*",
+    "better-sqlite3": "latest"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "latest",
     "@types/node": "latest",
     "typescript": "latest"
-  },
-  "dependencies": {
-    "@ai-smartbook/contracts": "workspace:*"
   }
 }

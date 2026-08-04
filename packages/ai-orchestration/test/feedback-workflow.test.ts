@@ -48,7 +48,7 @@ describe("QM-compatible feedback workflow", () => {
           currency: "USD"
         }
       }
-    });
+    }, { actorId: "teacher-1", role: "teacher" });
 
     expect(generated.trace.status).toBe("succeeded");
     expect(generated.trace.qmCliVersion).toBe("0.1.4");
@@ -63,7 +63,7 @@ describe("QM-compatible feedback workflow", () => {
       editedBody: "已檢閱：論點清楚；請再補上教材第一章的定義引用。",
       reviewNote: "補上來源提示",
       reviewedAt: "2026-08-04T00:01:00.000Z"
-    });
+    }, { actorId: "ta-1", role: "ta" });
     expect(reviewed.status).toBe("approved");
     expect(reviewed.trace.humanEdited).toBe(true);
     expect(reviewed.trace.editedBy).toBe("ta-1");
@@ -75,7 +75,7 @@ describe("QM-compatible feedback workflow", () => {
       publisherId: "teacher-1",
       publisherRole: "teacher",
       publishedAt: "2026-08-04T00:02:00.000Z"
-    });
+    }, { actorId: "teacher-1", role: "teacher" });
     expect(published.status).toBe("published");
     expect(published.audience).toBe("learner");
     expect(published.publishedBy).toBe("teacher-1");
@@ -123,7 +123,7 @@ describe("QM-compatible feedback workflow", () => {
         publisherId: "teacher-1",
         publisherRole: "teacher",
         publishedAt: new Date().toISOString()
-      })
+      }, { actorId: "teacher-1", role: "teacher" })
     ).rejects.toThrow("feedback_draft_not_approved");
   });
 });

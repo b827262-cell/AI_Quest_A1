@@ -30,13 +30,19 @@ if (boundary.error || boundary.status !== 0) {
 }
 
 const localBin = resolve(deploymentDir, "node_modules/.bin/qm");
-const command = existsSync(localBin) ? localBin : "npm";
-const commandArgs = existsSync(localBin)
-  ? ["check", "--json"]
-  : ["exec", "--yes", `--package=${QM_PACKAGE}`, "--", "qm", "check", "--json"];
+if (!existsSync(localBin)) {
+  console.error(`QM ${QM_PACKAGE} is not installed in ${deploymentDir}; refusing an npm-exec fallback.`);
+  process.exit(2);
+}
+const currentMajor = Number(process.versions.node.split(".")[0] ?? 0);
+const useNode24Wrapper = currentMajor < 24;
+const command = useNode24Wrapper ? "npx" : localBin;
+const checkArgs = useNode24Wrapper
+  ? ["--yes", "--package=node@24", "--", localBin, "check", "--json"]
+  : ["check", "--json"];
 
 console.log(`Validating QM deployment with ${QM_PACKAGE}`);
-const result = spawnSync(command, commandArgs, {
+const result = spawnSync(command, checkArgs, {
   cwd: deploymentDir,
   stdio: "inherit",
   env: { ...process.env }
@@ -45,4 +51,15 @@ if (result.error) {
   console.error(`Unable to run the pinned QM CLI: ${result.error.message}`);
   process.exit(1);
 }
-process.exit(result.status ?? 1);
+if (result.status !== 0) process.exit(result.status ?? 1);
+
+const doctorArgs = useNode24Wrapper
+  ? ["--yes", "--package=node@24", "--", localBin, "doctor"]
+  : ["doctor"];
+
+const doctor = spawnSync(command, doctorArgs, {
+  cwd: deploymentDir,
+  stdio: "inherit",
+  env: { ...process.env }
+});
+process.exit(doctor.status ?? 1);

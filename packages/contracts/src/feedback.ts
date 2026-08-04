@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const idSchema = z.string().trim().min(1);
 const versionSchema = z.string().trim().min(1).max(160);
-const timestampSchema = z.string().trim().min(1);
+const timestampSchema = z.string().datetime({ offset: true });
 
 export const agentHarnessSchema = z.enum(["qm", "codex", "claude-code", "opencode", "pi"]);
 export type AgentHarness = z.infer<typeof agentHarnessSchema>;
