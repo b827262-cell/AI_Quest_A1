@@ -6,33 +6,37 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5174",
     "server:dev": "tsx src/server/index.ts",
+    "server:build": "esbuild src/server/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist-server/admin-api.mjs --external:better-sqlite3 --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\"",
     "build": "vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "dependencies": {
-    "@ai-smartbook/schema": "workspace:*",
-    "@ai-smartbook/db": "workspace:*",
-    "@ai-smartbook/ui": "workspace:*",
-    "@ai-smartbook/book-core": "workspace:*",
     "@ai-smartbook/ai": "workspace:*",
+    "@ai-smartbook/book-core": "workspace:*",
+    "@ai-smartbook/db": "workspace:*",
+    "@ai-smartbook/schema": "workspace:*",
+    "@ai-smartbook/ui": "workspace:*",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.0.0",
-    "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1",
     "zod": "latest"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "latest",
+    "@types/express": "latest",
+    "@types/multer": "latest",
     "@types/node": "latest",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "latest",
-    "vite": "latest",
+    "@types/supertest": "^7.2.1",
+    "@vitejs/plugin-react": "latest",
+    "esbuild": "latest",
+    "supertest": "^7.2.2",
     "tsx": "latest",
-    "@types/express": "latest",
-    "@types/multer": "latest"
+    "typescript": "latest",
+    "vite": "latest"
   }
 }

@@ -461,6 +461,15 @@ export function AiProvidersPage() {
     setMessage("編輯模式：API Key 留白即可保留原 Key。");
   }
 
+  function startNewQuota(credential: Credential) {
+    editCredential(credential);
+    setEditingQuotaId(null);
+    setQuotaForm({ ...EMPTY_QUOTA, isDefault: false });
+    setCredentialErrors({});
+    setError("");
+    setMessage(`已選取 ${credential.name}，請新增模型配額。`);
+  }
+
   function resetCredentialForm() {
     setEditingCredentialId(null);
     setCredentialForm(EMPTY_CREDENTIAL);
@@ -751,7 +760,10 @@ export function AiProvidersPage() {
               <strong>模型配額列表（維度 2：Provider／金鑰／模型的 RPM、TPM、RPD）</strong>
               <span className="muted">（後端 API 用量資料）</span>
             </div>
-            <button type="button" className="admin-btn secondary" onClick={() => void refreshCredentialQuotas(credential.id)} disabled={busy}>重新整理</button>
+            <div className="admin-action-row admin-action-row-tight">
+              <button type="button" className="admin-btn secondary" onClick={() => startNewQuota(credential)} disabled={busy}>＋新增模型配額</button>
+              <button type="button" className="admin-btn secondary" onClick={() => void refreshCredentialQuotas(credential.id)} disabled={busy}>重新整理</button>
+            </div>
           </div>
           {quotas.length === 0 ? <p className="muted">尚未設定模型配額；未設定的 Model 視為額度未知，不會被本地配額阻擋。</p> : <div className="admin-table-wrap">
             <p className="muted admin-quota-note">

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createAdminAuthMiddleware, resolveAdminAuthConfig } from "./admin-auth";
+import {
+  adminCredentialsMatch,
+  assertAdminAuthConfig,
+  createAdminAuthMiddleware,
+  hashAdminPassword,
+  resolveAdminAuthConfig
+} from "./admin-auth";
 
 function invoke(env: NodeJS.ProcessEnv, headers: Record<string, string> = {}) {
   let nextCalled = false;
@@ -27,26 +33,26 @@ function invoke(env: NodeJS.ProcessEnv, headers: Record<string, string> = {}) {
 }
 
 describe("admin auth boundary", () => {
-  it("rejects production without a token with 503", () => {
-    expect(invoke({ NODE_ENV: "production" }).statusCode).toBe(503);
+  it("rejects production without a session or token with 401", () => {
+    expect(invoke({ NODE_ENV: "production" }).statusCode).toBe(401);
   });
 
   it("rejects development without explicit insecure opt-in", () => {
     expect(invoke({ NODE_ENV: "development" }).statusCode).toBe(401);
   });
 
-  it("allows only explicit development insecure mode", () => {
+  it("ignores the insecure development flag", () => {
     expect(invoke({ NODE_ENV: "development", ADMIN_ALLOW_INSECURE_DEV: "true" }).nextCalled)
-      .toBe(true);
+      .toBe(false);
   });
 
-  it("allows explicit insecure development mode even when a token is configured", () => {
+  it("does not bypass auth when the insecure flag and token are both configured", () => {
     const env = {
       NODE_ENV: "development",
       ADMIN_API_TOKEN: "admin-secret",
       ADMIN_ALLOW_INSECURE_DEV: "true"
     };
-    expect(invoke(env).nextCalled).toBe(true);
+    expect(invoke(env).nextCalled).toBe(false);
   });
 
   it("accepts the correct bearer token and rejects the wrong one", () => {
@@ -61,5 +67,36 @@ describe("admin auth boundary", () => {
       ADMIN_ALLOW_INSECURE_DEV: "true"
     });
     expect(config.allowInsecureDev).toBe(false);
+  });
+
+  it("requires a hashed password and secure cookies at the production boundary", () => {
+    const passwordHash = hashAdminPassword("production-secret");
+    const config = resolveAdminAuthConfig({
+      NODE_ENV: "production",
+      ADMIN_USERNAME: "admin",
+      ADMIN_PASSWORD_HASH: passwordHash,
+      ADMIN_SESSION_SECURE: "true"
+    });
+    expect(() => assertAdminAuthConfig(config)).not.toThrow();
+    expect(adminCredentialsMatch("admin", "production-secret", config)).toBe(true);
+    expect(adminCredentialsMatch("admin", "wrong", config)).toBe(false);
+    expect(adminCredentialsMatch("admin", "production-secret", resolveAdminAuthConfig({
+      NODE_ENV: "production",
+      ADMIN_USERNAME: "admin",
+      ADMIN_PASSWORD: "production-secret",
+      ADMIN_SESSION_SECURE: "true"
+    }))).toBe(false);
+    expect(() => assertAdminAuthConfig(resolveAdminAuthConfig({
+      NODE_ENV: "production",
+      ADMIN_USERNAME: "admin",
+      ADMIN_PASSWORD: "production-secret",
+      ADMIN_SESSION_SECURE: "true"
+    }))).toThrow(/ADMIN_PASSWORD_HASH/);
+    expect(() => assertAdminAuthConfig(resolveAdminAuthConfig({
+      NODE_ENV: "production",
+      ADMIN_USERNAME: "admin",
+      ADMIN_PASSWORD_HASH: passwordHash,
+      ADMIN_SESSION_SECURE: "false"
+    }))).toThrow(/ADMIN_SESSION_SECURE/);
   });
 });

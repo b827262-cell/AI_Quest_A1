@@ -125,14 +125,14 @@ export function makeAiCredentialModelQuotaRepo(db: Db) {
       resetTimezone?: string;
       enabled?: boolean;
       isDefault?: boolean;
-      currency?: string;
-      serviceTier?: string;
+      currency?: string | null;
+      serviceTier?: string | null;
       inputPriceUsdPerMillion?: number | null;
       outputPriceUsdPerMillion?: number | null;
       cachedInputPriceUsdPerMillion?: number | null;
       cacheStorageUsdPerMillionTokenHour?: number | null;
-      pricingEffectiveAt?: string;
-      pricingSource?: string;
+      pricingEffectiveAt?: string | null;
+      pricingSource?: string | null;
       pricingUnavailable?: boolean;
     }) {
       const model = input.model.trim();
