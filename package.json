@@ -17,6 +17,7 @@
     "typecheck": "pnpm -r typecheck",
     "typecheck:release-scripts": "./apps/AI-adm-D1/node_modules/.bin/tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --strict --skipLibCheck --esModuleInterop --types node --typeRoots ./apps/AI-adm-D1/node_modules/@types scripts/provider-live-smoke.ts scripts/phase3a-staging-smoke.ts scripts/credential-key-rotation.ts",
     "lint": "pnpm -r lint",
+    "contracts:validate": "pnpm --filter @ai-smartbook/ai exec vitest run test/rag/contracts.test.ts",
     "lint:release-scripts": "node scripts/lint-release-scripts.mjs",
     "test": "pnpm -r --if-present test",
     "contracts:validate": "node scripts/contracts-boundary.mjs && pnpm --filter @ai-smartbook/contracts test",
