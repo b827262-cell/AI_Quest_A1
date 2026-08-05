@@ -125,7 +125,7 @@ export class CerebrasLlmProvider implements LlmProvider {
 }
 
 /**
- * Fail closed at the adapter boundary: any base URL that does not pass the
+ * Fail closed at the adapter boundary: a base URL that does not pass the
  * SSRF guard prevents the adapter from being constructed at all.
  */
 function normalizeBaseUrl(baseUrl: string): string {
