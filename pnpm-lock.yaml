@@ -14,6 +14,9 @@ importers:
 
   apps/AI-Stu-R1:
     dependencies:
+      '@ai-smartbook/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@ai-smartbook/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -72,6 +75,9 @@ importers:
 
   apps/AI-adm-D1:
     dependencies:
+      '@ai-smartbook/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@ai-smartbook/ai':
         specifier: workspace:*
         version: link:../../packages/ai
@@ -153,7 +159,20 @@ importers:
         version: 7.0.2
 
   packages/auth:
+    dependencies:
+      '@ai-smartbook/db':
+        specifier: workspace:*
+        version: link:../db
+      express:
+        specifier: ^4.19.2
+        version: 4.22.2
     devDependencies:
+      '@types/express':
+        specifier: latest
+        version: 5.0.6
+      '@types/node':
+        specifier: latest
+        version: 26.1.2
       typescript:
         specifier: latest
         version: 7.0.2

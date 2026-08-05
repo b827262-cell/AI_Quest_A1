@@ -10,6 +10,12 @@ import type {
   UpdateSmartBookNoteInput,
   GuestAnswerContent
 } from "@ai-smartbook/schema";
+import type {
+  StudentAuthMeResponse,
+  StudentProfile
+} from "@ai-smartbook/auth/browser";
+
+export { type StudentAuthMeResponse, type StudentProfile } from "@ai-smartbook/auth/browser";
 
 export interface PublicSiteConfig {
   siteTitle: string;
@@ -122,15 +128,24 @@ export interface CompleteReaderActionPayload {
   source?: string;
 }
 
+export class StudentApiError extends Error {
+  constructor(public readonly status: number, public readonly code: string, message: string) {
+    super(message);
+    this.name = "StudentApiError";
+  }
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+    credentials: "same-origin",
     ...init
   });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-    throw new Error(data.error || data.message || `${res.status} ${res.statusText}`);
+    throw new StudentApiError(res.status, data.error || "STUDENT_API_ERROR", data.message || data.error || `${res.status} ${res.statusText}`);
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -140,10 +155,10 @@ async function httpWithSession<T>(path: string, sessionId: string, init?: Reques
   if (init?.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(path, { ...init, headers });
+  const res = await fetch(path, { ...init, credentials: "same-origin", headers });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-    throw new Error(data.error || data.message || `${res.status} ${res.statusText}`);
+    throw new StudentApiError(res.status, data.error || "STUDENT_API_ERROR", data.message || data.error || `${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
 }
@@ -176,6 +191,18 @@ async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
  * an API key and never calls an AI SDK directly.
  */
 export const studentClient = {
+  getStudentMe: () => http<StudentAuthMeResponse>("/api/student/auth/me"),
+
+  logoutStudent: () => http<void>("/api/student/auth/logout", { method: "POST" }),
+
+  getStudentProfile: () => http<{ profile: StudentProfile }>("/api/student/auth/profile"),
+
+  updateStudentProfile: (body: { displayName: string; schoolName: string; gradeLevel: string }) =>
+    http<{ profile: StudentProfile }>("/api/student/auth/profile", {
+      method: "PATCH",
+      body: JSON.stringify(body)
+    }),
+
   getPublicSiteConfig: () => http<PublicSiteConfig>("/api/public/site-config"),
 
   askAsGuest: (body: {

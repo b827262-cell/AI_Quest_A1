@@ -2,6 +2,11 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import express, { type Request, type Response } from "express";
+import {
+  createStudentAuthService,
+  resolveStudentAuthConfig
+} from "@ai-smartbook/auth/server";
+import { createStudentAuthRouter, createStudentSessionMiddleware } from "@ai-smartbook/auth/express";
 import multer from "multer";
 import { z } from "zod";
 import { AiProviderIdentityConflictError } from "@ai-smartbook/db";
@@ -150,6 +155,12 @@ export function createAdminApp(dependencies: AdminAppDependencies): express.Expr
     appearanceUploadDir
   } = dependencies;
   const ctx: BookCoreContext = { repos, ai };
+  const studentAuthConfig = resolveStudentAuthConfig(env);
+  const studentAuth = createStudentAuthService(studentAuthConfig, {
+    users: repos.studentUsers,
+    sessions: repos.studentSessions,
+    oauthStates: repos.studentOAuthStates
+  });
 
   try {
     const { deleted } = repos.guestAskAnswers.cleanupExpired(new Date().toISOString());
@@ -299,6 +310,7 @@ const appearanceUpload = multer({
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+  app.use("/api/student/auth", createStudentAuthRouter(studentAuth, studentAuthConfig));
 app.get("/health/live", (_req, res) => {
   res.status(200).json({ status: "live" });
 });
@@ -2520,6 +2532,7 @@ app.get("/api/admin/books/:bookId/qa-logs", (req, res) => {
 });
 
 // ---- Student read-only API -----------------------------------------------
+app.use("/api/student", createStudentSessionMiddleware(studentAuth, studentAuthConfig));
 app.get("/api/student/books", (_req, res) => {
   res.json({ mode: "repo-api", books: repos.books.findPublished() });
 });

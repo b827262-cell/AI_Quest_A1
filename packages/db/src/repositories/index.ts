@@ -29,6 +29,9 @@ import { makeAiEvaluationControlRepo } from "./aiEvaluationControl.repo";
 import { makeAiEvaluationGovernanceRepo } from "./aiEvaluationGovernance.repo";
 import { makeAiMultiModelPilotRepo } from "./aiMultiModelPilot.repo";
 import { makeAdminSessionRepo } from "./adminSession.repo";
+import { makeStudentUserRepo } from "./studentUser.repo";
+import { makeStudentSessionRepo } from "./studentSession.repo";
+import { makeStudentOAuthStateRepo } from "./studentOAuthState.repo";
 
 export * from "./book.repo";
 export * from "./bookFile.repo";
@@ -61,6 +64,9 @@ export * from "./aiEvaluationControl.repo";
 export * from "./aiEvaluationGovernance.repo";
 export * from "./aiMultiModelPilot.repo";
 export * from "./adminSession.repo";
+export * from "./studentUser.repo";
+export * from "./studentSession.repo";
+export * from "./studentOAuthState.repo";
 
 export interface Repositories {
   books: ReturnType<typeof makeBookRepo>;
@@ -93,6 +99,9 @@ export interface Repositories {
   aiEvaluationGovernance: ReturnType<typeof makeAiEvaluationGovernanceRepo>;
   aiMultiModelPilot: ReturnType<typeof makeAiMultiModelPilotRepo>;
   adminSessions: ReturnType<typeof makeAdminSessionRepo>;
+  studentUsers: ReturnType<typeof makeStudentUserRepo>;
+  studentSessions: ReturnType<typeof makeStudentSessionRepo>;
+  studentOAuthStates: ReturnType<typeof makeStudentOAuthStateRepo>;
 }
 
 /** Build all repositories bound to a single Db handle. */
@@ -127,6 +136,9 @@ export function createRepositories(db: Db): Repositories {
     ,aiEvaluationControl: makeAiEvaluationControlRepo(db),
     aiEvaluationGovernance: makeAiEvaluationGovernanceRepo(db),
     aiMultiModelPilot: makeAiMultiModelPilotRepo(db),
-    adminSessions: makeAdminSessionRepo(db)
+    adminSessions: makeAdminSessionRepo(db),
+    studentUsers: makeStudentUserRepo(db),
+    studentSessions: makeStudentSessionRepo(db),
+    studentOAuthStates: makeStudentOAuthStateRepo(db)
   };
 }

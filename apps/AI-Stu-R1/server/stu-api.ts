@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
 import express, { type Request, type Response } from "express";
 import {
+  assertStudentAuthConfig,
+  createStudentAuthRuntime,
+  resolveStudentAuthConfig
+} from "@ai-smartbook/auth/server";
+import {
   loadStudentRuntimeConfig,
   createDataSource,
   keywordChat,
@@ -10,8 +15,13 @@ import {
   type StudentDataSource
 } from "@ai-smartbook/student-runtime";
 import { studentChatRequestSchema } from "@ai-smartbook/schema";
+import { createStudentAuthRouter, createStudentSessionMiddleware } from "@ai-smartbook/auth/express";
 
 const config = loadStudentRuntimeConfig();
+const studentAuthConfig = resolveStudentAuthConfig(process.env);
+assertStudentAuthConfig(studentAuthConfig);
+const studentAuthDbPath = process.env.STUDENT_AUTH_DB_PATH || process.env.SQLITE_PATH || resolve(process.cwd(), "data", "ai-smartbook-r1.db");
+const studentAuthRuntime = createStudentAuthRuntime(studentAuthDbPath, studentAuthConfig);
 
 type PdfSession = { id: string; bookId: string; lastSeenAt: number };
 const pdfSessions = new Map<string, PdfSession>();
@@ -104,6 +114,11 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
 
 const app = express();
 app.use(express.json());
+
+// Google OAuth and session restore are public auth boundaries. All learning
+// endpoints below them require the same server-side Student session.
+app.use("/api/student/auth", createStudentAuthRouter(studentAuthRuntime.auth, studentAuthConfig));
+app.use("/api/student", createStudentSessionMiddleware(studentAuthRuntime.auth, studentAuthConfig));
 
 // ---- Student API (read-only) ---------------------------------------------
 app.get("/api/student/books", async (_req, res) => {
@@ -243,3 +258,5 @@ app.listen(config.apiPort, () => {
     `AI-Stu-R1 student API listening on ${config.apiPort} (mode=${config.mode}, chat=${config.chatMode})`
   );
 });
+
+export { app };

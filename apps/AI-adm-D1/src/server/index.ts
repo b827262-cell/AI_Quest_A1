@@ -2,9 +2,11 @@ import { loadRootEnv } from "./env";
 import { createAdminApp } from "./app";
 import { createAdminDependencies } from "./dependencies";
 import { assertAdminAuthConfig, resolveAdminAuthConfig } from "./ai/admin-auth";
+import { assertStudentAuthConfig, resolveStudentAuthConfig } from "@ai-smartbook/auth/server";
 
 const rootEnv = loadRootEnv();
 assertAdminAuthConfig(resolveAdminAuthConfig(process.env));
+assertStudentAuthConfig(resolveStudentAuthConfig(process.env));
 console.log(`ADMIN_API_TOKEN: ${rootEnv.adminTokenConfigured ? "configured" : "missing"}`);
 console.log(`AI_CREDENTIAL_ENCRYPTION_KEY: ${rootEnv.credentialEncryptionKeyConfigured ? "configured" : "missing"}`);
 
