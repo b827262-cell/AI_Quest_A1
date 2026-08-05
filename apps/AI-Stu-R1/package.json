@@ -14,10 +14,12 @@
     "flow:sidecar": "node server/flow-sidecar.mjs"
   },
   "dependencies": {
+    "@ai-smartbook/ai": "workspace:*",
     "@ai-smartbook/auth": "workspace:*",
+    "@ai-smartbook/contracts": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
-    "@ai-smartbook/ui": "workspace:*",
     "@ai-smartbook/student-runtime": "workspace:*",
+    "@ai-smartbook/ui": "workspace:*",
     "better-sqlite3": "latest",
     "express": "^4.19.2",
     "pdfjs-dist": "5.4.296",

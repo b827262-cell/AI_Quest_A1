@@ -18,7 +18,7 @@ export type StudentRagScopeV1 = z.infer<typeof studentRagScopeV1Schema>;
 
 /** Public request body of POST /api/student/books/:bookId/rag-ask. */
 export const studentRagAskRequestV1Schema = z.object({
-  contractVersion: z.literal(1),
+  contractVersion: z.literal(1).optional(),
   query: z.string().trim().min(1).max(4_000),
   conversationId: z.string().min(1).max(128).optional()
 }).strict();

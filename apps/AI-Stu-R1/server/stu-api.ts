@@ -16,6 +16,7 @@ import {
 } from "@ai-smartbook/student-runtime";
 import { studentChatRequestSchema } from "@ai-smartbook/schema";
 import { createStudentAuthRouter, createStudentSessionMiddleware } from "@ai-smartbook/auth/express";
+import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
 
 const config = loadStudentRuntimeConfig();
 const studentAuthConfig = resolveStudentAuthConfig(process.env);
@@ -119,6 +120,14 @@ app.use(express.json());
 // endpoints below them require the same server-side Student session.
 app.use("/api/student/auth", createStudentAuthRouter(studentAuthRuntime.auth, studentAuthConfig));
 app.use("/api/student", createStudentSessionMiddleware(studentAuthRuntime.auth, studentAuthConfig));
+
+// Scoped RAG question endpoint: session + completed profile are already
+// enforced by the middleware above; the route derives studentId/bookId from
+// the session and route parameter, never from the request body.
+app.use("/api/student", createStudentRagRouter({
+  getDataSource: () => dataSource,
+  env: resolveStudentRagEnv()
+}));
 
 // ---- Student API (read-only) ---------------------------------------------
 app.get("/api/student/books", async (_req, res) => {

@@ -14,9 +14,15 @@ importers:
 
   apps/AI-Stu-R1:
     dependencies:
+      '@ai-smartbook/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@ai-smartbook/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@ai-smartbook/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@ai-smartbook/schema':
         specifier: workspace:*
         version: link:../../packages/schema

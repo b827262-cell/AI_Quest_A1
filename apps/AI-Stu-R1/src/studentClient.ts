@@ -135,6 +135,27 @@ export class StudentApiError extends Error {
   }
 }
 
+/** Public success shape of POST /api/student/books/:bookId/rag-ask. */
+export interface BookRagCitation {
+  chunkId: string;
+  label: string;
+  locator?: string;
+  start?: number;
+  end?: number;
+}
+
+export interface BookRagAnswer {
+  contractVersion: number;
+  requestId: string;
+  answer: string;
+  citations: BookRagCitation[];
+  confidence: "high" | "medium" | "low";
+  grounding: "verified" | "unverified" | "abstained";
+  citationStatus: "verified" | "not_checked" | "invalid";
+  abstained: boolean;
+  abstentionReason?: "NO_EVIDENCE" | "INJECTION_BLOCKED" | "INSUFFICIENT_EVIDENCE";
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
@@ -232,6 +253,31 @@ export const studentClient = {
     }),
 
   listBooks: () => http<{ mode: string; books: Book[] }>("/api/student/books"),
+
+  /**
+   * Scoped RAG question for a book. Identity/scope are injected server-side
+   * from the session; the browser only supplies the query. Citations in the
+   * response were already validated server-side and are safe to render.
+   */
+  askBookRag: async (bookId: string, body: { query: string; conversationId?: string }, signal?: AbortSignal): Promise<BookRagAnswer> => {
+    const res = await fetch(`/api/student/books/${encodeURIComponent(bookId)}/rag-ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(body),
+      signal
+    });
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      const envelope = (data.error && typeof data.error === "object" ? data.error : {}) as { code?: unknown; message?: unknown };
+      const code = typeof envelope.code === "string"
+        ? envelope.code
+        : typeof data.error === "string" ? data.error : "STUDENT_API_ERROR";
+      const message = typeof envelope.message === "string" ? envelope.message : `${res.status} ${res.statusText}`;
+      throw new StudentApiError(res.status, code, message);
+    }
+    return data as unknown as BookRagAnswer;
+  },
 
   getBook: (bookId: string) => http<{ book: BookDetail }>(`/api/student/books/${bookId}`),
 
