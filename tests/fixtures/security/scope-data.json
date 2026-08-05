@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Synthetic multi-course, multi-class, multi-learner scope dataset for AC-4/AC-5 IDOR testing (Prep 17-2)",
+  "dataset": {
+    "courses": [
+      {
+        "courseId": "course-101",
+        "title": "Computer Science 101",
+        "classes": [
+          {
+            "classId": "class-a",
+            "teacherId": "teacher-01",
+            "taIds": ["ta-01"],
+            "learners": ["learner-x", "learner-z"]
+          },
+          {
+            "classId": "class-b",
+            "teacherId": "teacher-02",
+            "taIds": ["ta-02"],
+            "learners": ["learner-y"]
+          }
+        ]
+      }
+    ],
+    "learnerData": [
+      {
+        "learnerId": "learner-x",
+        "notes": [
+          { "noteId": "note-x-101", "bookId": "book-cs1", "content": "Learner X private notes on recursion" }
+        ],
+        "chatSessions": [
+          { "sessionId": "session-x-999", "bookId": "book-cs1", "topic": "Big O Notation" }
+        ]
+      },
+      {
+        "learnerId": "learner-y",
+        "notes": [
+          { "noteId": "note-y-202", "bookId": "book-cs1", "content": "Learner Y private notes on pointers" }
+        ],
+        "chatSessions": [
+          { "sessionId": "session-y-888", "bookId": "book-cs1", "topic": "Memory Allocation" }
+        ]
+      }
+    ],
+    "expectedAccessControls": {
+      "learner_x_access_note_y": "MUST_FAIL_403_OR_404",
+      "learner_x_access_session_y": "MUST_FAIL_403_OR_404",
+      "ta_01_publish_draft_class_a": "MUST_FAIL_403_TEACHER_ONLY",
+      "teacher_01_publish_draft_class_b": "MUST_FAIL_403_WRONG_CLASS_SCOPE"
+    }
+  }
+}

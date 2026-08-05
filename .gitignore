@@ -38,3 +38,4 @@ logs/dev/
 .env
 .env.*
 !.env.example
+!.env.test.example
