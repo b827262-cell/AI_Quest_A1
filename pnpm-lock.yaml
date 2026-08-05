@@ -143,6 +143,22 @@ importers:
         specifier: latest
         version: 7.0.2
 
+  packages/contracts:
+    dependencies:
+      zod:
+        specifier: latest
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 26.1.2
+      typescript:
+        specifier: latest
+        version: 7.0.2
+      vitest:
+        specifier: latest
+        version: 4.1.10(@types/node@26.1.2)(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(tsx@4.23.1))
+
   packages/auth:
     devDependencies:
       typescript:

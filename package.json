@@ -19,6 +19,7 @@
     "lint": "pnpm -r lint",
     "lint:release-scripts": "node scripts/lint-release-scripts.mjs",
     "test": "pnpm -r --if-present test",
+    "contracts:validate": "node scripts/contracts-boundary.mjs && pnpm --filter @ai-smartbook/contracts test",
     "db:migrate": "pnpm --filter @ai-smartbook/db db:migrate",
     "db:preflight:phase2": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/phase2-db-preflight.ts",
     "smoke:phase2": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/phase2-http-smoke.ts",
