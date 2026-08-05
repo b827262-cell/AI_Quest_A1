@@ -34,14 +34,22 @@ export type StudentRagEnv = {
   cerebrasApiKey?: string;
   cerebrasBaseUrl?: string;
   cerebrasModel?: string;
+  /**
+   * Deterministic failure injection for smoke gates (fake provider only):
+   * "invalid_citation" answers with a chunkId the retriever never supplied,
+   * proving the citation validator fails closed at the HTTP boundary.
+   */
+  fakeMode?: "grounded" | "invalid_citation";
 };
 
 export function resolveStudentRagEnv(env: NodeJS.ProcessEnv = process.env): StudentRagEnv {
+  const fakeMode = env.STUDENT_RAG_FAKE_MODE?.trim();
   return {
     provider: env.STUDENT_RAG_PROVIDER?.trim() || undefined,
     cerebrasApiKey: env.CEREBRAS_API_KEY?.trim() || undefined,
     cerebrasBaseUrl: env.CEREBRAS_BASE_URL?.trim() || undefined,
-    cerebrasModel: env.CEREBRAS_MODEL?.trim() || undefined
+    cerebrasModel: env.CEREBRAS_MODEL?.trim() || undefined,
+    fakeMode: fakeMode === "invalid_citation" ? "invalid_citation" : undefined
   };
 }
 
@@ -79,14 +87,31 @@ export class ScopedBookContentRetriever implements Retriever {
 
 function tokenize(query: string): string[] {
   const ascii = query.toLowerCase().match(/[a-z0-9\u00c0-\u024f]{2,}/g) ?? [];
-  const cjk = query.match(/[\u4e00-\u9fff]{2,}/g) ?? [];
+  // CJK runs are indexed as the full run plus every bigram so natural
+  // Chinese questions ("光合作用如何運作") still hit stored content.
+  const cjk: string[] = [];
+  for (const run of query.match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
+    cjk.push(run);
+    for (let index = 0; index + 2 <= run.length; index += 1) {
+      cjk.push(run.slice(index, index + 2));
+    }
+  }
   return [...new Set([...ascii, ...cjk])];
 }
 
 /** Deterministic offline provider used by smoke gates; never calls a vendor. */
-export function createFakeRagProvider(): LlmProvider {
+export function createFakeRagProvider(mode: "grounded" | "invalid_citation" = "grounded"): LlmProvider {
   return new FakeLlmProvider({
     handler: (input: LlmGenerateInput) => {
+      if (mode === "invalid_citation") {
+        // Fabricate a citation the retriever never supplied: the pipeline
+        // must reject it via the citation validator and fail closed.
+        return JSON.stringify({
+          answer: "This answer cites a chunk that does not exist.",
+          citations: [{ chunkId: "chunk-never-retrieved", label: "forged" }],
+          confidence: "high"
+        });
+      }
       // Deterministic grounded answer: quote the first evidence block the
       // retriever supplied and cite exactly that chunk.
       const marker = input.userPrompt.match(/\{"chunkId":"([^"]+)"[^}]*"label":"([^"]*)"/);
@@ -105,7 +130,7 @@ export function createFakeRagProvider(): LlmProvider {
 
 export function createStudentRagProvider(options: StudentRagEnv): LlmProvider {
   const mode = options.provider ?? (options.cerebrasApiKey ? "cerebras" : undefined);
-  if (mode === "fake") return createFakeRagProvider();
+  if (mode === "fake") return createFakeRagProvider(options.fakeMode ?? "grounded");
   if (mode === "cerebras") {
     // Fail closed: without a credential the adapter still constructs, but
     // every generation resolves no credential and maps to AUTH_FAILED.
