@@ -115,7 +115,7 @@ export function createStudentAuthRouter(
       });
       setStudentSessionCookie(res, config, result.sessionToken);
       res.setHeader("Cache-Control", "no-store");
-      const target = result.profile.profileCompleted ? result.returnTo : `/profile/complete?next=${encodeURIComponent(result.returnTo)}`;
+      const target = result.profile.profileCompleted ? result.returnTo : `/profile-completion?next=${encodeURIComponent(result.returnTo)}`;
       res.redirect(302, target);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";

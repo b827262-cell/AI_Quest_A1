@@ -5,14 +5,16 @@ import { BookReaderPage } from "./pages/BookReaderPage";
 import { AntiGPortalPage } from "./pages/AntiGPortalPage";
 import { InstitutionalFlowPage } from "./pages/InstitutionalFlowPage";
 import { LoginPage } from "./pages/LoginPage";
+import { AuthCallbackPage } from "./pages/AuthCallbackPage";
 import { StudentHeader } from "./components/StudentHeader";
 import { PublicHomePage } from "./pages/PublicHomePage";
 import { ProfileCompletionPage } from "./pages/ProfileCompletionPage";
+import { StudentDashboardPage } from "./pages/StudentDashboardPage";
 import { RequireStudent, StudentAuthProvider } from "./student-auth";
 
 function StudentChrome() {
   const location = useLocation();
-  const isPublicRoute = location.pathname === "/" || location.pathname === "/guest-answer" || location.pathname === "/login" || location.pathname === "/profile/complete";
+  const isPublicRoute = location.pathname === "/" || location.pathname === "/guest-answer" || location.pathname === "/login" || location.pathname === "/auth/callback" || location.pathname === "/profile-completion";
   return isPublicRoute ? null : <StudentHeader />;
 }
 
@@ -31,9 +33,11 @@ export function App() {
           <main className="stu-main">
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/auth/callback" element={<AuthCallbackPage />} />
               <Route path="/" element={<PublicHomePage />} />
               <Route path="/guest-answer" element={<PublicHomePage />} />
-              <Route path="/profile/complete" element={<ProfileCompletionPage />} />
+              <Route path="/profile-completion" element={<ProfileCompletionPage />} />
+              <Route path="/dashboard" element={<RequireStudent><StudentDashboardPage /></RequireStudent>} />
               <Route path="/books" element={<RequireStudent><BooksPage /></RequireStudent>} />
               <Route path="/books/:bookId" element={<RequireStudent><BookReaderPage /></RequireStudent>} />
               <Route path="/books/:bookId/read" element={<RequireStudent><RedirectToReader /></RequireStudent>} />

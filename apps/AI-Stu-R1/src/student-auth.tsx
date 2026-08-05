@@ -80,7 +80,7 @@ export function RequireStudent({ children }: { children: ReactNode }) {
     return <Navigate to="/login" replace state={{ from: next, reason: "auth_required" }} />;
   }
   if (!profile?.profileCompleted) {
-    return <Navigate to={`/profile/complete?next=${encodeURIComponent(next)}`} replace state={{ reason: "profile_incomplete" }} />;
+    return <Navigate to={`/profile-completion?next=${encodeURIComponent(next)}`} replace state={{ reason: "profile_incomplete" }} />;
   }
   return <>{children}</>;
 }

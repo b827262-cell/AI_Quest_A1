@@ -127,7 +127,7 @@ describe("Student Auth HTTP integration", () => {
     const state = authorizationUrl.searchParams.get("state")!;
     const callback = await dispatch(router, requestFor("/google/callback", "GET", { state, code: "authorization-code" }));
     expect(callback.statusCode).toBe(302);
-    expect(String(callback.headers.location)).toContain("/profile/complete");
+    expect(String(callback.headers.location)).toContain("/profile-completion");
     const rawCookie = callback.headers["set-cookie"];
     const sessionCookie = Array.isArray(rawCookie) ? rawCookie[0].split(";", 1)[0] : String(rawCookie).split(";", 1)[0];
     expect(String(rawCookie)).toMatch(/HttpOnly/);
