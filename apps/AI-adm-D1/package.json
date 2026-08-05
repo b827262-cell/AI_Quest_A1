@@ -12,6 +12,7 @@
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "dependencies": {
+    "@ai-smartbook/contracts": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
     "@ai-smartbook/db": "workspace:*",
     "@ai-smartbook/ui": "workspace:*",

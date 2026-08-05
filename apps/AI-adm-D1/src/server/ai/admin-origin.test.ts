@@ -39,7 +39,7 @@ function runChain(method: string, origin: string | undefined, token: string | un
   } } as Request;
   createAdminOriginMiddleware({ NODE_ENV: "development", ADMIN_ALLOWED_ORIGINS: LOCAL_ADMIN_ORIGINS.join(",") })(req, res.result, () => {
     passedOrigin = true;
-    createAdminAuthMiddleware({ NODE_ENV: "development", ADMIN_API_TOKEN: "valid-token" })(authRequest, res.result, nextAuth);
+    createAdminAuthMiddleware({ NODE_ENV: "development", ADMIN_DEV_PASSWORD: "valid-token" })(authRequest, res.result, nextAuth);
   });
   return { ...res, passedOrigin, passedAuth };
 }

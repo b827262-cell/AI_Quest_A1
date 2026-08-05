@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { adminApi, ApiHttpError } from "../api";
 import { priceFor, type AiProviderId } from "@ai-smartbook/ai/browser";
+import type { QmRuntimeConfigPublicView } from "@ai-smartbook/contracts";
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
@@ -85,6 +86,13 @@ type ProviderForm = {
   isDefault: boolean;
   isRouterProvider: boolean;
   priority: number;
+};
+
+type QmRuntimeConfigForm = {
+  providerConfigId: string;
+  credentialId: string;
+  model: string;
+  baseUrlOverride: string;
 };
 
 type CredentialForm = {
@@ -276,6 +284,10 @@ export function AiProvidersPage() {
   const [message, setMessage] = useState("");
   const [credentialErrors, setCredentialErrors] = useState<Record<string, string>>({});
   const providerSaveInFlight = useRef(false);
+  const [qmRuntimeView, setQmRuntimeView] = useState<QmRuntimeConfigPublicView | null>(null);
+  const [qmForm, setQmForm] = useState<QmRuntimeConfigForm>({ providerConfigId: "", credentialId: "", model: "", baseUrlOverride: "" });
+  const [qmTesting, setQmTesting] = useState(false);
+  const [qmCredentials, setQmCredentials] = useState<Credential[]>([]);
 
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? null;
 
@@ -330,6 +342,98 @@ export function AiProvidersPage() {
   useEffect(() => {
     void loadProviders();
   }, []);
+
+  // QM runtime config: load once and whenever providers/credentials refresh,
+  // so a stale (blocked) selection is always reflected from live server state.
+  async function loadQmRuntimeConfig() {
+    setError("");
+    try {
+      const response = await adminApi.getQmRuntimeConfig();
+      const view = response.view;
+      setQmRuntimeView(view);
+      if (view.config) {
+        setQmForm({
+          providerConfigId: view.config.providerConfigId,
+          credentialId: view.config.credentialId,
+          model: view.config.model,
+          baseUrlOverride: view.config.baseUrlOverride ?? ""
+        });
+      } else if (providers.length > 0) {
+        // Default the form to the first enabled provider when nothing is saved.
+        const firstEnabled = providers.find((row) => row.enabled) ?? providers[0];
+        setQmForm({ providerConfigId: firstEnabled.id, credentialId: "", model: "", baseUrlOverride: "" });
+      }
+    } catch {
+      setQmRuntimeView(null);
+      setError("無法讀取 QM 執行設定，請確認管理 API 與授權狀態。");
+    }
+  }
+
+  useEffect(() => {
+    if (providers.length > 0 && !qmRuntimeView) void loadQmRuntimeConfig();
+  }, [providers, qmRuntimeView]);
+
+  // Load the active credentials of the QM-form's chosen provider so the
+  // credential/model selects stay restricted to that provider's active keys.
+  async function loadQmCredentials(providerConfigId: string) {
+    if (!providerConfigId) { setQmCredentials([]); return; }
+    try {
+      const response = await adminApi.listAiCredentials(providerConfigId);
+      setQmCredentials(response.credentials as Credential[]);
+    } catch {
+      setQmCredentials([]);
+    }
+  }
+
+  useEffect(() => {
+    if (qmForm.providerConfigId) void loadQmCredentials(qmForm.providerConfigId);
+  }, [qmForm.providerConfigId]);
+
+  async function saveQmRuntimeConfig() {
+    if (!qmForm.providerConfigId || !qmForm.credentialId || !qmForm.model.trim()) {
+      setError("請依序選擇 Provider、Credential 與 Model 後再儲存 QM 執行設定。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await adminApi.saveQmRuntimeConfig({
+        providerConfigId: qmForm.providerConfigId,
+        credentialId: qmForm.credentialId,
+        model: qmForm.model.trim(),
+        baseUrlOverride: qmForm.baseUrlOverride.trim() || null
+      });
+      if (response.resolution && !response.resolution.ok) {
+        setError(`QM 執行設定已儲存，但目前的選取被阻擋：${response.resolution.reason}`);
+      } else {
+        setMessage("QM 執行設定已儲存；API Key 不會再次回傳，僅顯示遮罩值。");
+      }
+      await loadQmRuntimeConfig();
+    } catch (saveError) {
+      setError(saveError instanceof Error && saveError.message ? saveError.message : "QM 執行設定儲存失敗，請稍後再試。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function testQmRuntimeConfig() {
+    setQmTesting(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await adminApi.testQmRuntimeConfig();
+      if (result.status === "success") {
+        setMessage(`QM 執行設定測試通過（${result.model}，${result.latencyMs} ms）。`);
+      } else {
+        setError(`QM 執行設定測試失敗：${result.reason}`);
+      }
+    } catch (testError) {
+      setError(testError instanceof Error && testError.message ? testError.message : "QM 執行設定測試失敗，請稍後再試。");
+    } finally {
+      setQmTesting(false);
+    }
+  }
 
   useEffect(() => {
     if (!selectedProvider) {
@@ -938,5 +1042,43 @@ export function AiProvidersPage() {
         </table>
       </div>}
     </AdminCard> : null}
+
+    <AdminCard title="QM 執行設定">
+      <p className="admin-help">選擇 QM 預設 Provider、Credential 與 Model。設定只儲存參照（providerConfigId、credentialId、model、Base URL override），絕不再次儲存 API Key 明文；前端只會收到遮罩值與安全狀態。停用、刪除或跨 Provider 的 Credential 會在後端 fail closed。</p>
+      <div className="admin-form-grid">
+        <label>Provider<select value={qmForm.providerConfigId} disabled={busy} onChange={(event) => {
+          const providerConfigId = event.target.value;
+          setQmForm({ providerConfigId, credentialId: "", model: "", baseUrlOverride: qmForm.baseUrlOverride });
+        }}>
+          <option value="">請選擇 Provider</option>
+          {providers.filter((provider) => provider.enabled).map((provider) => <option key={provider.id} value={provider.id}>{provider.displayName}</option>)}
+        </select></label>
+        <label>Credential（僅顯示 Active）<select value={qmForm.credentialId} disabled={busy || !qmForm.providerConfigId} onChange={(event) => {
+          const credentialId = event.target.value;
+          const credential = qmCredentials.find((row) => row.id === credentialId);
+          const defaultModel = credential?.model ?? credential?.modelQuotas.find((quota) => quota.isDefault && quota.enabled)?.model ?? "";
+          setQmForm({ ...qmForm, credentialId, model: defaultModel });
+        }}>
+          <option value="">請選擇 Credential</option>
+          {qmCredentials.filter((credential) => credential.status === "active").map((credential) => <option key={credential.id} value={credential.id}>{credential.name}</option>)}
+        </select></label>
+        <label>Model<select value={qmForm.model} disabled={busy || !qmForm.credentialId} onChange={(event) => setQmForm((current) => ({ ...current, model: event.target.value }))}>
+          <option value="">請選擇 Model</option>
+          {(() => {
+            const credential = qmCredentials.find((row) => row.id === qmForm.credentialId);
+            if (!credential) return [];
+            const fromQuotas = credential.modelQuotas.filter((quota) => quota.enabled).map((quota) => quota.model);
+            const models = credential.model ? [credential.model, ...fromQuotas.filter((model) => model !== credential.model)] : fromQuotas;
+            return [...new Set(models)].map((model) => <option key={model} value={model}>{model}</option>);
+          })()}
+        </select></label>
+        <label>Base URL override（可留白）<input value={qmForm.baseUrlOverride} disabled={busy} placeholder="留白則依序套用 Credential、Provider Base URL" onChange={(event) => setQmForm((current) => ({ ...current, baseUrlOverride: event.target.value }))} /></label>
+      </div>
+      {qmRuntimeView && qmRuntimeView.maskedApiKey ? <p className="admin-help">目前金鑰遮罩：<code className="admin-safe-mask">{qmRuntimeView.maskedApiKey}</code>{qmRuntimeView.credentialInCooldown ? <span className="admin-inline-error">（此 Credential 目前 cooldown 中）</span> : null}</p> : null}
+      <div className="admin-action-row">
+        <button type="button" className="admin-btn" onClick={() => void saveQmRuntimeConfig()} disabled={busy || !qmForm.providerConfigId || !qmForm.credentialId || !qmForm.model.trim()}>{busy ? "處理中…" : "儲存 QM 執行設定"}</button>
+        <button type="button" className="admin-btn secondary" onClick={() => void testQmRuntimeConfig()} disabled={busy || qmTesting || !qmRuntimeView?.config}>{qmTesting ? "測試中…" : "測試目前設定"}</button>
+      </div>
+    </AdminCard>
   </div>;
 }

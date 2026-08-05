@@ -23,14 +23,16 @@ const providerKeyNames: Record<ManagedProvider, string> = {
   openai: "OPENAI_API_KEY",
   gemini: "GEMINI_API_KEY",
   kimi: "KIMI_API_KEY",
-  qwen: "QWEN_API_KEY"
+  qwen: "QWEN_API_KEY",
+  zai: "ZAI_API_KEY"
 };
 
 const providerDefaults: Record<ManagedProvider, { baseUrl: string; model: string }> = {
   openai: { baseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1", model: process.env.OPENAI_MODEL || "gpt-4o-mini" },
   gemini: { baseUrl: process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta", model: process.env.GEMINI_MODEL || "gemini-1.5-flash" },
   kimi: { baseUrl: process.env.KIMI_BASE_URL || "https://api.moonshot.cn/v1", model: process.env.KIMI_MODEL || "moonshot-v1-8k" },
-  qwen: { baseUrl: process.env.QWEN_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1", model: process.env.QWEN_MODEL || "qwen-turbo" }
+  qwen: { baseUrl: process.env.QWEN_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1", model: process.env.QWEN_MODEL || "qwen-turbo" },
+  zai: { baseUrl: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4", model: process.env.ZAI_MODEL || "glm-4.5-flash" }
 };
 
 const reportPath = artifactPath("provider-live-smoke", "PROVIDER_LIVE_REPORT_PATH");

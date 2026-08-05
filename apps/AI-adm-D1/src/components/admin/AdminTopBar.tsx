@@ -1,19 +1,24 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAppearance } from "../../appearance";
+import { useAdminAuth } from "../../adminAuth";
 
-// Front-end identity constants (no auth API in scope).
 const ADMIN_IDENTITY = { org: "admin", initial: "管", label: "管理者" };
 
-/** Sticky white top bar: hamburger, configurable brand (name + logo), home. */
+/** Sticky white top bar: hamburger, configurable brand, home and logout. */
 export function AdminTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { settings } = useAppearance();
+  const { logout } = useAdminAuth();
+  const navigate = useNavigate();
   const [logoFailed, setLogoFailed] = useState(false);
 
-  // Reset the logo error state when the URL changes so a new valid logo shows.
   useEffect(() => setLogoFailed(false), [settings.headerLogoUrl]);
 
   const showLogo = !!settings.headerLogoUrl && !logoFailed;
+  const handleLogout = () => {
+    logout();
+    navigate("/admin/login", { replace: true });
+  };
 
   return (
     <header className="admin-topbar">
@@ -56,6 +61,15 @@ export function AdminTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }
         <span className="admin-avatar" title={ADMIN_IDENTITY.label} aria-label={ADMIN_IDENTITY.label}>
           {ADMIN_IDENTITY.initial}
         </span>
+        <button
+          type="button"
+          className="admin-btn ghost"
+          onClick={handleLogout}
+          aria-label="登出管理後台"
+          style={{ padding: "7px 12px", whiteSpace: "nowrap" }}
+        >
+          登出
+        </button>
       </div>
     </header>
   );

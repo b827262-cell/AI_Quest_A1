@@ -66,3 +66,25 @@ STUDENT_API_TARGET=http://34.81.110.125 pnpm --filter AI-Stu-R1 dev -- --host 0.
         ```bash
         STUDENT_API_TARGET=http://34.81.110.125 pnpm --filter AI-Stu-R1 dev -- --host 0.0.0.0
         ```
+
+### 🔴 模組匯入 500 錯誤，例如 `Failed to resolve import "pdfjs-dist/build/pdf.worker.min.mjs?url"`
+*   **原因分析：**
+    這是**開發環境程序狀態過期（stale dev server process）**，不是程式碼缺陷，也不是套件版本或匯出路徑不相容問題。
+    當執行 `pnpm install`、重新連結 workspace，或大幅更新 `node_modules` 之後，若原本仍在背景執行的 Vite dev server **沒有重新啟動**，該行程會持續持有更新前的依賴解析結果與 optimize deps 快取，導致對某些套件子路徑（如 `pdfjs-dist` 的 Worker `.mjs`）的匯入解析失敗，回傳 500，並連帶讓整個模組圖（含依賴該檔案的路由頁面）載入失敗。
+*   **判斷依據：**
+    *   直接以 `curl` 存取該檔案的 `@fs` 路徑（例如 `http://127.0.0.1:5173/@fs/<絕對路徑>/pdfjs-dist/build/pdf.worker.min.mjs`）可正常回應 200，代表檔案本身存在且可被伺服器讀取。
+    *   確認該套件 `package.json` 沒有 `exports` 欄位限制子路徑存取。
+    *   比對 Vite dev server 的啟動時間（`ps -ef | grep vite`）與 `node_modules` 的最後修改時間（`ls -la node_modules/pdfjs-dist`），若 dev server 早於依賴安裝時間啟動，即可確認為過期行程。
+*   **排查步驟：**
+    1. 找到對應埠號的 Vite dev 行程並終止：
+        ```bash
+        ps -ef | grep "vite --host 0.0.0.0 --port 5173"
+        kill <PID>
+        ```
+    2. 重新啟動該前端開發伺服器（依第 3 節指令，或本機開發時使用 `pnpm --filter AI-Stu-R1 dev`）。
+    3. 確認錯誤頁面／路由（如 `/guest-answer`）恢復 200 OK，且瀏覽器 Console 不再出現新的模組解析錯誤。
+*   **注意事項：**
+    *   **不需要**修改程式碼、Worker 匯入路徑，或重新產生 lockfile 來處理此問題。
+    *   **不應**透過關閉 Vite HMR error overlay 來規避，那只是隱藏錯誤訊息，不會解決根因。
+    *   重啟後回報的 Vite 版本可能與舊行程錯誤訊息中顯示的版本不同（例如舊行程回報 `8.2.0`、重啟後回報 `8.1.5`）；這通常代表安裝當下 lockfile 已解析為新版本，只是舊行程尚未套用，而非另一個獨立的版本切換問題，應優先確認 `node_modules/.pnpm` 下實際安裝的版本與 lockfile 是否一致。
+    *   **通則：** 執行 `pnpm install`、重新連結 workspace 或大幅更新 `node_modules` 後，應重新啟動所有仍在運行的 Vite dev server，避免舊行程保留失效的依賴解析與優化快取。
