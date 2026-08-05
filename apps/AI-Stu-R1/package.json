@@ -14,6 +14,7 @@
     "flow:sidecar": "node server/flow-sidecar.mjs"
   },
   "dependencies": {
+    "@ai-smartbook/auth": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
     "@ai-smartbook/ui": "workspace:*",
     "@ai-smartbook/student-runtime": "workspace:*",

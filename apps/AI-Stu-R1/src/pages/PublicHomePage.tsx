@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { HomeAIComposer } from "../components/HomeAIComposer";
 import { StudentAnswerRenderer } from "../components/GuestAnswerRenderer";
@@ -15,6 +15,7 @@ import {
   type GuestQuestionCategory,
   type PublicSiteConfig
 } from "../studentClient";
+import { useStudentAuth } from "../student-auth";
 
 const DEFAULT_CONFIG: PublicSiteConfig = {
   siteTitle: "AI-SmartBook",
@@ -33,15 +34,6 @@ const QUICK_STARTS: Array<{ label: string; category: GuestQuestionCategory; ques
   { label: "教材問答", category: "教材問答", question: "請示範如何從教材整理一個重點。" },
   { label: "資通安全", category: "cybersecurity", question: "Reflected XSS 是否能讀取其他網站的 Cookie？" }
 ];
-
-function readStudentName(): string {
-  if (typeof window === "undefined") return "";
-  return (
-    window.localStorage.getItem("smartbook.student.name") ||
-    window.localStorage.getItem("studentName") ||
-    ""
-  ).trim();
-}
 
 function BrandMark() {
   return (
@@ -159,7 +151,8 @@ export function PublicHomePage() {
   const [lastSourceType, setLastSourceType] = useState<"manual" | "image" | "file">("manual");
   const [restoringAnswer, setRestoringAnswer] = useState(isAnswerRoute);
   const requestAbortRef = useRef<AbortController | null>(null);
-  const studentName = useMemo(readStudentName, []);
+  const { user } = useStudentAuth();
+  const studentName = user?.displayName || "";
 
   useEffect(() => {
     let active = true;
