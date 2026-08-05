@@ -557,6 +557,16 @@ a { color: var(--primary); text-decoration: none; }
   .hero-search-section {
     padding-top: 14px;
   }
+  /* Allow the hero title/subtitle to wrap on phones instead of
+     overflowing the viewport horizontally. */
+  .hero-title-main {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+  .hero-title-main h1,
+  .hero-subtitle {
+    white-space: normal;
+  }
   /* Stack search box and assistant button on phones. */
   .hero-search-row {
     flex-wrap: wrap;

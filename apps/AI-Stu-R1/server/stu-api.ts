@@ -14,7 +14,7 @@ import {
   type StudentBookPdfFile,
   type StudentDataSource
 } from "@ai-smartbook/student-runtime";
-import { studentChatRequestSchema } from "@ai-smartbook/schema";
+import { DEFAULT_APPEARANCE, readerOutlineResponseSchema, studentChatRequestSchema } from "@ai-smartbook/schema";
 import { createStudentAuthRouter, createStudentSessionMiddleware } from "@ai-smartbook/auth/express";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
 
@@ -116,6 +116,12 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
 const app = express();
 app.use(express.json());
 
+// Appearance is authored in the admin system; the standalone student server
+// serves the schema defaults so the SPA never 404s on boot.
+app.get("/api/appearance-settings", (_req, res) => {
+  res.json({ settings: DEFAULT_APPEARANCE });
+});
+
 // Google OAuth and session restore are public auth boundaries. All learning
 // endpoints below them require the same server-side Student session.
 app.use("/api/student/auth", createStudentAuthRouter(studentAuthRuntime.auth, studentAuthConfig));
@@ -150,6 +156,34 @@ app.get("/api/student/books/:bookId", async (req, res) => {
     res.json({ book });
   } catch (err) {
     res.status(503).json({ error: "failed to read book", detail: String(err) });
+  }
+});
+
+app.get("/api/student/books/:bookId/outline", async (req, res) => {
+  const ds = requireDataSource(res);
+  if (!ds) return;
+  try {
+    const book = await ds.getBook(String(req.params.bookId));
+    if (!book) return res.status(404).json({ error: "book not found" });
+    // The standalone student server only carries the chapter table; manual
+    // TOCs and split-JSON indexes stay on the admin origin.
+    const outline = [...book.chapters]
+      .sort((a, b) => a.orderIndex - b.orderIndex)
+      .map((chapter) => ({
+        id: chapter.id,
+        title: chapter.title,
+        level: Math.max(1, (chapter.level ?? 0) + 1),
+        page: chapter.pageStart ?? null,
+        pdfPage: chapter.pageStart ?? null,
+        displayPage: chapter.pageStart != null ? String(chapter.pageStart) : null,
+        children: [],
+        source: "chapter_table" as const
+      }));
+    const parsed = readerOutlineResponseSchema.safeParse({ bookId: book.id, source: "chapter_table", outline });
+    if (!parsed.success) return res.status(500).json({ error: "outline shape invalid", detail: parsed.error.message });
+    res.json(parsed.data);
+  } catch (err) {
+    res.status(503).json({ error: "failed to load outline", detail: String(err) });
   }
 });
 
