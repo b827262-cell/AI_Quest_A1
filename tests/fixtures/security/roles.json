@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Synthetic role fixtures for security testing (Prep 17-2)",
+  "roles": [
+    {
+      "roleId": "role-teacher-01",
+      "name": "teacher",
+      "permissions": ["feedback:draft", "feedback:review", "feedback:publish", "course:manage"],
+      "scope": { "courseId": "course-101", "classId": "class-a" }
+    },
+    {
+      "roleId": "role-ta-01",
+      "name": "ta",
+      "permissions": ["feedback:draft", "feedback:review"],
+      "scope": { "courseId": "course-101", "classId": "class-a" }
+    },
+    {
+      "roleId": "role-student-01",
+      "name": "student",
+      "permissions": ["book:read", "note:write", "chat:interact"],
+      "scope": { "courseId": "course-101", "classId": "class-a", "learnerId": "learner-x" }
+    },
+    {
+      "roleId": "role-student-02",
+      "name": "student",
+      "permissions": ["book:read", "note:write", "chat:interact"],
+      "scope": { "courseId": "course-101", "classId": "class-b", "learnerId": "learner-y" }
+    },
+    {
+      "roleId": "role-unauthorized",
+      "name": "anonymous",
+      "permissions": ["public:read"],
+      "scope": {}
+    }
+  ]
+}

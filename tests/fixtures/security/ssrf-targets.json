@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Synthetic SSRF test targets and expected guard behaviors (Prep 17-2)",
+  "targets": [
+    {
+      "url": "http://127.0.0.1:3002/api/admin",
+      "type": "loopback_ipv4",
+      "expectedStatus": "BLOCKED_BY_SSRF_GUARD"
+    },
+    {
+      "url": "http://localhost:3000/api/student",
+      "type": "loopback_hostname",
+      "expectedStatus": "BLOCKED_BY_SSRF_GUARD"
+    },
+    {
+      "url": "http://169.254.169.254/latest/meta-data/",
+      "type": "cloud_metadata_api",
+      "expectedStatus": "BLOCKED_BY_SSRF_GUARD"
+    },
+    {
+      "url": "http://10.0.0.1/internal-admin",
+      "type": "private_rfc1918_10",
+      "expectedStatus": "BLOCKED_BY_SSRF_GUARD"
+    },
+    {
+      "url": "http://172.16.0.1/internal",
+      "type": "private_rfc1918_172",
+      "expectedStatus": "BLOCKED_BY_SSRF_GUARD"
+    },
+    {
+      "url": "http://192.168.1.1/router",
+      "type": "private_rfc1918_192",
+      "expectedStatus": "BLOCKED_BY_SSRF_GUARD"
+    },
+    {
+      "url": "http://[::1]/api",
+      "type": "loopback_ipv6",
+      "expectedStatus": "BLOCKED_BY_SSRF_GUARD"
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "type": "allowlisted_public_api",
+      "expectedStatus": "ALLOWED"
+    }
+  ]
+}

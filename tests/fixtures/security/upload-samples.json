@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Synthetic boundary & malicious upload test samples for AC-8 testing (Prep 17-2)",
+  "samples": [
+    {
+      "id": "UPLOAD-MIME-01",
+      "category": "invalid_mime_type",
+      "filename": "fake_textbook.exe",
+      "mimeType": "application/x-msdownload",
+      "sizeBytes": 1024,
+      "expectedResult": "REJECTED_BY_FILTER"
+    },
+    {
+      "id": "UPLOAD-SIZE-01",
+      "category": "oversized_appearance_image",
+      "filename": "giant_header.png",
+      "mimeType": "image/png",
+      "sizeBytes": 15728640,
+      "expectedResult": "LIMIT_FILE_SIZE_EXCEEDED"
+    },
+    {
+      "id": "UPLOAD-NAME-01",
+      "category": "path_traversal_filename",
+      "filename": "../../../etc/passwd",
+      "mimeType": "application/pdf",
+      "sizeBytes": 2048,
+      "expectedResult": "SANITIZED_TO_PASSWD_PDF"
+    },
+    {
+      "id": "UPLOAD-MALFORMED-PDF-01",
+      "category": "malformed_pdf_header",
+      "filename": "corrupted_chapter.pdf",
+      "mimeType": "application/pdf",
+      "contentHeader": "%PDF-INVALID-HEADER-CORRUPTED",
+      "sizeBytes": 512,
+      "expectedResult": "PDF_PARSE_FAILED_GRACEFULLY"
+    }
+  ]
+}

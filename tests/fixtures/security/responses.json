@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Standardized response fixtures for auth, authorization, business, and infra errors (Prep 17-2)",
+  "responses": {
+    "authFailure": {
+      "status": 401,
+      "headers": {
+        "X-Admin-Auth-State": "invalid",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "code": "ADMIN_AUTH_REQUIRED",
+        "message": "Admin authorization token is required or invalid"
+      }
+    },
+    "authorizationForbidden": {
+      "status": 403,
+      "body": {
+        "code": "FORBIDDEN_SCOPE_ACCESS",
+        "message": "User does not have permission to access the requested scope or resource"
+      }
+    },
+    "businessNotFound": {
+      "status": 404,
+      "body": {
+        "code": "RESOURCE_NOT_FOUND",
+        "message": "The specified feedback draft or resource was not found"
+      }
+    },
+    "businessValidationError": {
+      "status": 422,
+      "body": {
+        "code": "INVALID_FEEDBACK_TRANSITION",
+        "message": "Cannot transition feedback draft directly from draft to published without TA review"
+      }
+    },
+    "rateLimitExceeded": {
+      "status": 429,
+      "headers": {
+        "Retry-After": "60"
+      },
+      "body": {
+        "code": "RATE_LIMIT_EXCEEDED",
+        "message": "Too many requests, please retry after 60 seconds"
+      }
+    },
+    "providerUnavailable": {
+      "status": 503,
+      "body": {
+        "code": "QM_PROVIDER_UNAVAILABLE",
+        "message": "AI provider model service is currently unreachable"
+      }
+    }
+  }
+}
