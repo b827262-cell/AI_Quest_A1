@@ -125,10 +125,24 @@ function secretScan(): string {
   ];
   const findings: string[] = [];
   for (const pattern of patterns) {
-    const scan = spawnSync("git", ["grep", "-nIE", pattern, "--", ".", ":!pnpm-lock.yaml"], {
-      cwd: repoRoot,
-      encoding: "utf8"
-    });
+    // Test directories intentionally contain fake keys: they exercise the
+    // secret-redaction validators, so they are excluded from the scan.
+    const scan = spawnSync(
+      "git",
+      [
+        "grep",
+        "-nIE",
+        "-e",
+        pattern,
+        "--",
+        ".",
+        ":!pnpm-lock.yaml",
+        ":!**/test/**",
+        ":!**/*.test.ts",
+        ":!**/*.test.tsx"
+      ],
+      { cwd: repoRoot, encoding: "utf8" }
+    );
     // git grep exits 1 when nothing matches; anything else is suspicious.
     if (scan.status === 0) findings.push(...scan.stdout.trim().split("\n").filter(Boolean));
     else if (scan.status !== 1) throw new Error(`git grep failed for pattern ${pattern}: ${scan.stderr}`);
