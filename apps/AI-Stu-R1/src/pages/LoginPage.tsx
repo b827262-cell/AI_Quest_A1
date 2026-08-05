@@ -27,7 +27,7 @@ export function LoginPage() {
       // Simulate API lag
       setTimeout(() => {
         setLoading(false);
-        navigate("/books");
+        navigate("/dashboard");
       }, 800);
     } catch (e) {
       setError("登入失敗，請重試。");

@@ -7,6 +7,7 @@ import { InstitutionalFlowPage } from "./pages/InstitutionalFlowPage";
 import { LoginPage } from "./pages/LoginPage";
 import { StudentHeader } from "./components/StudentHeader";
 import { PublicHomePage } from "./pages/PublicHomePage";
+import { StudentDashboardPage } from "./pages/StudentDashboardPage";
 
 function StudentChrome() {
   const location = useLocation();
@@ -30,6 +31,7 @@ export function App() {
             <Route path="/" element={<PublicHomePage />} />
             <Route path="/guest-answer" element={<PublicHomePage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/dashboard" element={<StudentDashboardPage />} />
             <Route path="/books" element={<BooksPage />} />
             <Route path="/books/:bookId" element={<BookReaderPage />} />
             <Route path="/books/:bookId/read" element={<RedirectToReader />} />
