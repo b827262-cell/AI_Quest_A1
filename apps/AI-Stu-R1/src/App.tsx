@@ -24,14 +24,18 @@ function RedirectToReader() {
   return <Navigate to={`/books/${bookId}`} replace />;
 }
 
-export function App() {
+/**
+ * Route tree without the browser history binding. App() wraps it with
+ * BrowserRouter for production; integration tests wrap it with
+ * MemoryRouter to assert session-driven redirects through the real router.
+ */
+export function StudentAppRoutes() {
   return (
-    <BrowserRouter>
-      <StudentAuthProvider>
-        <AppearanceProvider>
-          <StudentChrome />
-          <main className="stu-main">
-            <Routes>
+    <StudentAuthProvider>
+      <AppearanceProvider>
+        <StudentChrome />
+        <main className="stu-main">
+          <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/auth/callback" element={<AuthCallbackPage />} />
               <Route path="/" element={<PublicHomePage />} />
@@ -51,6 +55,13 @@ export function App() {
           </main>
         </AppearanceProvider>
       </StudentAuthProvider>
+  );
+}
+
+export function App() {
+  return (
+    <BrowserRouter>
+      <StudentAppRoutes />
     </BrowserRouter>
   );
 }
