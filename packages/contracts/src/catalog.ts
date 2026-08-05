@@ -31,6 +31,24 @@ export const CONTRACT_CATALOG: readonly ContractCatalogEntry[] = [
     schema: "publicActorV1Schema"
   },
   {
+    id: "student-rag-ask-request",
+    version: 1,
+    boundary: "browser-safe",
+    owner: "Contracts maintainer + student reviewer",
+    purpose: "Public request body of the scoped student RAG question endpoint",
+    consumers: ["Student browser", "Student API server"],
+    schema: "studentRagAskRequestV1Schema"
+  },
+  {
+    id: "student-rag-ask-response",
+    version: 1,
+    boundary: "browser-safe",
+    owner: "Contracts maintainer + student reviewer",
+    purpose: "Public success and error bodies of the scoped student RAG question endpoint",
+    consumers: ["Student browser", "Student API server"],
+    schema: "studentRagAskResponseV1Schema"
+  },
+  {
     id: "audit-event",
     version: 1,
     boundary: "server-only",

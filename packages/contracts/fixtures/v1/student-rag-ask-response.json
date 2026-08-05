@@ -1,0 +1,18 @@
+{
+  "contractVersion": 1,
+  "requestId": "req_contract_fixture_002",
+  "answer": "檢索增強生成先檢索書本內容，再由模型依證據回答。",
+  "citations": [
+    {
+      "chunkId": "content_contract_fixture_001",
+      "label": "第 1 章：檢索增強生成",
+      "locator": "p.12",
+      "start": 0,
+      "end": 120
+    }
+  ],
+  "confidence": "high",
+  "grounding": "verified",
+  "citationStatus": "verified",
+  "abstained": false
+}

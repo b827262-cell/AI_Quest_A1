@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CONTRACT_CATALOG, publicActorV1Schema, publicApiErrorV1Schema } from "../src/browser";
+import {
+  CONTRACT_CATALOG,
+  publicActorV1Schema,
+  publicApiErrorV1Schema,
+  studentRagAskErrorV1Schema,
+  studentRagAskRequestV1Schema,
+  studentRagAskResponseV1Schema
+} from "../src/browser";
 import { auditEventV1Schema } from "../src/server";
 
 function fixture(name: string): unknown {
@@ -14,6 +21,18 @@ describe("version 1 compatibility fixtures", () => {
 
   it("keeps the public actor fixture schema-compatible", () => {
     expect(publicActorV1Schema.parse(fixture("public-actor"))).toEqual(fixture("public-actor"));
+  });
+
+  it("keeps the student RAG ask fixtures schema-compatible", () => {
+    expect(studentRagAskRequestV1Schema.parse(fixture("student-rag-ask-request"))).toEqual(fixture("student-rag-ask-request"));
+    expect(studentRagAskResponseV1Schema.parse(fixture("student-rag-ask-response"))).toEqual(fixture("student-rag-ask-response"));
+    expect(studentRagAskErrorV1Schema.parse(fixture("student-rag-ask-error"))).toEqual(fixture("student-rag-ask-error"));
+  });
+
+  it("rejects browser-supplied scope or identity in the RAG ask request", () => {
+    const request = fixture("student-rag-ask-request") as Record<string, unknown>;
+    expect(() => studentRagAskRequestV1Schema.parse({ ...request, studentId: "attacker" })).toThrow();
+    expect(() => studentRagAskRequestV1Schema.parse({ ...request, scope: { studentId: "attacker", bookId: "book" } })).toThrow();
   });
 
   it("rejects a breaking removal or incompatible version", () => {
