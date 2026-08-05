@@ -1,4 +1,4 @@
-import type { RagCitation, RagRequest } from "./contracts";
+import type { RagCitation, RagRequest, RagScope } from "./contracts";
 
 export type RagProviderId = "cerebras" | "fake";
 
@@ -15,6 +15,8 @@ export type RetrieverInput = {
   requestId: string;
   query: string;
   topK: number;
+  /** Authorization scope; retrievers must refuse to run without it. */
+  scope: RagScope;
   signal?: AbortSignal;
 };
 

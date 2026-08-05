@@ -1,4 +1,5 @@
-import type { RagCitation } from "./contracts";
+import type { RagCitation, RagScope } from "./contracts";
+import { RagApplicationError } from "./errors";
 import type {
   LlmGenerateInput,
   LlmGenerateOutput,
@@ -44,16 +45,31 @@ export class FakeLlmProvider implements LlmProvider {
   }
 }
 
-export class FakeRetriever implements Retriever {
-  readonly calls: Array<{ requestId: string; queryLength: number; topK: number }> = [];
-  private readonly chunks: readonly RetrievedChunk[];
+export type FakeRetrieverOptions = {
+  /** When set, requests with any other scope are rejected fail-closed. */
+  requiredScope?: RagScope;
+};
 
-  constructor(chunks: readonly RetrievedChunk[]) {
+export class FakeRetriever implements Retriever {
+  readonly calls: Array<{ requestId: string; queryLength: number; topK: number; scope: RetrieverInput["scope"] }> = [];
+  private readonly chunks: readonly RetrievedChunk[];
+  private readonly options: FakeRetrieverOptions;
+
+  constructor(chunks: readonly RetrievedChunk[], options: FakeRetrieverOptions = {}) {
     this.chunks = chunks.map((chunk) => ({ ...chunk }));
+    this.options = options;
   }
 
   async retrieve(input: RetrieverInput): Promise<readonly RetrievedChunk[]> {
-    this.calls.push({ requestId: input.requestId, queryLength: input.query.length, topK: input.topK });
+    // Scope isolation contract: never retrieve without a well-formed scope.
+    if (!input.scope || !input.scope.studentId || !input.scope.bookId) {
+      throw new RagApplicationError({ code: "RAG_INVALID_REQUEST", reasonCode: "scope_missing" });
+    }
+    const required = this.options.requiredScope;
+    if (required && (input.scope.studentId !== required.studentId || input.scope.bookId !== required.bookId)) {
+      throw new RagApplicationError({ code: "RAG_INVALID_REQUEST", reasonCode: "scope_mismatch" });
+    }
+    this.calls.push({ requestId: input.requestId, queryLength: input.query.length, topK: input.topK, scope: input.scope });
     return this.chunks.slice(0, input.topK).map((chunk) => ({ ...chunk }));
   }
 }

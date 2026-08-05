@@ -37,12 +37,23 @@ export const RAG_ERROR_HTTP_STATUS: Readonly<Record<RagErrorCode, number>> = {
   RAG_INTERNAL: 500
 };
 
+/**
+ * Retrieval authorization scope. Always derived server-side from the student
+ * session and the route parameter; browsers may never supply or override it.
+ */
+export type RagScope = {
+  studentId: string;
+  bookId: string;
+  institutionId?: string;
+};
+
 export type RagRequest = {
   contractVersion: typeof RAG_CONTRACT_VERSION;
   requestId: string;
   query: string;
   topK: number;
   maxOutputTokens: number;
+  scope: RagScope;
 };
 
 export type RagCitation = {
@@ -141,11 +152,27 @@ function parseCitation(value: unknown, index: number): RagCitation | undefined {
   return { chunkId: chunkId!, label: label!, locator, start, end };
 }
 
+function parseRagScope(value: unknown, issues: string[]): RagScope | undefined {
+  const object = recordValue(value);
+  if (!object) {
+    issues.push("scope_invalid");
+    return undefined;
+  }
+  rejectUnknownKeys(object, ["studentId", "bookId", "institutionId"], issues);
+  const studentId = requiredString(object.studentId, "scope_student_id", 128, issues);
+  const bookId = requiredString(object.bookId, "scope_book_id", 128, issues);
+  const institutionId = object.institutionId === undefined
+    ? undefined
+    : requiredString(object.institutionId, "scope_institution_id", 128, issues);
+  if (!studentId || !bookId) return undefined;
+  return institutionId === undefined ? { studentId, bookId } : { studentId, bookId, institutionId };
+}
+
 export function parseRagRequest(value: unknown): RagRequest {
   const issues: string[] = [];
   const object = recordValue(value);
   if (!object) throw new RagContractValidationError(["request_format_invalid"]);
-  rejectUnknownKeys(object, ["contractVersion", "requestId", "query", "topK", "maxOutputTokens"], issues);
+  rejectUnknownKeys(object, ["contractVersion", "requestId", "query", "topK", "maxOutputTokens", "scope"], issues);
   if (object.contractVersion !== RAG_CONTRACT_VERSION) issues.push("contract_version_invalid");
   const requestId = requiredString(object.requestId, "request_id", 200, issues);
   const query = requiredString(object.query, "query", 8_000, issues);
@@ -153,13 +180,16 @@ export function parseRagRequest(value: unknown): RagRequest {
   const maxOutputTokens = object.maxOutputTokens === undefined
     ? 1_024
     : boundedInteger(object.maxOutputTokens, "max_output_tokens", 1, 8_192, issues);
-  if (issues.length > 0) throw new RagContractValidationError(issues);
+  // Scope is mandatory: retrieval without an authorization scope must fail closed.
+  const scope = parseRagScope(object.scope, issues);
+  if (issues.length > 0 || !scope) throw new RagContractValidationError(issues.length > 0 ? issues : ["scope_invalid"]);
   return {
     contractVersion: RAG_CONTRACT_VERSION,
     requestId: requestId!,
     query: query!,
     topK: topK!,
-    maxOutputTokens: maxOutputTokens!
+    maxOutputTokens: maxOutputTokens!,
+    scope
   };
 }
 

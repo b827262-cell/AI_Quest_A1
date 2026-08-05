@@ -1,4 +1,5 @@
 import { RagApplicationError } from "./errors";
+import { assertSafeLlmBaseUrl } from "./safe-url";
 import type {
   LlmGenerateInput,
   LlmGenerateOutput,
@@ -123,10 +124,13 @@ export class CerebrasLlmProvider implements LlmProvider {
   }
 }
 
+/**
+ * Fail closed at the adapter boundary: any base URL that does not pass the
+ * SSRF guard prevents the adapter from being constructed at all.
+ */
 function normalizeBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/$/, "");
-  if (!/^https:\/\//i.test(trimmed)) throw new Error("Cerebras base URL must use HTTPS");
-  return trimmed;
+  const url = assertSafeLlmBaseUrl(baseUrl);
+  return url.toString().replace(/\/$/, "");
 }
 
 function boundedTimeout(value: number): number {

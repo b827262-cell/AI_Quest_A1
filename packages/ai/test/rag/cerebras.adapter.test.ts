@@ -13,6 +13,16 @@ function provider(fetchImpl: typeof fetch = fetch): CerebrasLlmProvider {
 }
 
 describe("Cerebras RAG adapter", () => {
+  it("fails closed at construction for unsafe base URLs (SSRF guard)", () => {
+    const unsafe = ["http://api.cerebras.ai/v1", "https://127.0.0.1/v1", "https://169.254.169.254/", "https://localhost:443/v1", "https://u:p@api.cerebras.ai/v1"];
+    for (const baseUrl of unsafe) {
+      expect(() => new CerebrasLlmProvider({
+        credentialResolver: async () => ({ apiKey: "key" }),
+        baseUrl
+      })).toThrowError(expect.objectContaining({ code: "RAG_PROVIDER_UNAVAILABLE" }));
+    }
+  });
+
   it("maps the OpenAI-compatible success response to the neutral LLM port", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toBe("https://cerebras.test/v1/chat/completions");

@@ -43,5 +43,7 @@
     "typescript": "latest",
     "@types/node": "latest"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@ai-smartbook/contracts": "workspace:*"
+  }
 }

@@ -5,6 +5,7 @@ export * from "./citation-validator";
 export * from "./injection-screening";
 export * from "./prompt-builder";
 export * from "./fakes";
+export * from "./safe-url";
 export * from "./cerebras.adapter";
 export * from "./application";
 export * from "./http";

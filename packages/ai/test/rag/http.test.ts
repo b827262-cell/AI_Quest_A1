@@ -20,7 +20,7 @@ describe("RAG HTTP route adapter", () => {
       } })
     });
     const handle = createRagHttpHandler(application);
-    const result = await handle({ method: "POST", body: { requestId: "http-1", query: "question" } });
+    const result = await handle({ method: "POST", body: { requestId: "http-1", query: "question", scope: { studentId: "student-1", bookId: "book-1" } } });
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ contractVersion: 1, requestId: "http-1", grounding: "verified" });
   });
@@ -32,7 +32,7 @@ describe("RAG HTTP route adapter", () => {
       }
     };
     const handle = createRagHttpHandler(application);
-    const result = await handle({ method: "POST", body: { requestId: "http-timeout", query: "question" } });
+    const result = await handle({ method: "POST", body: { requestId: "http-timeout", query: "question", scope: { studentId: "student-1", bookId: "book-1" } } });
     expect(result).toEqual({
       status: 504,
       body: {
@@ -41,6 +41,17 @@ describe("RAG HTTP route adapter", () => {
         error: { code: "RAG_PROVIDER_TIMEOUT", message: "The AI provider timed out. Please try again.", retryable: true }
       }
     });
+  });
+
+  it("rejects requests without a server-injected scope fail-closed", async () => {
+    const application = new RagApplicationService({
+      retriever: new FakeRetriever([chunk]),
+      provider: new FakeLlmProvider({ response: { answer: "never", citations: [], confidence: "low" } })
+    });
+    const handle = createRagHttpHandler(application);
+    const result = await handle({ method: "POST", body: { requestId: "http-no-scope", query: "question" } });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "RAG_INVALID_REQUEST" } });
   });
 
   it("rejects unsupported methods and malformed request bodies safely", async () => {

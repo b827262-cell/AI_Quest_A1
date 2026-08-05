@@ -33,7 +33,14 @@ export class RagApplicationService implements RagApplication {
   }
 
   async answer(input: RagRequest | unknown, signal?: AbortSignal): Promise<RagResponse> {
-    const request = parseRequest(input, this.idFactory);
+    let request: RagRequest;
+    try {
+      request = parseRequest(input, this.idFactory);
+    } catch (error) {
+      // Contract failures (including a missing scope) surface as stable
+      // application errors, never as raw validation exceptions.
+      throw asRagApplicationError(error);
+    }
     const started = Date.now();
     const userScreening = screenPromptInjection(request.query, "user");
     if (userScreening.decision === "block") {
@@ -43,10 +50,14 @@ export class RagApplicationService implements RagApplication {
 
     let retrieved: readonly RetrievedChunk[];
     try {
-      retrieved = await this.retriever.retrieve({ requestId: request.requestId, query: request.query, topK: request.topK, signal });
-    } catch {
-      await this.record({ requestId: request.requestId, provider: this.provider.providerId, status: "error", latencyMs: Date.now() - started, retrievedChunkCount: 0, citationCount: 0, errorCode: "RAG_INTERNAL" });
-      throw new RagApplicationError({ code: "RAG_INTERNAL" });
+      retrieved = await this.retriever.retrieve({ requestId: request.requestId, query: request.query, topK: request.topK, scope: request.scope, signal });
+    } catch (error) {
+      // Scope enforcement errors are authorization decisions and must keep
+      // their code; only unexpected retriever failures map to RAG_INTERNAL.
+      const safeError = asRagApplicationError(error);
+      const errorCode = safeError.code === "RAG_INTERNAL" && !(error instanceof RagApplicationError) ? "RAG_INTERNAL" : safeError.code;
+      await this.record({ requestId: request.requestId, provider: this.provider.providerId, status: "error", latencyMs: Date.now() - started, retrievedChunkCount: 0, citationCount: 0, errorCode });
+      throw safeError;
     }
     const screened = screenRetrievedChunks(retrieved);
     if (screened.chunks.length === 0) {
