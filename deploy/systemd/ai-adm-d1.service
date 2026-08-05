@@ -1,0 +1,20 @@
+[Unit]
+Description=AI-adm-D1 Admin API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/AI-Quest-A1
+EnvironmentFile=/etc/ai-quest-a1/admin.env
+ExecStart=/usr/bin/node /opt/AI-Quest-A1/apps/AI-adm-D1/dist-server/admin-api.mjs
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+MemoryHigh=700M
+MemoryMax=900M
+
+[Install]
+WantedBy=multi-user.target
+
