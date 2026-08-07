@@ -2,36 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppearance } from "../appearance";
 import { UserMenuDropdown } from "./UserMenuDropdown";
-
-interface StudentProfile {
-  name: string;
-  points: number;
-}
-
-function readStudentProfile(): StudentProfile {
-  if (typeof window === "undefined") return { name: "學員", points: 0 };
-
-  const rawName =
-    window.localStorage.getItem("smartbook.student.name") ||
-    window.localStorage.getItem("studentName") ||
-    "";
-  const rawPoints =
-    window.localStorage.getItem("smartbook.student.points") ||
-    window.localStorage.getItem("studentPoints") ||
-    "";
-  const points = Number.parseInt(rawPoints, 10);
-
-  return {
-    name: rawName.trim() || "學員",
-    points: Number.isFinite(points) ? points : 0
-  };
-}
-
-function readLogoutUrl(): string {
-  if (typeof window === "undefined") return "";
-  const configured = window.localStorage.getItem("smartbook.logout.url") || "";
-  return configured.trim();
-}
+import { useStudentAuth } from "../student-auth";
 
 function BrainIcon({ size }: { size: number }) {
   return (
@@ -97,11 +68,12 @@ function CoinIcon() {
 
 export function StudentHeader() {
   const a = useAppearance();
+  const { profile, logout, status } = useStudentAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const profile = readStudentProfile();
-  const logoutUrl = readLogoutUrl();
-  const initial = profile.name.trim().charAt(0).toUpperCase() || "學";
+  const studentName = profile?.displayName.trim() || "學員";
+  const points = 0;
+  const initial = studentName.charAt(0).toUpperCase() || "學";
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent) {
@@ -114,8 +86,7 @@ export function StudentHeader() {
   }, []);
 
   function handleLogout() {
-    if (!logoutUrl) return;
-    window.location.href = logoutUrl;
+    void logout();
   }
 
   return (
@@ -128,7 +99,7 @@ export function StudentHeader() {
       }}
     >
       <div className="student-header-inner">
-        <Link className="brand-link" to="/books" style={{ gap: a.studentHeaderBrandGap }}>
+        <Link className="brand-link" to="/dashboard" style={{ gap: a.studentHeaderBrandGap }}>
           <BrandLogo url={a.studentHeaderBrandLogoUrl} size={a.studentHeaderBrandLogoSize} />
           <span style={{ color: a.studentHeaderBrandTextColor, fontSize: a.studentHeaderBrandFontSize }}>
             {a.studentHeaderBrandText}
@@ -137,7 +108,7 @@ export function StudentHeader() {
 
         <Link
           className="home-pill"
-          to="/books"
+          to="/dashboard"
           style={{
             background: a.studentHeaderHomeButtonBg,
             color: a.studentHeaderHomeButtonTextColor,
@@ -155,12 +126,12 @@ export function StudentHeader() {
         </Link>
 
         <div className="student-user-area" ref={menuRef}>
-          <span className="student-name" title={profile.name}>
-            {profile.name}
+          <span className="student-name" title={studentName}>
+            {studentName}
           </span>
           <span className="student-points">
             <CoinIcon />
-            <strong>{profile.points}</strong>
+            <strong>{points}</strong>
           </span>
           <button
             className="student-avatar"
@@ -173,9 +144,9 @@ export function StudentHeader() {
           </button>
           <UserMenuDropdown
             open={menuOpen}
-            name={profile.name}
-            points={profile.points}
-            canLogout={Boolean(logoutUrl)}
+            name={studentName}
+            points={points}
+            canLogout={status === "authenticated"}
             onLogout={handleLogout}
           />
         </div>

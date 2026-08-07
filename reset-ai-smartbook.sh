@@ -136,6 +136,103 @@ is_port_open() {
   (echo >"/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1
 }
 
+read_admin_token() {
+  if [[ -n "${ADMIN_API_TOKEN:-}" ]]; then
+    printf '%s' "$ADMIN_API_TOKEN"
+    return 0
+  fi
+  if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    awk -F= '/^[[:space:]]*(export[[:space:]]+)?ADMIN_API_TOKEN[[:space:]]*=/ {
+      value=$0; sub(/^[^=]*=/, "", value); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value);
+      if (value ~ /^".*"$/ || value ~ /^'"'"'.*'"'"'$/) value=substr(value, 2, length(value)-2);
+      print value; exit
+    }' "$PROJECT_ROOT/.env"
+  fi
+}
+
+read_env_value() {
+  local key="$1"
+  local value=""
+  if [[ -n "${!key:-}" ]]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
+  if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    value="$(awk -F= -v wanted_key="$key" '$1 ~ /^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ {
+      name=$1; sub(/^[[:space:]]*(export[[:space:]]+)?/, "", name); gsub(/[[:space:]]+$/, "", name);
+      if (name != wanted_key) next;
+      result=$0; sub(/^[^=]*=/, "", result); gsub(/^[[:space:]]+|[[:space:]]+$/, "", result);
+      if (result ~ /^".*"$/ || result ~ /^'"'"'.*'"'"'$/) result=substr(result, 2, length(result)-2);
+      print result; exit
+    }' "$PROJECT_ROOT/.env")"
+  fi
+  printf '%s' "$value"
+}
+
+http_status() {
+  local url="$1"
+  local token="${2:-}"
+  if [[ -n "$token" ]]; then
+    curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -H "x-admin-token: $token" "$url" 2>/dev/null || printf '000'
+  else
+    curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || printf '000'
+  fi
+}
+
+verify_admin_readiness() {
+  local token live ready unauthenticated authenticated
+  token="$(read_admin_token)"
+  if [[ -z "$token" ]]; then
+    fail "Admin readiness 無法驗證：ADMIN_API_TOKEN 無法讀取。"
+    return 1
+  fi
+
+  live="$(http_status "${URLS[admin-api]}/health/live")"
+  ready="$(http_status "${URLS[admin-api]}/health/ready")"
+  unauthenticated="$(http_status "${URLS[admin-api]}/api/admin/accounts")"
+  authenticated="$(http_status "${URLS[admin-api]}/api/admin/accounts" "$token")"
+
+  if [[ "$live" != "200" || "$ready" != "200" || "$unauthenticated" != "401" || "$authenticated" != "200" ]]; then
+    fail "Admin HTTP readiness 失敗：live=$live ready=$ready unauthenticated=$unauthenticated authenticated=$authenticated"
+    return 1
+  fi
+  return 0
+}
+
+verify_admin_proxy() {
+  local username password login_payload login_status proxy_status headers session_cookie csrf_cookie cookie_header
+  username="$(read_env_value ADMIN_USERNAME)"
+  password="$(read_env_value ADMIN_PASSWORD)"
+  if [[ -z "$username" || -z "$password" ]]; then
+    fail "Vite proxy readiness 無法驗證：ADMIN_USERNAME／ADMIN_PASSWORD 未設定。"
+    return 1
+  fi
+
+  headers="$RUN_DIR/admin-proxy-headers.$$.tmp"
+  rm -f "$headers"
+  login_payload="$(ADMIN_LOGIN_USER="$username" ADMIN_LOGIN_PASSWORD="$password" node -e 'process.stdout.write(JSON.stringify({username: process.env.ADMIN_LOGIN_USER, password: process.env.ADMIN_LOGIN_PASSWORD}))')"
+  if ! login_status="$(curl -sS --max-time 5 -D "$headers" -o /dev/null -w '%{http_code}' \
+    -H 'Origin: http://127.0.0.1:5174' -H 'Content-Type: application/json' \
+    --data-binary "$login_payload" "${URLS[admin-web]}/api/admin/auth/login")"; then
+    login_status="000"
+  fi
+  session_cookie="$(sed -nE 's/^[Ss]et-[Cc]ookie:[[:space:]]*(ai_admin_session=[^;]+).*/\1/p' "$headers" | head -n 1)"
+  csrf_cookie="$(sed -nE 's/^[Ss]et-[Cc]ookie:[[:space:]]*(ai_admin_csrf=[^;]+).*/\1/p' "$headers" | head -n 1)"
+  cookie_header="$session_cookie; $csrf_cookie"
+  if [[ "$login_status" == "200" && -n "$session_cookie" && -n "$csrf_cookie" ]]; then
+    proxy_status="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+      -H "Cookie: $cookie_header" "${URLS[admin-web]}/api/admin/accounts" 2>/dev/null || printf '000')"
+  else
+    proxy_status="000"
+  fi
+  rm -f "$headers"
+  if [[ "$proxy_status" != "200" ]]; then
+    fail "Vite proxy readiness 失敗：login=$login_status status=$proxy_status"
+    return 1
+  fi
+  return 0
+}
+
 kill_port() {
   local port="$1"
 
@@ -243,6 +340,14 @@ start_service() {
     fi
 
     if is_port_open "$port"; then
+      if [[ "$service" == "admin-api" ]] && ! verify_admin_readiness; then
+        tail -n 40 "$log_file" >&2 || true
+        return 1
+      fi
+      if [[ "$service" == "admin-web" ]] && ! verify_admin_proxy; then
+        tail -n 40 "$log_file" >&2 || true
+        return 1
+      fi
       ok "$service 已啟動：${URLS[$service]}（PID $pid）"
       return 0
     fi

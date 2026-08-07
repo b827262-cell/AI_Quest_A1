@@ -15,8 +15,9 @@
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "typecheck:release-scripts": "./apps/AI-adm-D1/node_modules/.bin/tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --strict --skipLibCheck --esModuleInterop --types node --typeRoots ./apps/AI-adm-D1/node_modules/@types scripts/provider-live-smoke.ts scripts/phase3a-staging-smoke.ts scripts/credential-key-rotation.ts",
+    "typecheck:release-scripts": "./apps/AI-adm-D1/node_modules/.bin/tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --strict --skipLibCheck --esModuleInterop --types node --typeRoots ./apps/AI-adm-D1/node_modules/@types scripts/provider-live-smoke.ts scripts/phase3a-staging-smoke.ts scripts/credential-key-rotation.ts scripts/student-smoke-harness.ts scripts/student-auth-smoke.ts scripts/student-dashboard-smoke.ts scripts/rag-smoke.ts scripts/release-gate-student-rag.ts",
     "lint": "pnpm -r lint",
+    "contracts:validate": "node scripts/contracts-boundary.mjs && pnpm --filter @ai-smartbook/contracts test",
     "lint:release-scripts": "node scripts/lint-release-scripts.mjs",
     "test": "pnpm -r --if-present test",
     "db:migrate": "pnpm --filter @ai-smartbook/db db:migrate",
@@ -32,9 +33,15 @@
     "credential-key:verify": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/credential-key-rotation.ts --verify",
     "db:seed": "pnpm --filter @ai-smartbook/db db:seed",
     "student:build": "pnpm --filter AI-Stu-R1 build",
-    "admin:build": "pnpm --filter AI-adm-D1 build"
+    "admin:build": "pnpm --filter AI-adm-D1 build",
+    "student:auth-smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/student-auth-smoke.ts",
+    "student:dashboard-smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/student-dashboard-smoke.ts",
+    "rag:smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/rag-smoke.ts",
+    "release-gate:student-rag": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/release-gate-student-rag.ts"
   },
   "devDependencies": {
+    "happy-dom": "^20.11.1",
+    "playwright-core": "^1.62.1",
     "vitest": "^4.1.10"
   }
 }

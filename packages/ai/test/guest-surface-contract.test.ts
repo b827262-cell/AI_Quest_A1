@@ -15,7 +15,7 @@ describe("guest answer public surface", () => {
   });
 
   it("returns the allowlisted structured answer instead of raw provider metadata", () => {
-    const api = readFileSync(repoFile("apps/AI-adm-D1/src/server/index.ts"), "utf8");
+    const api = readFileSync(repoFile("apps/AI-adm-D1/src/server/app.ts"), "utf8");
     const start = api.indexOf('app.post("/api/public/guest-ask"');
     const end = api.indexOf('app.get("/api/public/guest-ask/:requestId"');
     const route = api.slice(start, end);
@@ -29,7 +29,7 @@ describe("guest answer public surface", () => {
   });
 
   it("issues a one-time recovery token on answer creation (not IP-based auth)", () => {
-    const api = readFileSync(repoFile("apps/AI-adm-D1/src/server/index.ts"), "utf8");
+    const api = readFileSync(repoFile("apps/AI-adm-D1/src/server/app.ts"), "utf8");
     const start = api.indexOf('app.post("/api/public/guest-ask"');
     const end = api.indexOf('app.get("/api/public/guest-ask/:requestId"');
     const route = api.slice(start, end);
@@ -45,7 +45,7 @@ describe("guest answer public surface", () => {
   });
 
   it("authorizes recovery via the recovery token header, not IP", () => {
-    const api = readFileSync(repoFile("apps/AI-adm-D1/src/server/index.ts"), "utf8");
+    const api = readFileSync(repoFile("apps/AI-adm-D1/src/server/app.ts"), "utf8");
     const start = api.indexOf('app.get("/api/public/guest-ask/:requestId"');
     const end = api.indexOf('app.post("/api/public/guest-feedback"');
     const route = api.slice(start, end);

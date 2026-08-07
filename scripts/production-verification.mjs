@@ -71,22 +71,22 @@ function nginxCheck() {
 function effectiveConfigCheck() {
   const configPath = process.env.PRODUCTION_NGINX_EFFECTIVE_CONFIG?.trim();
   if (!configPath) {
-    record("Nginx effective config redaction and token overwrite", "BLOCKED", "host config", "set PRODUCTION_NGINX_EFFECTIVE_CONFIG to a protected, operator-produced nginx -T snapshot");
+    record("Nginx effective config has no permanent Admin token injection", "BLOCKED", "host config", "set PRODUCTION_NGINX_EFFECTIVE_CONFIG to a protected, operator-produced nginx -T snapshot");
     record("Nginx body size and AI timeout directives", "BLOCKED", "host config", "effective config snapshot unavailable");
     return;
   }
   try {
     const content = readFileSync(configPath, "utf8");
     if (!scanArtifactText(content).passed) {
-      record("Nginx effective config redaction and token overwrite", "FAIL", "host config", "effective config contains secret material");
+      record("Nginx effective config has no permanent Admin token injection", "FAIL", "host config", "effective config contains secret material");
       return;
     }
-    const tokenOverwrite = /proxy_set_header\s+X-Admin-Token\s+"(?:\[?redacted\]?|<redacted>|REDACTED|[^"\s]+)"\s*;/i.test(content);
-    record("Nginx effective config redaction and token overwrite", tokenOverwrite ? "PASS" : "FAIL", "host config", tokenOverwrite ? undefined : "trusted token overwrite directive was not found");
+    const permanentTokenInjection = /proxy_set_header\s+(?:X-Admin-Token|Authorization)\s+(?!""\s*;)(?:"[^";]+"|\$[A-Za-z_][A-Za-z0-9_]*)\s*;/i.test(content);
+    record("Nginx effective config has no permanent Admin token injection", permanentTokenInjection ? "FAIL" : "PASS", "host config", permanentTokenInjection ? "reverse proxy injects or forwards a non-empty Admin token header" : undefined);
     const bodyAndTimeout = /client_max_body_size\s+[^;]+;/.test(content) && /proxy_(?:read|send)_timeout\s+[^;]+;/.test(content);
     record("Nginx body size and AI timeout directives", bodyAndTimeout ? "PASS" : "FAIL", "host config", bodyAndTimeout ? undefined : "client body limit or proxy timeout directive was not found");
   } catch {
-    record("Nginx effective config redaction and token overwrite", "BLOCKED", "host config", "effective config snapshot could not be read");
+    record("Nginx effective config has no permanent Admin token injection", "BLOCKED", "host config", "effective config snapshot could not be read");
     record("Nginx body size and AI timeout directives", "BLOCKED", "host config", "effective config snapshot could not be read");
   }
 }

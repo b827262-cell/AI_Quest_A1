@@ -14,9 +14,12 @@
     "flow:sidecar": "node server/flow-sidecar.mjs"
   },
   "dependencies": {
+    "@ai-smartbook/ai": "workspace:*",
+    "@ai-smartbook/auth": "workspace:*",
+    "@ai-smartbook/contracts": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
-    "@ai-smartbook/ui": "workspace:*",
     "@ai-smartbook/student-runtime": "workspace:*",
+    "@ai-smartbook/ui": "workspace:*",
     "better-sqlite3": "latest",
     "express": "^4.19.2",
     "pdfjs-dist": "5.4.296",
@@ -25,14 +28,15 @@
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "latest",
-    "esbuild": "latest",
     "@types/express": "latest",
     "@types/node": "latest",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "latest",
+    "esbuild": "latest",
+    "happy-dom": "^20.11.1",
+    "tsx": "latest",
     "typescript": "latest",
-    "vite": "latest",
-    "tsx": "latest"
+    "vite": "latest"
   }
 }

@@ -22,6 +22,7 @@ import {
 } from "../components/PdfReaderToolbar";
 import { ProtectedPdfViewer } from "../components/ProtectedPdfViewer";
 import { ChatPanel } from "../components/ChatPanel";
+import { BookRagPanel } from "../components/BookRagPanel";
 import { SmartNotesPanel } from "../components/SmartNotesPanel";
 import { ProgressPanel } from "../components/ProgressPanel";
 import { LearningGridPanel } from "../components/LearningGridPanel";
@@ -1282,6 +1283,7 @@ export function BookReaderPage() {
                     onSaveAnswer={saveAiAnswerAsNote}
                     prefill={aiPrefill}
                   />
+                  <BookRagPanel bookId={bookId} />
                 </div>
               )}
               {!isMobile && rightPanel === "notes" && (
@@ -1389,6 +1391,7 @@ export function BookReaderPage() {
                       onSaveAnswer={saveAiAnswerAsNote}
                       prefill={aiPrefill}
                     />
+                    <BookRagPanel bookId={bookId} />
                   </div>
                 </aside>
               </div>

@@ -20,6 +20,16 @@
       "types": "./src/server.ts",
       "import": "./src/server.ts",
       "default": "./src/server.ts"
+    },
+    "./rag": {
+      "types": "./src/rag/index.ts",
+      "import": "./src/rag/index.ts",
+      "default": "./src/rag/index.ts"
+    },
+    "./rag/server": {
+      "types": "./src/rag/server.ts",
+      "import": "./src/rag/server.ts",
+      "default": "./src/rag/server.ts"
     }
   },
   "scripts": {
@@ -33,5 +43,7 @@
     "typescript": "latest",
     "@types/node": "latest"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@ai-smartbook/contracts": "workspace:*"
+  }
 }

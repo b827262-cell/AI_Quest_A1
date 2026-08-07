@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppearanceProvider } from "./appearance";
+import { AdminAuthProvider, RequireAdmin } from "./admin-auth";
 import { AdminShell } from "./components/admin/AdminShell";
 import { AdminDashboardPage } from "./pages/AdminDashboardPage";
 import { AdminAccountsPage } from "./pages/AdminAccountsPage";
@@ -14,10 +15,24 @@ import { NewBookPage } from "./pages/NewBookPage";
 import { BookDetail } from "./pages/BookDetail";
 import { ChaptersPage } from "./pages/ChaptersPage";
 import { QaPage } from "./pages/QaPage";
+import { AdminLoginPage } from "./pages/AdminLoginPage";
 
 export function App() {
   return (
     <BrowserRouter>
+      <AdminAuthProvider>
+        <Routes>
+          <Route path="/login" element={<AdminLoginPage />} />
+          <Route path="*" element={<ProtectedAdminRoutes />} />
+        </Routes>
+      </AdminAuthProvider>
+    </BrowserRouter>
+  );
+}
+
+function ProtectedAdminRoutes() {
+  return (
+    <RequireAdmin>
       <AppearanceProvider>
         <AdminShell>
           <Routes>
@@ -40,6 +55,6 @@ export function App() {
           </Routes>
         </AdminShell>
       </AppearanceProvider>
-    </BrowserRouter>
+    </RequireAdmin>
   );
 }
