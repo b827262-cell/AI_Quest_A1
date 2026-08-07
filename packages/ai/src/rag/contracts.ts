@@ -62,6 +62,33 @@ export type RagCitation = {
   locator?: string;
   start?: number;
   end?: number;
+  evidenceQuote?: string;
+  contentHash?: string;
+  hashAlgorithm?: "sha256";
+};
+
+export type RagEvidence = {
+  quote: string;
+  contentHash: string;
+  hashAlgorithm: "sha256";
+  chunkId: string;
+  start: number;
+  end: number;
+};
+
+export type RagClaimStatus = "supported" | "unsupported";
+
+export type RagClaimRiskCategory = "general" | "number" | "date" | "formula" | "proper_noun";
+
+export type RagClaimGrounding = {
+  claimId: string;
+  text: string;
+  answerStart: number;
+  answerEnd: number;
+  status: RagClaimStatus;
+  riskCategory?: RagClaimRiskCategory;
+  citationChunkIds: string[];
+  evidence: RagEvidence[];
 };
 
 export type RagResponse = {
@@ -74,6 +101,8 @@ export type RagResponse = {
   citationStatus: "verified" | "not_checked" | "invalid";
   abstained: boolean;
   abstentionReason?: "NO_EVIDENCE" | "INJECTION_BLOCKED" | "INSUFFICIENT_EVIDENCE";
+  claims?: RagClaimGrounding[];
+  unsupportedClaimCount?: number;
 };
 
 export type RagErrorResponse = {
@@ -135,7 +164,7 @@ function parseCitation(value: unknown, index: number): RagCitation | undefined {
   if (!object) {
     issues.push(`citations_${index}_format_invalid`);
   } else {
-    rejectUnknownKeys(object, ["chunkId", "label", "locator", "start", "end"], issues);
+    rejectUnknownKeys(object, ["chunkId", "label", "locator", "start", "end", "evidenceQuote", "contentHash", "hashAlgorithm"], issues);
   }
   const chunkId = object ? requiredString(object.chunkId, `citations_${index}_chunk_id`, 128, issues) : undefined;
   const label = object ? requiredString(object.label, `citations_${index}_label`, 240, issues) : undefined;
@@ -148,8 +177,122 @@ function parseCitation(value: unknown, index: number): RagCitation | undefined {
   const end = object?.end === undefined
     ? undefined
     : boundedInteger(object.end, `citations_${index}_end`, 0, Number.MAX_SAFE_INTEGER, issues);
+  const evidenceQuote = object?.evidenceQuote === undefined
+    ? undefined
+    : requiredString(object.evidenceQuote, `citations_${index}_evidence_quote`, 800, issues);
+  const contentHash = object?.contentHash === undefined
+    ? undefined
+    : (typeof object.contentHash === "string" && /^[a-f0-9]{64}$/.test(object.contentHash)
+      ? object.contentHash
+      : (issues.push(`citations_${index}_content_hash_invalid`), undefined));
+  const hashAlgorithm = object?.hashAlgorithm === undefined
+    ? undefined
+    : (object.hashAlgorithm === "sha256" ? "sha256" : (issues.push(`citations_${index}_hash_algorithm_invalid`), undefined));
   if (issues.length > 0) return undefined;
-  return { chunkId: chunkId!, label: label!, locator, start, end };
+  return { chunkId: chunkId!, label: label!, locator, start, end, evidenceQuote, contentHash, hashAlgorithm };
+}
+
+function parseEvidence(value: unknown, prefix: string): RagEvidence | undefined {
+  const issues: string[] = [];
+  const object = recordValue(value);
+  if (!object) {
+    issues.push(`${prefix}_format_invalid`);
+  } else {
+    rejectUnknownKeys(object, ["quote", "contentHash", "hashAlgorithm", "chunkId", "start", "end"], issues);
+  }
+  const quote = object ? requiredString(object.quote, `${prefix}_quote`, 800, issues) : undefined;
+  const contentHash = object?.contentHash === undefined
+    ? undefined
+    : (typeof object.contentHash === "string" && /^[a-f0-9]{64}$/.test(object.contentHash)
+      ? object.contentHash
+      : (issues.push(`${prefix}_content_hash_invalid`), undefined));
+  if (object?.hashAlgorithm !== undefined && object.hashAlgorithm !== "sha256") {
+    issues.push(`${prefix}_hash_algorithm_invalid`);
+  }
+  const chunkId = object ? requiredString(object.chunkId, `${prefix}_chunk_id`, 128, issues) : undefined;
+  const start = object?.start === undefined
+    ? undefined
+    : boundedInteger(object.start, `${prefix}_start`, 0, Number.MAX_SAFE_INTEGER, issues);
+  const end = object?.end === undefined
+    ? undefined
+    : boundedInteger(object.end, `${prefix}_end`, 1, Number.MAX_SAFE_INTEGER, issues);
+  if (issues.length > 0) return undefined;
+  return {
+    quote: quote!,
+    contentHash: contentHash!,
+    hashAlgorithm: "sha256",
+    chunkId: chunkId!,
+    start: start!,
+    end: end!
+  };
+}
+
+function parseClaimGrounding(value: unknown, index: number, answer: string): RagClaimGrounding | undefined {
+  const issues: string[] = [];
+  const object = recordValue(value);
+  if (!object) {
+    issues.push(`claims_${index}_format_invalid`);
+  } else {
+    rejectUnknownKeys(object, ["claimId", "text", "answerStart", "answerEnd", "status", "riskCategory", "citationChunkIds", "evidence"], issues);
+  }
+  const claimId = object ? requiredString(object.claimId, `claims_${index}_claim_id`, 128, issues) : undefined;
+  const text = object ? requiredString(object.text, `claims_${index}_text`, 2_000, issues) : undefined;
+  const answerStart = object?.answerStart === undefined
+    ? undefined
+    : boundedInteger(object.answerStart, `claims_${index}_answer_start`, 0, Number.MAX_SAFE_INTEGER, issues);
+  const answerEnd = object?.answerEnd === undefined
+    ? undefined
+    : boundedInteger(object.answerEnd, `claims_${index}_answer_end`, 1, Number.MAX_SAFE_INTEGER, issues);
+  if (!["supported", "unsupported"].includes(String(object?.status))) {
+    issues.push(`claims_${index}_status_invalid`);
+  }
+  const validRiskCategories = ["general", "number", "date", "formula", "proper_noun"];
+  if (object?.riskCategory !== undefined && !validRiskCategories.includes(String(object.riskCategory))) {
+    issues.push(`claims_${index}_risk_category_invalid`);
+  }
+  if (!Array.isArray(object?.citationChunkIds)) {
+    issues.push(`claims_${index}_citation_chunk_ids_invalid`);
+  }
+  if (issues.length > 0) return undefined;
+  // Offset invariant: UTF-16 code-unit offsets must slice to the claim text.
+  if (answerStart === undefined || answerEnd === undefined || answerStart >= answerEnd || answerEnd > answer.length) {
+    issues.push(`claims_${index}_offset_out_of_bounds`);
+    return undefined;
+  }
+  const sliced = answer.slice(answerStart, answerEnd);
+  if (sliced !== text) {
+    issues.push(`claims_${index}_text_offset_mismatch`);
+    return undefined;
+  }
+  const citationChunkIds = (object!.citationChunkIds as unknown[]).map((id, ci) => {
+    const sid = requiredString(id, `claims_${index}_citation_chunk_ids_${ci}`, 128, issues);
+    return sid;
+  });
+  const evidenceValue = object!.evidence;
+  const evidence: RagEvidence[] = [];
+  if (!Array.isArray(evidenceValue) || evidenceValue.length > 10) {
+    issues.push(`claims_${index}_evidence_invalid`);
+  } else {
+    evidenceValue.forEach((ev, ei) => {
+      const parsed = parseEvidence(ev, `claims_${index}_evidence_${ei}`);
+      if (parsed) evidence.push(parsed);
+      else issues.push(`claims_${index}_evidence_${ei}_invalid`);
+    });
+  }
+  if (issues.length > 0) return undefined;
+  const riskCategory = object!.riskCategory !== undefined
+    ? object!.riskCategory as RagClaimRiskCategory
+    : undefined;
+  return {
+    claimId: claimId!,
+    text: text!,
+    answerStart: answerStart!,
+    answerEnd: answerEnd!,
+    status: object!.status as RagClaimStatus,
+    ...(riskCategory !== undefined ? { riskCategory } : {}),
+    citationChunkIds: citationChunkIds as string[],
+    evidence
+  };
 }
 
 function parseRagScope(value: unknown, issues: string[]): RagScope | undefined {
@@ -197,7 +340,7 @@ export function parseRagResponse(value: unknown): RagResponse {
   const issues: string[] = [];
   const object = recordValue(value);
   if (!object) throw new RagContractValidationError(["response_format_invalid"]);
-  rejectUnknownKeys(object, ["contractVersion", "requestId", "answer", "citations", "confidence", "grounding", "citationStatus", "abstained", "abstentionReason"], issues);
+  rejectUnknownKeys(object, ["contractVersion", "requestId", "answer", "citations", "confidence", "grounding", "citationStatus", "abstained", "abstentionReason", "claims", "unsupportedClaimCount"], issues);
   if (object.contractVersion !== RAG_CONTRACT_VERSION) issues.push("contract_version_invalid");
   const requestId = requiredString(object.requestId, "request_id", 200, issues);
   const answer = typeof object.answer === "string" && object.answer.trim().length > 0 && object.answer.length <= 20_000
@@ -231,6 +374,36 @@ export function parseRagResponse(value: unknown): RagResponse {
   if (object.grounding === "abstained" && object.abstained !== true) {
     issues.push("abstained_grounding_requires_abstained_flag");
   }
+  // Parse optional claims array with per-claim offset invariants.
+  const claimsValue = object.claims;
+  const claims: RagClaimGrounding[] = [];
+  if (claimsValue !== undefined) {
+    if (!Array.isArray(claimsValue) || claimsValue.length > 100) {
+      issues.push("claims_format_invalid");
+    } else {
+      claimsValue.forEach((claim, index) => {
+        const parsed = answer !== undefined ? parseClaimGrounding(claim, index, answer) : undefined;
+        if (parsed) claims.push(parsed);
+        else issues.push(`claims_${index}_invalid`);
+      });
+    }
+  }
+  // unsupportedClaimCount consistency.
+  if (object.unsupportedClaimCount !== undefined) {
+    if (typeof object.unsupportedClaimCount !== "number" || !Number.isInteger(object.unsupportedClaimCount) || object.unsupportedClaimCount < 0) {
+      issues.push("unsupported_claim_count_invalid");
+    }
+  }
+  // verified grounding must have zero unsupported claims.
+  if (object.grounding === "verified" && claims.length > 0) {
+    const unsupported = claims.filter((c) => c.status === "unsupported").length;
+    if (unsupported > 0) issues.push("verified_requires_all_claims_supported");
+  }
+  // unsupportedClaimCount must match the actual count when both are present.
+  if (typeof object.unsupportedClaimCount === "number" && claims.length > 0) {
+    const actual = claims.filter((c) => c.status === "unsupported").length;
+    if (actual !== object.unsupportedClaimCount) issues.push("unsupported_claim_count_mismatch");
+  }
   if (issues.length > 0) throw new RagContractValidationError(issues);
   const response: RagResponse = {
     contractVersion: RAG_CONTRACT_VERSION,
@@ -240,7 +413,9 @@ export function parseRagResponse(value: unknown): RagResponse {
     confidence: object.confidence as RagConfidence,
     grounding: object.grounding as RagGrounding,
     citationStatus: object.citationStatus as RagResponse["citationStatus"],
-    abstained: object.abstained as boolean
+    abstained: object.abstained as boolean,
+    ...(claims.length > 0 ? { claims } : {}),
+    ...(object.unsupportedClaimCount !== undefined ? { unsupportedClaimCount: object.unsupportedClaimCount as number } : {})
   };
   if (typeof object.abstentionReason === "string") {
     if (!["NO_EVIDENCE", "INJECTION_BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(object.abstentionReason)) {

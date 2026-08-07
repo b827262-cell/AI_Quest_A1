@@ -11,8 +11,11 @@ export {
   studentRagAskRequestV1Schema,
   studentRagAskResponseV1Schema,
   studentRagCitationV1Schema,
+  studentRagClaimGroundingV1Schema,
+  studentRagClaimStatusV1Schema,
   studentRagConfidenceV1Schema,
   studentRagErrorCodeV1Schema,
+  studentRagEvidenceV1Schema,
   studentRagGroundingV1Schema,
   studentRagScopeV1Schema
 } from "./student-rag";
@@ -22,8 +25,11 @@ export type {
   StudentRagAskRequestV1,
   StudentRagAskResponseV1,
   StudentRagCitationV1,
+  StudentRagClaimGroundingV1,
+  StudentRagClaimStatusV1,
   StudentRagConfidenceV1,
   StudentRagErrorCodeV1,
+  StudentRagEvidenceV1,
   StudentRagGroundingV1,
   StudentRagScopeV1
 } from "./student-rag";

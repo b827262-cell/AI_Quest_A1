@@ -3797,3 +3797,53 @@ body {
 }
 .book-rag-answer p { margin: 0 0 6px; font-size: 0.88rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .book-rag-citations { margin: 0; padding-left: 18px; font-size: 0.78rem; }
+/* ---- Grounding verdict badges ---- */
+.book-rag-grounding-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin: 0 0 6px; padding: 2px 8px; border-radius: 6px;
+  font-size: 0.76rem; font-weight: 600; width: fit-content;
+}
+.book-rag-grounding-verified { background: rgba(72, 187, 120, 0.18); color: #6ee7b7; }
+.book-rag-grounding-partial { background: rgba(237, 197, 74, 0.18); color: #f0d870; }
+/* ---- Partial-source UI ---- */
+.book-rag-answer-partial { border-left: 3px solid rgba(237, 197, 74, 0.6); padding-left: 8px; }
+.book-rag-partial-warning {
+  margin: 0 0 8px; padding: 6px 10px; border-radius: 6px;
+  background: rgba(237, 197, 74, 0.12); color: #f0d870;
+  font-size: 0.8rem; font-weight: 500;
+}
+.book-rag-annotated-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
+.rag-unsupported-claim {
+  background: rgba(237, 197, 74, 0.28);
+  border-bottom: 2px dotted rgba(237, 197, 74, 0.8);
+  border-radius: 2px; padding: 0 1px;
+}
+.rag-unsupported-claim--high-risk {
+  background: rgba(248, 113, 113, 0.32);
+  border-bottom: 2px solid rgba(248, 113, 113, 0.9);
+  font-weight: 600;
+}
+.book-rag-unsupported-claims {
+  margin: 6px 0; padding: 8px 10px 8px 24px; border-radius: 6px;
+  background: rgba(237, 197, 74, 0.08); font-size: 0.78rem;
+}
+.book-rag-unsupported-claims li { margin: 4px 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.book-rag-claim-id {
+  font-size: 0.7rem; opacity: 0.7; background: rgba(120, 120, 160, 0.15);
+  padding: 1px 4px; border-radius: 3px;
+}
+.book-rag-risk-tag {
+  font-size: 0.7rem; font-weight: 600; color: #f87171;
+  background: rgba(248, 113, 113, 0.15); padding: 1px 6px; border-radius: 3px;
+}
+.book-rag-claim-text { flex: 1 1 auto; min-width: 0; }
+.book-rag-evidence-quote {
+  display: block; margin-top: 2px; padding: 2px 6px; border-left: 2px solid rgba(120, 120, 160, 0.4);
+  font-size: 0.76rem; opacity: 0.85; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.book-rag-audit { margin-top: 4px; font-size: 0.72rem; }
+.book-rag-audit summary { cursor: pointer; opacity: 0.65; }
+.book-rag-audit dl { margin: 4px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; }
+.book-rag-audit dt { opacity: 0.6; }
+.book-rag-audit dd { margin: 0; word-break: break-all; }
+.book-rag-audit code { font-size: 0.68rem; opacity: 0.75; }

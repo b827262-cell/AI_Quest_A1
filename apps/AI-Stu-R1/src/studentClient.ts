@@ -142,6 +142,32 @@ export interface BookRagCitation {
   locator?: string;
   start?: number;
   end?: number;
+  evidenceQuote?: string;
+  contentHash?: string;
+  hashAlgorithm?: "sha256";
+}
+
+export interface BookRagEvidence {
+  quote: string;
+  contentHash: string;
+  hashAlgorithm: "sha256";
+  chunkId: string;
+  start: number;
+  end: number;
+}
+
+export type BookRagClaimStatus = "supported" | "unsupported";
+export type BookRagClaimRiskCategory = "general" | "number" | "date" | "formula" | "proper_noun";
+
+export interface BookRagClaim {
+  claimId: string;
+  text: string;
+  answerStart: number;
+  answerEnd: number;
+  status: BookRagClaimStatus;
+  riskCategory?: BookRagClaimRiskCategory;
+  citationChunkIds: string[];
+  evidence: BookRagEvidence[];
 }
 
 export interface BookRagAnswer {
@@ -154,6 +180,8 @@ export interface BookRagAnswer {
   citationStatus: "verified" | "not_checked" | "invalid";
   abstained: boolean;
   abstentionReason?: "NO_EVIDENCE" | "INJECTION_BLOCKED" | "INSUFFICIENT_EVIDENCE";
+  claims?: BookRagClaim[];
+  unsupportedClaimCount?: number;
 }
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {

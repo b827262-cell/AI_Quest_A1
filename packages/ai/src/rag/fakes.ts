@@ -1,4 +1,4 @@
-import type { RagCitation, RagScope } from "./contracts";
+import type { RagCitation, RagClaimGrounding, RagScope } from "./contracts";
 import { RagApplicationError } from "./errors";
 import type {
   LlmGenerateInput,
@@ -12,7 +12,12 @@ import type {
 
 export type FakeProviderOptions = {
   model?: string;
-  response?: { answer: string; citations: RagCitation[]; confidence?: "high" | "medium" | "low" };
+  response?: {
+    answer: string;
+    citations: RagCitation[];
+    claims?: RagClaimGrounding[];
+    confidence?: "high" | "medium" | "low";
+  };
   handler?: (input: LlmGenerateInput) => Promise<string> | string;
 };
 
@@ -39,6 +44,7 @@ export class FakeLlmProvider implements LlmProvider {
       : JSON.stringify({
           answer: this.options.response?.answer ?? "No fake answer configured.",
           citations: this.options.response?.citations ?? [],
+          ...(this.options.response?.claims ? { claims: this.options.response.claims } : {}),
           confidence: this.options.response?.confidence ?? "low"
         });
     return { text, model: input.model ?? this.defaultModel, latencyMs: 0 };

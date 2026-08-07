@@ -1,17 +1,19 @@
-import { useState, type FormEvent } from "react";
-import { studentClient, StudentApiError, type BookRagAnswer } from "../studentClient";
+import React, { useState, type FormEvent } from "react";
+import { studentClient, StudentApiError, type BookRagAnswer, type BookRagClaim } from "../studentClient";
 
 /**
  * Book-scoped RAG QA panel. Calls the real Student API endpoint
  * POST /api/student/books/:bookId/rag-ask; the browser never supplies
  * identity. Citations are rendered exactly as returned by the API (they are
- * validator-checked server-side).
+ * validator-checked server-side). Claim-level grounding is surfaced so
+ * reviewers/learners can locate unsupported spans inline.
  */
 
 export type BookRagStatus =
   | "idle"
   | "submitting"
   | "answer"
+  | "answer-partial"
   | "no-source"
   | "unsafe-input"
   | "timeout"
@@ -67,6 +69,10 @@ export function BookRagPanel({ bookId }: { bookId: string }) {
         setState({ status: "no-source", response, message: "書本內容中找不到足夠的證據回答這個問題。" });
         return;
       }
+      if (response.grounding === "unverified" || (response.unsupportedClaimCount ?? 0) > 0) {
+        setState({ status: "answer-partial", response, message: null });
+        return;
+      }
       setState({ status: "answer", response, message: null });
     } catch (error) {
       setState(failureState(error));
@@ -118,19 +124,121 @@ export function BookRagPanel({ bookId }: { bookId: string }) {
 
       {state.status === "answer" && state.response ? (
         <div className="book-rag-answer">
+          <p className="book-rag-grounding-badge book-rag-grounding-verified" role="status">
+            <span aria-hidden="true">✓</span> 已驗證
+          </p>
           <p>{state.response.answer}</p>
-          {state.response.citations.length > 0 ? (
-            <ul className="book-rag-citations" aria-label="引用來源">
-              {state.response.citations.map((citation) => (
-                <li key={citation.chunkId}>
-                  <span className="book-rag-citation-label">{citation.label}</span>
-                  {citation.locator ? <span className="muted"> · {citation.locator}</span> : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          {renderCitations(state.response)}
+        </div>
+      ) : null}
+
+      {state.status === "answer-partial" && state.response ? (
+        <div className="book-rag-answer book-rag-answer-partial">
+          <p className="book-rag-grounding-badge book-rag-grounding-partial" role="alert">
+            <span aria-hidden="true">⚠</span> 部分支持 — {state.response.unsupportedClaimCount ?? 0} 個 claim 未獲來源支持
+          </p>
+          <p className="book-rag-partial-warning" role="alert">
+            此回答包含未被來源支持的具體內容，請勿將標示段落視為已驗證事實。
+          </p>
+          {renderAnnotatedAnswer(state.response)}
+          {renderUnsupportedClaims(state.response)}
+          {renderCitations(state.response)}
         </div>
       ) : null}
     </section>
+  );
+}
+
+const HIGH_RISK_LABELS: Record<string, string> = {
+  number: "數字",
+  date: "日期",
+  formula: "公式",
+  proper_noun: "專有名詞"
+};
+
+/** Render the answer with unsupported claim spans wrapped in <mark>. */
+function renderAnnotatedAnswer(response: BookRagAnswer): React.ReactElement {
+  const claims = response.claims ?? [];
+  const unsupported = claims.filter((c) => c.status === "unsupported");
+  if (unsupported.length === 0) {
+    return <p>{response.answer}</p>;
+  }
+  // Sort by start offset; build segments with marks on unsupported spans.
+  const sorted = [...unsupported].sort((a, b) => a.answerStart - b.answerStart);
+  const segments: React.ReactElement[] = [];
+  let cursor = 0;
+  for (const claim of sorted) {
+    if (claim.answerStart > cursor) {
+      segments.push(<span key={`text-${cursor}`}>{response.answer.slice(cursor, claim.answerStart)}</span>);
+    }
+    const isHighRisk = claim.riskCategory && claim.riskCategory !== "general";
+    const riskLabel = claim.riskCategory ? HIGH_RISK_LABELS[claim.riskCategory] : undefined;
+    segments.push(
+      <mark
+        key={`mark-${claim.claimId}`}
+        className={isHighRisk ? "rag-unsupported-claim rag-unsupported-claim--high-risk" : "rag-unsupported-claim"}
+        aria-label={`此段內容缺乏來源支持${riskLabel ? `（${riskLabel}）` : ""}`}
+        data-claim-id={claim.claimId}
+      >
+        {claim.text}
+      </mark>
+    );
+    cursor = claim.answerEnd;
+  }
+  if (cursor < response.answer.length) {
+    segments.push(<span key={`text-tail`}>{response.answer.slice(cursor)}</span>);
+  }
+  return <p className="book-rag-annotated-answer">{segments}</p>;
+}
+
+/** Render the list of unsupported claims with risk category and claim id. */
+function renderUnsupportedClaims(response: BookRagAnswer): React.ReactElement | null {
+  const claims = response.claims ?? [];
+  const unsupported = claims.filter((c) => c.status === "unsupported");
+  if (unsupported.length === 0) return null;
+  return (
+    <ul className="book-rag-unsupported-claims" aria-label="未獲支持的 claim">
+      {unsupported.map((claim: BookRagClaim) => {
+        const riskLabel = claim.riskCategory && claim.riskCategory !== "general"
+          ? HIGH_RISK_LABELS[claim.riskCategory]
+          : null;
+        return (
+          <li key={claim.claimId}>
+            <code className="book-rag-claim-id" aria-label="claim 識別碼">{claim.claimId}</code>
+            {riskLabel ? <span className="book-rag-risk-tag" aria-label={`高風險類型：${riskLabel}`}>{riskLabel}</span> : null}
+            <span className="book-rag-claim-text">{claim.text}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Render citations with evidence quote and an expandable audit hash region. */
+function renderCitations(response: BookRagAnswer): React.ReactElement | null {
+  if (response.citations.length === 0) return null;
+  return (
+    <ul className="book-rag-citations" aria-label="引用來源">
+      {response.citations.map((citation) => (
+        <li key={citation.chunkId}>
+          <span className="book-rag-citation-label">{citation.label}</span>
+          {citation.locator ? <span className="muted"> · {citation.locator}</span> : null}
+          {citation.evidenceQuote ? (
+            <span className="book-rag-evidence-quote" aria-label="證據原文">「{citation.evidenceQuote}」</span>
+          ) : null}
+          {citation.contentHash ? (
+            <details className="book-rag-audit">
+              <summary aria-label="稽核資訊">稽核</summary>
+              <dl>
+                <dt>hash</dt>
+                <dd><code data-content-hash={citation.contentHash}>{citation.contentHash}</code></dd>
+                <dt>algorithm</dt>
+                <dd>{citation.hashAlgorithm ?? "sha256"}</dd>
+              </dl>
+            </details>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }

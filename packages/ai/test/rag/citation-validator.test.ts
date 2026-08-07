@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateCitations } from "../../src/rag/server";
+import { hashEvidenceSpan, validateCitations } from "../../src/rag/server";
 import type { RetrievedChunk } from "../../src/rag/server";
 
 const chunks: RetrievedChunk[] = [
@@ -23,5 +23,56 @@ describe("RAG citation validator", () => {
   it("accepts only a known, bounded chunk citation", () => {
     expect(validateCitations([{ chunkId: "chunk-1", label: "Chapter 1", start: 1, end: 4 }], chunks))
       .toEqual({ valid: true, citations: [{ chunkId: "chunk-1", label: "Chapter 1", start: 1, end: 4, locator: undefined }] });
+  });
+});
+
+describe("RAG citation evidence integrity (tamper = hard fail)", () => {
+  const evidenceChunk: RetrievedChunk[] = [
+    { id: "ec-1", label: "Evidence", content: "The speed of light is 299792458 m/s." }
+  ];
+
+  it("accepts a citation with a correct evidence quote and matching hash", () => {
+    const quote = "The speed of light is 299792458 m/s.";
+    const hash = hashEvidenceSpan(quote);
+    const result = validateCitations([{
+      chunkId: "ec-1", label: "Evidence",
+      evidenceQuote: quote, contentHash: hash, hashAlgorithm: "sha256"
+    }], evidenceChunk);
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects a fabricated evidence quote that is not a chunk substring (quote mismatch)", () => {
+    const result = validateCitations([{
+      chunkId: "ec-1", label: "Evidence",
+      evidenceQuote: "THIS_DOES_NOT_APPEAR_ANYWHERE"
+    }], evidenceChunk);
+    expect(result).toEqual({ valid: false, code: "evidence_quote_mismatch" });
+  });
+
+  it("rejects a tampered content hash that does not match the span (hash mismatch)", () => {
+    const result = validateCitations([{
+      chunkId: "ec-1", label: "Evidence", start: 0, end: 10,
+      contentHash: "a".repeat(64), hashAlgorithm: "sha256"
+    }], evidenceChunk);
+    expect(result).toEqual({ valid: false, code: "evidence_hash_mismatch" });
+  });
+
+  it("rejects when start/end span hash disagrees with evidence quote hash (span mismatch)", () => {
+    const quote = "The speed of light is 299792458 m/s.";
+    const result = validateCitations([{
+      chunkId: "ec-1", label: "Evidence", start: 0, end: 10,
+      evidenceQuote: quote,
+      contentHash: hashEvidenceSpan(quote),
+      hashAlgorithm: "sha256"
+    }], evidenceChunk);
+    expect(result).toEqual({ valid: false, code: "evidence_span_mismatch" });
+  });
+
+  it("rejects a malformed content hash (format_error, not a soft gap)", () => {
+    const result = validateCitations([{
+      chunkId: "ec-1", label: "Evidence",
+      contentHash: "not-a-real-hash"
+    }], evidenceChunk);
+    expect(result.valid).toBe(false);
   });
 });

@@ -52,6 +52,7 @@ async function main(): Promise<void> {
   };
   let app: StudentApiHandle | null = null;
   let invalidCitationApp: StudentApiHandle | null = null;
+  const extraApps: StudentApiHandle[] = [];
 
   try {
     const port = await getFreePort();
@@ -141,9 +142,82 @@ async function main(): Promise<void> {
       `status=${forged.status} code=${forgedBody.error?.code}`
     );
 
+    // Helper: spin up a fake-mode student API, log in, ask a RAG question.
+    async function askInFakeMode(fakeMode: string, query: string, authDbSuffix: string): Promise<{ status: number; body: any }> {
+      const port = await getFreePort();
+      const modeApp = await startStudentApi({
+        port,
+        studentDbPath,
+        authDbPath: join(directory, `auth-${authDbSuffix}.db`),
+        sessionTtlMs: 3_600_000,
+        ragProvider: "fake",
+        ragFakeMode: fakeMode,
+        googleEndpoints
+      });
+      extraApps.push(modeApp);
+      const modeBrowser = createSmokeBrowser(modeApp.baseUrl, modeApp.baseUrl);
+      await loginViaSmokeOAuth(modeApp.baseUrl, modeBrowser);
+      await completeSmokeProfile(modeBrowser, `Mode ${fakeMode} Student`);
+      const res = await modeBrowser.request("/api/student/books/book-alpha/rag-ask", { method: "POST", body: { query } });
+      return { status: res.status, body: JSON.parse(res.bodyText) };
+    }
+
+    // 9. Grounded claim-level answer: contract response with verified grounding,
+    // claims array, evidence, and zero unsupported claims.
+    const groundedMode = await askInFakeMode("grounded", "光合作用如何運作？", "mode-grounded");
+    const groundedParsed = studentRagAskResponseV1Schema.safeParse(groundedMode.body);
+    report.expect(groundedParsed.success, "grounded response matches claim-level contract");
+    report.expect(
+      groundedMode.body.grounding === "verified" && groundedMode.body.unsupportedClaimCount === 0,
+      "grounded answer is claim-level verified",
+      `grounding=${groundedMode.body.grounding} unsupported=${groundedMode.body.unsupportedClaimCount}`
+    );
+    report.expect(
+      Array.isArray(groundedMode.body.claims) && (groundedMode.body.claims as unknown[]).length > 0,
+      "grounded answer includes claims array"
+    );
+
+    // 10. Weak source: cites a chunk but answer barely overlaps → partial (unverified).
+    const weakMode = await askInFakeMode("weak_source", "光合作用", "mode-weak");
+    report.expect(
+      weakMode.body.grounding === "unverified" && typeof weakMode.body.unsupportedClaimCount === "number" && weakMode.body.unsupportedClaimCount > 0,
+      "weak-source answer is downgraded to unverified (partial)",
+      `grounding=${weakMode.body.grounding} unsupported=${weakMode.body.unsupportedClaimCount}`
+    );
+    report.expect(weakMode.status === 200, "weak-source returns 200 (soft partial, not hard error)");
+
+    // 11. Unsupported numeric claim: supported context + unsupported number → partial.
+    const numMode = await askInFakeMode("unsupported_number", "光合作用", "mode-num");
+    report.expect(
+      numMode.body.grounding === "unverified" && numMode.body.unsupportedClaimCount === 1,
+      "unsupported-numeric claim surfaces as partial with exactly 1 unsupported",
+      `grounding=${numMode.body.grounding} unsupported=${numMode.body.unsupportedClaimCount}`
+    );
+    const numClaims = numMode.body.claims as Array<{ status: string; riskCategory?: string }> | undefined;
+    report.expect(
+      Array.isArray(numClaims) && numClaims.some((c) => c.status === "unsupported" && c.riskCategory === "number"),
+      "unsupported numeric claim is tagged with riskCategory=number"
+    );
+
+    // 12. Evidence quote tamper: quote is not a chunk substring → hard fail closed.
+    const tamperMode = await askInFakeMode("evidence_quote_tamper", "光合作用", "mode-tamper");
+    report.expect(
+      tamperMode.status >= 400 && tamperMode.body.error?.code === "RAG_CITATION_INVALID",
+      "tampered evidence quote fails closed (integrity attack)",
+      `status=${tamperMode.status} code=${tamperMode.body.error?.code}`
+    );
+
+    // 13. Partial unsupported: two claims, one unsupported → partial with count.
+    const partialMode = await askInFakeMode("partial_unsupported", "光合作用", "mode-partial");
+    report.expect(
+      partialMode.body.grounding === "unverified" && partialMode.body.unsupportedClaimCount === 1,
+      "partial-unsupported surfaces as unverified with exactly 1 unsupported claim",
+      `grounding=${partialMode.body.grounding} unsupported=${partialMode.body.unsupportedClaimCount}`
+    );
+
     console.log(`\nrag:smoke PASS (${report.steps.length} checks)`);
   } finally {
-    await Promise.allSettled([app?.close(), invalidCitationApp?.close(), provider.close()]);
+    await Promise.allSettled([app?.close(), invalidCitationApp?.close(), ...extraApps.map((a) => a.close()), provider.close()]);
     rmSync(directory, { recursive: true, force: true });
   }
 }

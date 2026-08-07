@@ -16,6 +16,15 @@ describe("RAG HTTP route adapter", () => {
       provider: new FakeLlmProvider({ response: {
         answer: "A grounded fact.",
         citations: [{ chunkId: "chunk-1", label: "Chapter 1" }],
+        claims: [{
+          claimId: "claim-1",
+          text: "A grounded fact.",
+          answerStart: 0,
+          answerEnd: "A grounded fact.".length,
+          status: "supported",
+          citationChunkIds: ["chunk-1"],
+          evidence: [{ quote: "A grounded fact.", chunkId: "chunk-1", start: 0, end: 16 }]
+        }],
         confidence: "high"
       } })
     });

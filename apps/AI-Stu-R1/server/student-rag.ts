@@ -6,7 +6,9 @@ import {
   FakeLlmProvider,
   RagApplicationError,
   RagApplicationService,
+  RuleBasedGroundingValidator,
   asRagApplicationError,
+  hashEvidenceSpan,
   type LlmGenerateInput,
   type LlmProvider,
   type RagScope,
@@ -36,11 +38,19 @@ export type StudentRagEnv = {
   cerebrasModel?: string;
   /**
    * Deterministic failure injection for smoke gates (fake provider only):
-   * "invalid_citation" answers with a chunkId the retriever never supplied,
-   * proving the citation validator fails closed at the HTTP boundary.
+   *   grounded            — fully grounded answer with claims + evidence
+   *   invalid_citation    — fabricates a chunkId never retrieved (hard fail)
+   *   weak_source         — cites a chunk but answer text barely overlaps
+   *   partial_unsupported — supported claim + one unsupported general claim
+   *   unsupported_number  — supported context + unsupported numeric claim
+   *   evidence_quote_tamper — quote that is not a chunk substring (hard fail)
    */
-  fakeMode?: "grounded" | "invalid_citation";
+  fakeMode?: "grounded" | "invalid_citation" | "weak_source" | "partial_unsupported" | "unsupported_number" | "evidence_quote_tamper";
 };
+
+const VALID_FAKE_MODES = new Set<string>([
+  "grounded", "invalid_citation", "weak_source", "partial_unsupported", "unsupported_number", "evidence_quote_tamper"
+]);
 
 export function resolveStudentRagEnv(env: NodeJS.ProcessEnv = process.env): StudentRagEnv {
   const fakeMode = env.STUDENT_RAG_FAKE_MODE?.trim();
@@ -49,7 +59,7 @@ export function resolveStudentRagEnv(env: NodeJS.ProcessEnv = process.env): Stud
     cerebrasApiKey: env.CEREBRAS_API_KEY?.trim() || undefined,
     cerebrasBaseUrl: env.CEREBRAS_BASE_URL?.trim() || undefined,
     cerebrasModel: env.CEREBRAS_MODEL?.trim() || undefined,
-    fakeMode: fakeMode === "invalid_citation" ? "invalid_citation" : undefined
+    fakeMode: fakeMode && VALID_FAKE_MODES.has(fakeMode) ? fakeMode as StudentRagEnv["fakeMode"] : undefined
   };
 }
 
@@ -100,7 +110,9 @@ function tokenize(query: string): string[] {
 }
 
 /** Deterministic offline provider used by smoke gates; never calls a vendor. */
-export function createFakeRagProvider(mode: "grounded" | "invalid_citation" = "grounded"): LlmProvider {
+export function createFakeRagProvider(
+  mode: "grounded" | "invalid_citation" | "weak_source" | "partial_unsupported" | "unsupported_number" | "evidence_quote_tamper" = "grounded"
+): LlmProvider {
   return new FakeLlmProvider({
     handler: (input: LlmGenerateInput) => {
       if (mode === "invalid_citation") {
@@ -109,23 +121,164 @@ export function createFakeRagProvider(mode: "grounded" | "invalid_citation" = "g
         return JSON.stringify({
           answer: "This answer cites a chunk that does not exist.",
           citations: [{ chunkId: "chunk-never-retrieved", label: "forged" }],
+          claims: [],
           confidence: "high"
         });
       }
-      // Deterministic grounded answer: quote the first evidence block the
-      // retriever supplied and cite exactly that chunk.
-      const marker = input.userPrompt.match(/\{"chunkId":"([^"]+)"[^}]*"label":"([^"]*)"/);
-      if (!marker) {
-        return JSON.stringify({ answer: "No sufficient evidence was found.", citations: [], confidence: "low" });
+
+      // Parse the first evidence block from the prompt to build grounded output.
+      const evidence = parseFirstEvidenceBlock(input.userPrompt);
+      if (!evidence) {
+        return JSON.stringify({ answer: "No sufficient evidence was found.", citations: [], claims: [], confidence: "low" });
       }
-      const [, chunkId, label] = marker;
+
+      if (mode === "evidence_quote_tamper") {
+        // Quote is NOT a substring of the chunk → integrity hard fail.
+        return JSON.stringify({
+          answer: "Tampered evidence.",
+          citations: [{
+            chunkId: evidence.chunkId, label: evidence.label,
+            evidenceQuote: "THIS_QUOTE_DOES_NOT_EXIST_IN_CHUNK",
+            contentHash: hashEvidenceSpan(evidence.content.slice(0, 10)),
+            hashAlgorithm: "sha256"
+          }],
+          claims: [],
+          confidence: "high"
+        });
+      }
+
+      if (mode === "weak_source") {
+        // Cite the chunk but answer with unrelated text → low overlap → unsupported.
+        const answer = "量子力學的測不準原理是物理學的重要概念。";
+        const claimText = answer;
+        return JSON.stringify({
+          answer,
+          citations: [{ chunkId: evidence.chunkId, label: evidence.label }],
+          claims: [{
+            claimId: "claim-weak-1",
+            text: claimText,
+            answerStart: 0,
+            answerEnd: claimText.length,
+            status: "supported",
+            citationChunkIds: [evidence.chunkId],
+            evidence: [{ quote: evidence.content.slice(0, 20), chunkId: evidence.chunkId, start: 0, end: Math.min(20, evidence.content.length) }]
+          }],
+          confidence: "high"
+        });
+      }
+
+      if (mode === "unsupported_number") {
+        // Supported context claim (full content) + unsupported numeric claim.
+        const supportedClaim = evidence.content;
+        const numericAnswer = `${supportedClaim}光反應的效率為 99.7%。`;
+        const supportedEnd = supportedClaim.length;
+        const unsupportedText = "光反應的效率為 99.7%。";
+        const unsupportedStart = supportedEnd;
+        return JSON.stringify({
+          answer: numericAnswer,
+          citations: [{ chunkId: evidence.chunkId, label: evidence.label }],
+          claims: [
+            {
+              claimId: "claim-num-supported",
+              text: supportedClaim,
+              answerStart: 0,
+              answerEnd: supportedEnd,
+              status: "supported",
+              citationChunkIds: [evidence.chunkId],
+              evidence: [{ quote: supportedClaim, chunkId: evidence.chunkId, start: 0, end: supportedEnd }]
+            },
+            {
+              claimId: "claim-num-unsupported",
+              text: unsupportedText,
+              answerStart: unsupportedStart,
+              answerEnd: unsupportedStart + unsupportedText.length,
+              status: "supported",
+              riskCategory: "number",
+              citationChunkIds: [evidence.chunkId],
+              evidence: [{ quote: supportedClaim, chunkId: evidence.chunkId, start: 0, end: supportedEnd }]
+            }
+          ],
+          confidence: "high"
+        });
+      }
+
+      if (mode === "partial_unsupported") {
+        // Supported claim (full content) + one unsupported general claim (low overlap).
+        const supportedClaim = evidence.content;
+        const unsupportedClaim = "此機制也適用於深海熱泉生態系統。";
+        const answer = `${supportedClaim}${unsupportedClaim}`;
+        const supEnd = supportedClaim.length;
+        return JSON.stringify({
+          answer,
+          citations: [{ chunkId: evidence.chunkId, label: evidence.label }],
+          claims: [
+            {
+              claimId: "claim-partial-sup",
+              text: supportedClaim,
+              answerStart: 0,
+              answerEnd: supEnd,
+              status: "supported",
+              citationChunkIds: [evidence.chunkId],
+              evidence: [{ quote: supportedClaim, chunkId: evidence.chunkId, start: 0, end: supEnd }]
+            },
+            {
+              claimId: "claim-partial-unsup",
+              text: unsupportedClaim,
+              answerStart: supEnd,
+              answerEnd: supEnd + unsupportedClaim.length,
+              status: "supported",
+              citationChunkIds: [evidence.chunkId],
+              evidence: [{ quote: supportedClaim, chunkId: evidence.chunkId, start: 0, end: supEnd }]
+            }
+          ],
+          confidence: "high"
+        });
+      }
+
+      // mode === "grounded": fully grounded answer with verbatim claim + evidence.
+      // The claim text IS the full evidence content so the rule-based validator
+      // sees maximum token overlap (Jaccard/coverage) and marks it supported.
+      const claimText = evidence.content;
+      const answer = `依據書本內容（${evidence.label || evidence.chunkId}）：${claimText}`;
+      const claimStart = answer.indexOf(claimText);
       return JSON.stringify({
-        answer: `依據書本內容（${label || chunkId}）：已根據檢索到的證據區塊回答。`,
-        citations: [{ chunkId, label: label || chunkId }],
+        answer,
+        citations: [{ chunkId: evidence.chunkId, label: evidence.label || evidence.chunkId }],
+        claims: [{
+          claimId: "claim-grounded-1",
+          text: claimText,
+          answerStart: claimStart,
+          answerEnd: claimStart + claimText.length,
+          status: "supported",
+          citationChunkIds: [evidence.chunkId],
+          evidence: [{
+            quote: claimText,
+            chunkId: evidence.chunkId,
+            start: 0,
+            end: claimText.length
+          }]
+        }],
         confidence: "high"
       });
     }
   });
+}
+
+type ParsedEvidence = { chunkId: string; label: string; content: string };
+
+/** Extract the first evidence block { chunkId, label, content } from the prompt. */
+function parseFirstEvidenceBlock(prompt: string): ParsedEvidence | null {
+  // The prompt emits each block as a JSON.stringify'd object line. Extract the
+  // first such object and parse it robustly (handles all key orderings/escapes).
+  const blockMatch = prompt.match(/\{[^{}]*"chunkId"[\s\S]*?\}/);
+  if (!blockMatch) return null;
+  try {
+    const obj = JSON.parse(blockMatch[0]) as { chunkId?: string; label?: string; content?: string };
+    if (typeof obj.chunkId !== "string" || typeof obj.label !== "string" || typeof obj.content !== "string") return null;
+    return { chunkId: obj.chunkId, label: obj.label, content: obj.content };
+  } catch {
+    return null;
+  }
 }
 
 export function createStudentRagProvider(options: StudentRagEnv): LlmProvider {
@@ -164,7 +317,10 @@ export function createStudentRagRouter(options: StudentRagRouterOptions): Router
     if (!dataSource) throw new RagApplicationError({ code: "RAG_PROVIDER_UNAVAILABLE" });
     application = new RagApplicationService({
       retriever: new ScopedBookContentRetriever(dataSource),
-      provider: createStudentRagProvider(options.env ?? resolveStudentRagEnv())
+      provider: createStudentRagProvider(options.env ?? resolveStudentRagEnv()),
+      // Independent rule-based validator; the generator's confidence is never
+      // an input and disagreement resolves to the validator's verdict.
+      groundingValidator: new RuleBasedGroundingValidator()
     });
     return application;
   }

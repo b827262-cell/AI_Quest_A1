@@ -1,4 +1,4 @@
-import type { RagCitation, RagRequest, RagScope } from "./contracts";
+import type { RagCitation, RagClaimGrounding, RagRequest, RagScope } from "./contracts";
 
 export type RagProviderId = "cerebras" | "fake";
 
@@ -91,3 +91,63 @@ export class NoopRagTelemetrySink implements RagTelemetrySink {
 export type RagApplication = {
   answer(request: RagRequest, signal?: AbortSignal): Promise<import("./contracts").RagResponse>;
 };
+
+// ---------------------------------------------------------------------------
+// Independent GroundingValidator port
+// ---------------------------------------------------------------------------
+
+/**
+ * The authoritative support verdict, decided by the validator — not by the
+ * generator. The generator's own confidence is deliberately excluded from
+ * this type so a model can never self-approve.
+ */
+export type GroundingVerdict = "verified" | "partial" | "abstained";
+
+export type ClaimSupportStatus = "supported" | "unsupported";
+
+export type ValidatedClaimSupport = {
+  claimId: string;
+  status: ClaimSupportStatus;
+  /** Which cited chunk ids actually back this claim (subset of citations). */
+  supportedByChunkIds: string[];
+  /** Risk category for the claim, used for high-risk UI emphasis. */
+  riskCategory?: import("./contracts").RagClaimRiskCategory;
+  /** Reason code when unsupported (for telemetry/audit, not user-facing). */
+  reasonCode?: string;
+};
+
+export type GroundingValidationInput = {
+  requestId: string;
+  /** Sanitized final answer string (post redaction, pre-response). */
+  answer: string;
+  /** Claims decomposed from the answer, with answer-relative offsets. */
+  claims: RagClaimGrounding[];
+  /** Citation coordinates already structurally validated. */
+  citations: RagCitation[];
+  /** The exact retrieved-and-screened chunks for the request scope. */
+  retrievedChunks: readonly RetrievedChunk[];
+  /** Authorization scope; out-of-scope chunks must never support a claim. */
+  scope: RagScope;
+  signal?: AbortSignal;
+};
+
+export type GroundingValidationResult = {
+  verdict: GroundingVerdict;
+  claimSupport: ValidatedClaimSupport[];
+  unsupportedClaimCount: number;
+  /** Identity/version recorded for audit; never used to override the verdict. */
+  validatorIdentity: string;
+};
+
+/**
+ * Independent grounding validator, decoupled from the generator invocation.
+ *
+ * Contract rules:
+ *   - The validator MUST NOT trust the generator's confidence.
+ *   - On timeout, malformed input, or any internal error the validator MUST
+ *     return verdict "abstained" (fail-closed), never "verified".
+ *   - Generator/validator disagreement resolves to the validator's verdict.
+ */
+export interface GroundingValidator {
+  validate(input: GroundingValidationInput): Promise<GroundingValidationResult>;
+}
