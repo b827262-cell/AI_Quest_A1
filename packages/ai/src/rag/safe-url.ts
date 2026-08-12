@@ -103,6 +103,9 @@ function isAllowedPublicIp(host: string): boolean {
     if (/^f[cd][0-9a-f]{2}:/.test(compact)) return false; // unique-local fc00::/7
     if (/^fe[89ab][0-9a-f]:/.test(compact)) return false; // link-local fe80::/10
     if (/^ff/.test(compact)) return false; // multicast
+    // Reject IPv4-mapped IPv6 private addresses (::ffff:10.x, ::ffff:127.x, etc.)
+    const v4Mapped = compact.match(/^::ffff:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (v4Mapped) return isAllowedPublicIpv4(v4Mapped.slice(1).map(Number));
     const v4Tail = compact.match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
     if (v4Tail) return isAllowedPublicIpv4(v4Tail.slice(1).map(Number));
     return true;
@@ -121,5 +124,130 @@ function isAllowedPublicIpv4(octets: number[]): boolean {
   if (a === 192 && b === 168) return false; // RFC1918
   if (a === 100 && b >= 64 && b <= 127) return false; // carrier-grade NAT
   if (a >= 224) return false; // multicast + reserved
+  // Reject non-routable / reserved ranges (RFC 6890)
+  if (a === 192 && b === 0 && octets[2] === 0) return false; // 192.0.0.0/24
+  if (a === 192 && b === 0 && octets[2] === 173) return false; // 192.0.2.0/24 (TEST-NET-1)
+  if (a === 198 && b >= 18 && b <= 19) return false; // 198.18.0.0/15 benchmarking
+  if (a === 198 && b === 51 && octets[2] === 100) return false; // 198.51.100.0/24 TEST-NET-2
+  if (a === 203 && b === 0 && octets[2] === 113) return false; // 203.0.113.0/24 TEST-NET-3
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime DNS resolution validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Injectable DNS resolver type. Returns the list of IP addresses a hostname
+ * resolves to. Tests inject mock resolvers; production uses the default.
+ */
+export type DnsResolver = (hostname: string) => Promise<string[]>;
+
+/**
+ * Runtime DNS resolution + IP validation.
+ *
+ * Resolves the hostname of a validated URL to concrete IP addresses and
+ * rejects if ANY resolved address falls in a private, loopback, link-local,
+ * metadata, multicast, or otherwise non-routable range. This closes the
+ * DNS-rebinding / TOCTOU gap left by static URL validation alone.
+ *
+ * For IPv6, the host is resolved per-label and each address is checked.
+ * IPv4-mapped IPv6 addresses (::ffff:10.x) are unwrapped and checked.
+ *
+ * Throws RagApplicationError if any resolved address is unsafe, or if DNS
+ * resolution itself fails (fail-closed — cannot verify destination is safe).
+ */
+export async function resolveAndCheckSafe(
+  url: URL,
+  options: { resolver?: DnsResolver } = {}
+): Promise<void> {
+  const fail = (reasonCode: string): never => {
+    throw new RagApplicationError({
+      code: "RAG_PROVIDER_UNAVAILABLE",
+      provider: "cerebras",
+      failureKind: "unavailable",
+      reasonCode: `unsafe_dns:${reasonCode}`
+    });
+  };
+
+  const host = url.hostname;
+  let resolved: string[];
+
+  // If it's an IP literal, validate directly without DNS lookup.
+  if (isIpLiteral(host)) {
+    resolved = [host];
+  } else {
+    const resolver = options.resolver ?? defaultDnsResolver;
+    try {
+      resolved = await resolver(host);
+    } catch {
+      return fail("dns_resolution_failed");
+    }
+    if (resolved.length === 0) return fail("dns_no_addresses");
+  }
+
+  for (const addr of resolved) {
+    if (!isAllowedPublicIp(addr)) return fail("resolved_ip_blocked");
+  }
+}
+
+/**
+ * Default DNS resolver using node:dns promises API.
+ * Uses dynamic import to avoid hard dependency in browser contexts.
+ */
+async function defaultDnsResolver(hostname: string): Promise<string[]> {
+  const nodeDns = await import("node:dns");
+  const result = await nodeDns.promises.lookup(hostname, { all: true });
+  return result.map((r: { address: string }) => r.address);
+}
+
+/**
+ * Resolve a validated URL to its concrete, SSRF-checked IP addresses.
+ *
+ * This is the SINGLE source of truth for the destination address used by the
+ * outbound connection: the runtime SSRF guard resolves + validates the IPs
+ * here, and the pinned transport connects to exactly one of the returned
+ * addresses. The connection's socket lookup and the security validation lookup
+ * are therefore the SAME call — there is no second independent DNS lookup that
+ * could return a different (private) IP after validation (DNS-rebinding/TOCTOU).
+ *
+ * - IP-literal hosts are returned as-is (after allowance check).
+ * - Hostname hosts are resolved via the (injectable) resolver and every
+ *   resolved address must be a public, routable IP or the call fails closed.
+ *
+ * Returns the validated address list. Throws RagApplicationError (fail-closed)
+ * if any address is unsafe, resolution fails, or no addresses are returned.
+ */
+export async function resolveSafeAddress(
+  url: URL,
+  options: { resolver?: DnsResolver } = {}
+): Promise<string[]> {
+  const fail = (reasonCode: string): never => {
+    throw new RagApplicationError({
+      code: "RAG_PROVIDER_UNAVAILABLE",
+      provider: "cerebras",
+      failureKind: "unavailable",
+      reasonCode: `unsafe_dns:${reasonCode}`
+    });
+  };
+
+  const host = url.hostname;
+  let resolved: string[];
+
+  if (isIpLiteral(host)) {
+    if (!isAllowedPublicIp(host)) return fail("resolved_ip_blocked");
+    resolved = [host];
+  } else {
+    const resolver = options.resolver ?? defaultDnsResolver;
+    try {
+      resolved = await resolver(host);
+    } catch {
+      return fail("dns_resolution_failed");
+    }
+    if (resolved.length === 0) return fail("dns_no_addresses");
+    for (const addr of resolved) {
+      if (!isAllowedPublicIp(addr)) return fail("resolved_ip_blocked");
+    }
+  }
+  return resolved;
 }

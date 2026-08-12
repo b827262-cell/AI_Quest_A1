@@ -37,7 +37,8 @@
     "student:auth-smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/student-auth-smoke.ts",
     "student:dashboard-smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/student-dashboard-smoke.ts",
     "rag:smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/rag-smoke.ts",
-    "release-gate:student-rag": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/release-gate-student-rag.ts"
+    "release-gate:student-rag": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/release-gate-student-rag.ts",
+    "ai:test:ssrf": "pnpm --filter @ai-smartbook/ai test -- ssrf-adversarial"
   },
   "devDependencies": {
     "happy-dom": "^20.11.1",
