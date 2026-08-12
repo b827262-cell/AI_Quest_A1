@@ -2520,13 +2520,19 @@ app.get("/api/admin/books/:bookId/qa-logs", (req, res) => {
 });
 
 // ---- Student read-only API -----------------------------------------------
-app.get("/api/student/books", (_req, res) => {
+// Single enforcement point: every current and future /api/student/books route
+// (list, detail, and all nested resources) is gated here, before any book
+// lookup, session resolution, or content access happens below.
+app.use("/api/student/books", (_req, res, next) => {
   if (!loadSiteConfig().booksPageEnabled) return fail(res, 404, "books page disabled");
+  return next();
+});
+
+app.get("/api/student/books", (_req, res) => {
   res.json({ mode: "repo-api", books: repos.books.findPublished() });
 });
 
 app.get("/api/student/books/:bookId", (req, res) => {
-  if (!loadSiteConfig().booksPageEnabled) return fail(res, 404, "books page disabled");
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
   const chapters = repos.chapters.findByBookId(book.id);
