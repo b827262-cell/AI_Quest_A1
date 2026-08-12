@@ -1,5 +1,5 @@
 import { RagApplicationError } from "./errors";
-import { assertSafeLlmBaseUrl, resolveSafeAddress, type DnsResolver } from "./safe-url";
+import { assertSafeLlmBaseUrl, type DnsResolver } from "./safe-url";
 import { pinnedFetch } from "./pinned-fetch";
 import type {
   LlmGenerateInput,

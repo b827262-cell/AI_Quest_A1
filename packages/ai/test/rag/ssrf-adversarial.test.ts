@@ -20,6 +20,7 @@ import https from "node:https";
 import { EventEmitter } from "node:events";
 import { assertSafeLlmBaseUrl, resolveSafeAddress, type DnsResolver } from "../../src/rag/safe-url";
 import { pinnedFetch } from "../../src/rag/pinned-fetch";
+import type { PinnedFetchOptions } from "../../src/rag/pinned-fetch";
 import { CerebrasLlmProvider } from "../../src/rag/cerebras.adapter";
 
 afterEach(() => vi.restoreAllMocks());
@@ -45,15 +46,20 @@ function seqDns(...addrs: string[]): DnsResolver {
   return async () => [addrs[Math.min(i++, addrs.length - 1)]];
 }
 
+type TransportFn = (url: string | URL, options?: PinnedFetchOptions) => Promise<Response>;
+
+function authHeaderOf(options?: PinnedFetchOptions): string | undefined {
+  return (options?.headers as Record<string, string> | undefined)?.Authorization;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers for fake HTTP responses
 // ---------------------------------------------------------------------------
 function fakeResponse(status: number, body: string): http.IncomingMessage {
   const res = new http.IncomingMessage(null as unknown as net.Socket);
-  (res as any).statusCode = status;
-  (res as any).headers = { "content-type": "application/json" };
-  const origOn = res.on.bind(res);
-  (res as any).on = (ev: string, fn: (chunk: any) => void) => {
+  (res as { statusCode?: number }).statusCode = status;
+  (res as { headers?: http.IncomingHttpHeaders }).headers = { "content-type": "application/json" };
+  (res as { on: typeof res.on }).on = (ev: string, fn: (chunk: Buffer) => void) => {
     if (ev === "data") queueMicrotask(() => fn(Buffer.from(body)));
     if (ev === "end") queueMicrotask(fn);
     return res;
@@ -61,54 +67,59 @@ function fakeResponse(status: number, body: string): http.IncomingMessage {
   return res;
 }
 
-function spyHttpRequests() {
-  const make = (status: number, body: string) => {
-    const impl = (options: any, cb?: (res: http.IncomingMessage) => void) => {
-      // Exercise createConnection so the pinned address is actually dialed
-      // (and captured by the tls.connect/net.connect spies). The returned fake
-      // socket has no real I/O — that's fine, we only assert on the host.
-      if (typeof options?.createConnection === "function") {
-        try { options.createConnection(); } catch { /* ignore */ }
-      }
-      const res = fakeResponse(status, body);
-      queueMicrotask(() => cb && cb(res));
-      const req: any = new EventEmitter();
-      req.end = () => {};
-      req.write = () => {};
-      req.destroy = () => {};
-      return req;
-    };
-    return vi.fn(impl);
+type HttpMockImpl = (
+  options: http.RequestOptions,
+  cb?: (res: http.IncomingMessage) => void
+) => http.ClientRequest;
+
+function makeHttpMock(status: number, body: string): HttpMockImpl {
+  return (options, cb) => {
+    if (typeof options?.createConnection === "function") {
+      try { options.createConnection(); } catch { /* ignore — we only assert on host */ }
+    }
+    const res = fakeResponse(status, body);
+    queueMicrotask(() => cb && cb(res));
+    const req = new EventEmitter() as unknown as http.ClientRequest;
+    (req as unknown as { write: (c: string) => boolean }).write = () => true;
+    (req as unknown as { end: () => void }).end = () => {};
+    (req as unknown as { destroy: () => void }).destroy = () => {};
+    (req as unknown as { on: (e: string, fn: () => void) => void }).on = () => req;
+    return req;
   };
-  const httpSpy = vi.spyOn(http, "request").mockImplementation(make(200, "{}") as any);
-  const httpsSpy = vi.spyOn(https, "request").mockImplementation(make(200, "{}") as any);
-  return { httpSpy, httpsSpy, setBody: (status: number, body: string) => {
-    httpSpy.mockImplementation(make(status, body) as any);
-    httpsSpy.mockImplementation(make(status, body) as any);
-  } };
 }
 
+function spyHttpRequests() {
+  const httpSpy = vi.spyOn(http, "request").mockImplementation(makeHttpMock(200, "{}") as unknown as typeof http.request);
+  const httpsSpy = vi.spyOn(https, "request").mockImplementation(makeHttpMock(200, "{}") as unknown as typeof https.request);
+  return {
+    httpSpy,
+    httpsSpy,
+    setBody: (status: number, b: string) => {
+      httpSpy.mockImplementation(makeHttpMock(status, b) as unknown as typeof http.request);
+      httpsSpy.mockImplementation(makeHttpMock(status, b) as unknown as typeof https.request);
+    }
+  };
+}
+
+type ConnectRecord = { host: string; port: number; servername?: string };
+
 function spyConnect() {
-  const connects: Array<{ host: string; port: number; servername?: string }> = [];
+  const connects: ConnectRecord[] = [];
   const tlsSpy = vi
     .spyOn(tls, "connect")
-    .mockImplementation((opts: any, cb?: any) => {
-      connects.push({ host: opts.host, port: opts.port, servername: opts.servername });
-      const sock: any = new EventEmitter();
-      sock.destroy = () => {};
-      sock.on = () => sock;
+    .mockImplementation((opts: tls.ConnectOptions, cb?: () => void) => {
+      connects.push({ host: String(opts.host), port: Number(opts.port), servername: opts.servername });
+      const sock = new EventEmitter() as unknown as tls.TLSSocket;
       if (typeof cb === "function") queueMicrotask(cb);
-      return sock as unknown as tls.TLSSocket;
+      return sock;
     });
   const netSpy = vi
     .spyOn(net, "connect")
-    .mockImplementation((opts: any, cb?: any) => {
-      connects.push({ host: opts.host, port: opts.port });
-      const sock: any = new EventEmitter();
-      sock.destroy = () => {};
-      sock.on = () => sock;
+    .mockImplementation((opts: net.NetConnectOpts, cb?: () => void) => {
+      connects.push({ host: String(opts.host), port: Number(opts.port) });
+      const sock = new EventEmitter() as unknown as net.Socket;
       if (typeof cb === "function") queueMicrotask(cb);
-      return sock as unknown as net.Socket;
+      return sock;
     });
   return { connects, tlsSpy, netSpy };
 }
@@ -251,11 +262,11 @@ describe("SSRF adversarial — provider DNS rebinding (end-to-end)", () => {
 
   it("safe→private rebinding resolver: validation pins public; transport sees same-origin URL", async () => {
     const seen: string[] = [];
-    const transport = vi.fn(async (url: string | URL, options?: any) => {
+    const transport: TransportFn = vi.fn(async (url, options) => {
       seen.push(String(url));
-      expect((options?.headers as any)?.Authorization).toBe(`Bearer ${SAFE_KEY}`);
+      expect(authHeaderOf(options)).toBe(`Bearer ${SAFE_KEY}`);
       return new Response(JSON.stringify({ choices: [{ message: { content: "{\"ok\":true}" } }] }), { status: 200 });
-    }) as any;
+    });
     const provider = new CerebrasLlmProvider({
       credentialResolver: async () => ({ apiKey: SAFE_KEY }),
       baseUrl: "https://cerebras-valid.example/v1",
@@ -274,10 +285,10 @@ describe("SSRF adversarial — provider DNS rebinding (end-to-end)", () => {
 describe("SSRF adversarial — cross-origin redirect credential policy", () => {
   it("rejects cross-origin redirect (credential NOT forwarded to evil host)", async () => {
     let firstHopAuth = "";
-    const transport = vi.fn(async (_url: string | URL, options?: any) => {
-      firstHopAuth = (options?.headers as any)?.Authorization;
+    const transport: TransportFn = vi.fn(async (_url, options) => {
+      firstHopAuth = authHeaderOf(options) ?? "";
       return new Response(null, { status: 302, headers: { location: "https://evil-public.example/v1/other" } });
-    }) as any;
+    });
     const provider = new CerebrasLlmProvider({
       credentialResolver: async () => ({ apiKey: SAFE_KEY }),
       baseUrl: "https://api.cerebras.ai/v1",
@@ -297,14 +308,14 @@ describe("SSRF adversarial — cross-origin redirect credential policy", () => {
 
   it("same-origin redirect is permitted and re-validated", async () => {
     let hops = 0;
-    const transport = vi.fn(async (_url: string | URL, options?: any) => {
+    const transport: TransportFn = vi.fn(async (_url, options) => {
       hops++;
-      expect((options?.headers as any)?.Authorization).toBe(`Bearer ${SAFE_KEY}`);
+      expect(authHeaderOf(options)).toBe(`Bearer ${SAFE_KEY}`);
       if (hops === 1) {
         return new Response(null, { status: 302, headers: { location: "https://api.cerebras.ai/v1/alt" } });
       }
       return new Response(JSON.stringify({ choices: [{ message: { content: "{\"ok\":true}" } }] }), { status: 200 });
-    }) as any;
+    });
     const provider = new CerebrasLlmProvider({
       credentialResolver: async () => ({ apiKey: SAFE_KEY }),
       baseUrl: "https://api.cerebras.ai/v1",
