@@ -109,6 +109,11 @@ export function SiteConfigPage() {
           <input type="checkbox" checked={form.studentLoginEnabled} onChange={(event) => setField("studentLoginEnabled", event.target.checked)} />
           顯示「學員登入」入口
         </label>
+        <label className="appearance-check">
+          <input type="checkbox" checked={form.booksPageEnabled} onChange={(event) => setField("booksPageEnabled", event.target.checked)} />
+          開放「書城」頁面（/books）
+        </label>
+        <p className="muted site-config-help">關閉後前台無法瀏覽書城，直接輸入網址或書本連結也會被拒絕。</p>
         <label htmlFor="maintenance-notice">系統公告（留空則不顯示）</label>
         <textarea
           id="maintenance-notice"

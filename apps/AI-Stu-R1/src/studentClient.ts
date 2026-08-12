@@ -19,6 +19,7 @@ export interface PublicSiteConfig {
   guestAiEnabled: boolean;
   guestDailyLimit: number;
   studentLoginEnabled: boolean;
+  booksPageEnabled: boolean;
   maintenanceNotice: string;
 }
 

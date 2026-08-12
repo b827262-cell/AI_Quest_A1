@@ -21,6 +21,7 @@ export const siteConfigSchema = z.object({
   guestAiEnabled: z.boolean().default(true),
   guestDailyLimit: z.number().int().min(0).max(100).default(3),
   studentLoginEnabled: z.boolean().default(true),
+  booksPageEnabled: z.boolean().default(true),
   maintenanceNotice: safeText(240, "")
 });
 
@@ -40,6 +41,7 @@ export const publicSiteConfigSchema = siteConfigSchema.pick({
   guestAiEnabled: true,
   guestDailyLimit: true,
   studentLoginEnabled: true,
+  booksPageEnabled: true,
   maintenanceNotice: true
 });
 export type PublicSiteConfig = z.infer<typeof publicSiteConfigSchema>;

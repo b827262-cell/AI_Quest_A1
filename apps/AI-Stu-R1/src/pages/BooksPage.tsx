@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Navigate } from "react-router-dom";
 import { studentClient } from "../studentClient";
 import { useAppearance } from "../appearance";
 import {
@@ -15,6 +16,7 @@ export function BooksPage() {
   const [books, setBooks] = useState<StudentBook[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [disabled, setDisabled] = useState(false);
   const [query, setQuery] = useState("");
 
   // Build the page background from the admin appearance settings. A broken
@@ -64,11 +66,30 @@ export function BooksPage() {
   } as CSSProperties;
 
   useEffect(() => {
+    let active = true;
     studentClient
-      .listBooks()
-      .then((d) => setBooks(d.books as StudentBook[]))
-      .catch((e) => setError(String(e.message)))
-      .finally(() => setLoading(false));
+      .getPublicSiteConfig()
+      .then((config) => {
+        if (!active) return;
+        if (!config.booksPageEnabled) {
+          setDisabled(true);
+          setLoading(false);
+          return;
+        }
+        return studentClient
+          .listBooks()
+          .then((d) => active && setBooks(d.books as StudentBook[]))
+          .catch((e) => active && setError(String(e.message)))
+          .finally(() => active && setLoading(false));
+      })
+      .catch((e) => {
+        if (!active) return;
+        setError(String(e.message));
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const filteredBooks = useMemo(
@@ -80,6 +101,10 @@ export function BooksPage() {
     () => sortBooksNewestFirst(filteredBooks).slice(0, 8),
     [filteredBooks]
   );
+
+  if (disabled) {
+    return <Navigate to="/" replace />;
+  }
 
   return (
     <div className="books-homepage" style={layoutVars}>
