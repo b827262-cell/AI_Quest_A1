@@ -111,9 +111,9 @@ export function SiteConfigPage() {
         </label>
         <label className="appearance-check">
           <input type="checkbox" checked={form.booksPageEnabled} onChange={(event) => setField("booksPageEnabled", event.target.checked)} />
-          開放「書城」頁面（/books）
+          開放「書城」與書本閱讀存取（/books、/books/:bookId）
         </label>
-        <p className="muted site-config-help">關閉後前台無法瀏覽書城，直接輸入網址或書本連結也會被拒絕。</p>
+        <p className="muted site-config-help">關閉後前台無法瀏覽書城列表，也無法讀取任一本書的內容；直接輸入網址或書本連結一併被拒絕（後端 404）。</p>
         <label htmlFor="maintenance-notice">系統公告（留空則不顯示）</label>
         <textarea
           id="maintenance-notice"
