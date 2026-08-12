@@ -1,5 +1,6 @@
 import { RagApplicationError } from "./errors";
-import { assertSafeLlmBaseUrl } from "./safe-url";
+import { assertSafeLlmBaseUrl, resolveSafeAddress, type DnsResolver } from "./safe-url";
+import { pinnedFetch } from "./pinned-fetch";
 import type {
   LlmGenerateInput,
   LlmGenerateOutput,
@@ -12,7 +13,13 @@ export type CerebrasAdapterOptions = {
   model?: string;
   baseUrl?: string;
   timeoutMs?: number;
-  fetchImpl?: typeof fetch;
+  /** Injectable DNS resolver for runtime SSRF validation. */
+  dnsResolver?: DnsResolver;
+  /**
+   * Injectable pinned-address transport (default: pinnedFetch). Tests pass a
+   * mock to assert on the validated URL / DNS resolver without real sockets.
+   */
+  transport?: typeof pinnedFetch;
 };
 
 type CerebrasResponse = {
@@ -32,14 +39,16 @@ export class CerebrasLlmProvider implements LlmProvider {
   private readonly credentialResolver: ServerCredentialResolver;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
-  private readonly fetchImpl: typeof fetch;
+  private readonly transport: typeof pinnedFetch;
+  private readonly dnsResolver: DnsResolver | undefined;
 
   constructor(options: CerebrasAdapterOptions) {
     this.credentialResolver = options.credentialResolver;
     this.defaultModel = options.model ?? "gpt-oss-120b";
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? "https://api.cerebras.ai/v1");
     this.timeoutMs = boundedTimeout(options.timeoutMs ?? 15_000);
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.transport = options.transport ?? pinnedFetch;
+    this.dnsResolver = options.dnsResolver;
   }
 
   async generate(input: LlmGenerateInput): Promise<LlmGenerateOutput> {
@@ -63,24 +72,12 @@ export class CerebrasLlmProvider implements LlmProvider {
     }
     timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${credential.apiKey}`
-        },
-        body: JSON.stringify({
-          model: input.model ?? this.defaultModel,
-          messages: [
-            { role: "system", content: input.systemPrompt },
-            { role: "user", content: input.userPrompt }
-          ],
-          temperature: input.temperature ?? 0.1,
-          max_tokens: input.maxOutputTokens,
-          stream: false
-        }),
-        signal: controller.signal
-      });
+      const response = await this.executeWithRedirectControl(
+        `${this.baseUrl}/chat/completions`,
+        credential.apiKey,
+        input,
+        controller.signal
+      );
 
       if (response.status === 401 || response.status === 403) {
         throw new RagApplicationError({ code: "RAG_PROVIDER_AUTH_FAILED", provider: "cerebras", failureKind: "auth_failed" });
@@ -112,7 +109,7 @@ export class CerebrasLlmProvider implements LlmProvider {
         latencyMs: Date.now() - started
       };
     } catch (error) {
-      if (error instanceof RagApplicationError) throw error;
+if (error instanceof RagApplicationError) throw error;
       if (controller.signal.aborted) {
         throw new RagApplicationError({ code: "RAG_PROVIDER_TIMEOUT", retryable: true, provider: "cerebras", failureKind: "timeout" });
       }
@@ -120,6 +117,117 @@ export class CerebrasLlmProvider implements LlmProvider {
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
       input.signal?.removeEventListener("abort", abortFromCaller);
+    }
+  }
+
+  /**
+   * Execute the HTTP request with strict redirect control, runtime DNS
+   * pinning, and cross-origin credential policy.
+   *
+   * Security properties (P1 / P3):
+   *  - The connection uses {@link pinnedFetch}, which resolves + validates the
+   *    destination IP ONCE (resolveSafeAddress) and connects to exactly that
+   *    pinned address. The validation lookup and the connect lookup are the SAME
+   *    call, so a second DNS response cannot redirect the socket to a private IP
+   *    (DNS-rebinding / TOCTOU closed). TLS cert verification stays ON against
+   *    the ORIGINAL hostname (SNI), so MitM on the pinned IP is rejected.
+   *  - Static URL validation runs on every hop.
+   *  - Cross-origin redirects are REJECTED: the Cerebras Authorization
+   *    credential is only ever sent to the original, validated origin. A 3xx
+   *    pointing to a different host is followed only for public, same-provider
+   *    endpoints and the credential is NOT forwarded — in practice we reject
+   *    cross-origin redirects fail-closed (see "unsafe_redirect:cross_origin").
+   *  - The API key is NEVER sent to an unsafe redirect target.
+   */
+  private async executeWithRedirectControl(
+    url: string,
+    apiKey: string,
+    input: LlmGenerateInput,
+    signal: AbortSignal
+  ): Promise<Response> {
+    const maxRedirects = 5;
+    const seenUrls = new Set<string>();
+    let currentUrl = assertSafeLlmBaseUrl(url).toString();
+    let previousOrigin: string | undefined;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const validatedUrl = assertSafeLlmBaseUrl(currentUrl);
+      const origin = `${validatedUrl.protocol}//${validatedUrl.host}`;
+
+      if (seenUrls.has(validatedUrl.toString())) {
+        throw new RagApplicationError({
+          code: "RAG_PROVIDER_UNAVAILABLE",
+          provider: "cerebras",
+          failureKind: "unavailable",
+          reasonCode: "unsafe_redirect:loop"
+        });
+      }
+
+      // P3: reject cross-origin redirects so the credential cannot leak to an
+      // arbitrary redirected host. The very first hop has no "previous origin"
+      // and is always allowed (it came from the validated base URL).
+      if (previousOrigin !== undefined && origin !== previousOrigin) {
+        throw new RagApplicationError({
+          code: "RAG_PROVIDER_UNAVAILABLE",
+          provider: "cerebras",
+          failureKind: "unavailable",
+          reasonCode: "unsafe_redirect:cross_origin"
+        });
+      }
+      previousOrigin = origin;
+      seenUrls.add(validatedUrl.toString());
+
+      // Pinned, runtime-validated connection. resolveSafeAddress inside
+      // this.transport resolves + validates once and the socket connects to
+      // that exact address.
+      const response = await this.transport(validatedUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: input.model ?? this.defaultModel,
+          messages: [
+            { role: "system", content: input.systemPrompt },
+            { role: "user", content: input.userPrompt }
+          ],
+          temperature: input.temperature ?? 0.1,
+          max_tokens: input.maxOutputTokens,
+          stream: false
+        }),
+        signal,
+        dnsResolver: this.dnsResolver,
+        timeoutMs: this.timeoutMs
+      });
+
+      if (response.status < 300 || response.status >= 400) {
+        return response;
+      }
+
+      if (seenUrls.size > maxRedirects) {
+        throw new RagApplicationError({
+          code: "RAG_PROVIDER_UNAVAILABLE",
+          provider: "cerebras",
+          failureKind: "unavailable",
+          reasonCode: "unsafe_redirect:too_many"
+        });
+      }
+
+      const location = response.headers.get("location");
+      if (!location) {
+        throw new RagApplicationError({
+          code: "RAG_PROVIDER_UNAVAILABLE",
+          provider: "cerebras",
+          failureKind: "unavailable",
+          reasonCode: "unsafe_redirect:missing_location"
+        });
+      }
+
+      // Validate the redirect target statically (and, on the next loop
+      // iteration, via pinnedFetch). Cross-origin is rejected above.
+      currentUrl = new URL(location, currentUrl).toString();
     }
   }
 }
