@@ -2521,10 +2521,12 @@ app.get("/api/admin/books/:bookId/qa-logs", (req, res) => {
 
 // ---- Student read-only API -----------------------------------------------
 app.get("/api/student/books", (_req, res) => {
+  if (!loadSiteConfig().booksPageEnabled) return fail(res, 404, "books page disabled");
   res.json({ mode: "repo-api", books: repos.books.findPublished() });
 });
 
 app.get("/api/student/books/:bookId", (req, res) => {
+  if (!loadSiteConfig().booksPageEnabled) return fail(res, 404, "books page disabled");
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
   const chapters = repos.chapters.findByBookId(book.id);

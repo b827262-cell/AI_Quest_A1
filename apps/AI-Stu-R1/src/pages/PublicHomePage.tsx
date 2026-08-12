@@ -24,6 +24,7 @@ const DEFAULT_CONFIG: PublicSiteConfig = {
   guestAiEnabled: true,
   guestDailyLimit: 3,
   studentLoginEnabled: true,
+  booksPageEnabled: true,
   maintenanceNotice: ""
 };
 
