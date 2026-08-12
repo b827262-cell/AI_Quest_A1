@@ -1,0 +1,16 @@
+# Only verified repository accounts belong here. Role-based review requirements
+# are defined in docs/MODULE_OWNERSHIP.md.
+* @b827262-cell
+
+/packages/contracts/ @b827262-cell
+/docs/adr/ @b827262-cell
+/docs/contracts/ @b827262-cell
+/docs/MODULE_OWNERSHIP.md @b827262-cell
+/.github/CODEOWNERS @b827262-cell
+
+/apps/AI-Stu-R1/ @b827262-cell
+/apps/AI-adm-D1/ @b827262-cell
+/packages/db/ @b827262-cell
+/packages/ai/ @b827262-cell
+/scripts/ @b827262-cell
+/deploy/ @b827262-cell

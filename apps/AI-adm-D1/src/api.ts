@@ -65,6 +65,13 @@ export class ApiHttpError extends Error {
   }
 }
 
+let unauthorizedHandler: (() => void) | undefined;
+
+/** Install the single SPA-level 401 policy; pages should not duplicate it. */
+export function setUnauthorizedHandler(handler: (() => void) | undefined): void {
+  unauthorizedHandler = handler;
+}
+
 export interface CredentialTestResponse {
   status: "success" | "failed";
   reason: string;
@@ -265,11 +272,19 @@ export interface AiEvaluationDetail {
 }
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && !path.startsWith("/api/admin/auth/login")) {
+    const csrfToken = readCsrfCookie();
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  }
   const res = await fetch(path, {
-    headers: init?.body && !(init.body instanceof FormData)
-      ? { "Content-Type": "application/json" }
-      : undefined,
-    ...init
+    ...init,
+    credentials: "same-origin",
+    headers
   });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as {
@@ -295,13 +310,17 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
             upstreamRequestSent: data.upstreamRequestSent
           }
         : undefined;
-    throw new ApiHttpError(
+    const error = new ApiHttpError(
       res.status,
       data.error || data.message || `${res.status} ${res.statusText}`,
       data.code,
       data.fieldErrors ?? data.fields,
       details
     );
+    if (res.status === 401 && !path.startsWith("/api/admin/auth/login") && !path.startsWith("/api/admin/auth/me")) {
+      unauthorizedHandler?.();
+    }
+    throw error;
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -312,7 +331,25 @@ export interface UploadBookFileOptions {
   relatedFileId?: string | null;
 }
 
+export function readCsrfCookie(): string {
+  if (typeof document === "undefined") return "";
+  const prefix = "ai_admin_csrf=";
+  for (const item of document.cookie.split(";")) {
+    const value = item.trim();
+    if (!value.startsWith(prefix)) continue;
+    try {
+      return decodeURIComponent(value.slice(prefix.length));
+    } catch {
+      return value.slice(prefix.length);
+    }
+  }
+  return "";
+}
+
 export const adminApi = {
+  login: (username: string, password: string) => http<{ authenticated: true; user: { username: string } }>("/api/admin/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  getAdminMe: () => http<{ authenticated: true; authType: "session" | "token"; user: { username: string } | null }>("/api/admin/auth/me"),
+  logout: () => http<void>("/api/admin/auth/logout", { method: "POST", headers: { "X-CSRF-Token": readCsrfCookie() } }),
   getAiEvaluationSettings: () => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings"),
   saveAiEvaluationSettings: (settings: Omit<AiLiveEvaluationSettings, "updatedAt">) => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings", { method: "PUT", body: JSON.stringify(settings) }),
   preflightAiEvaluation: (input: { datasetId: string; maxCases: number; maxTokenBudget: number; logicalModelIds: string[] }) => http<AiLivePreflight>("/api/admin/ai-evaluations/live-preflight", { method: "POST", body: JSON.stringify(input) }),
@@ -742,7 +779,9 @@ export const adminApi = {
       headers: { "x-confirm-delete": "true" }
     }),
   downloadAiEvaluationReport: async (id: string, format: "json" | "markdown") => {
-    const response = await fetch(`/api/admin/ai-evaluations/${encodeURIComponent(id)}/report?format=${format}`);
+    const response = await fetch(`/api/admin/ai-evaluations/${encodeURIComponent(id)}/report?format=${format}`, {
+      credentials: "same-origin"
+    });
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as { error?: string };
       throw new ApiHttpError(response.status, data.error ?? "報告下載失敗");

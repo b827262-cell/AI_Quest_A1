@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { StudentBook } from "../bookDisplay";
-import { getBookAuthorName, getBookCategoryName, getBookCoverUrl } from "../bookDisplay";
+import { getBookCategoryName, getBookCoverUrl } from "../bookDisplay";
 import { useAppearance } from "../appearance";
 
 /**

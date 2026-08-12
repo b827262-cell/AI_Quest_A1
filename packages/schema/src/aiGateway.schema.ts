@@ -308,18 +308,18 @@ export const updateAiCredentialInputSchema = createAiCredentialInputSchema.parti
 });
 
 // Pricing fields shared by create/update quota inputs (spec §5.1). All
-// optional — a quota row may carry no pricing, in which case the seed/fallback
+// optional and nullable — a quota row may carry no pricing, in which case the seed/fallback
 // table applies. Prices are USD per 1,000,000 tokens (float), stored and
 // billed as integer micro-USD at compute time (spec §6.5).
 const pricingInputFields = {
-  currency: z.string().trim().max(10).optional(),
-  serviceTier: z.enum(["standard", "free", "unavailable"]).optional(),
-  inputPriceUsdPerMillion: z.number().finite().nonnegative().max(1_000_000).optional(),
-  outputPriceUsdPerMillion: z.number().finite().nonnegative().max(1_000_000).optional(),
-  cachedInputPriceUsdPerMillion: z.number().finite().nonnegative().max(1_000_000).optional(),
-  cacheStorageUsdPerMillionTokenHour: z.number().finite().nonnegative().max(1_000_000).optional(),
-  pricingEffectiveAt: z.string().trim().max(40).optional(),
-  pricingSource: z.string().trim().max(200).optional(),
+  currency: z.string().trim().max(10).nullable().optional(),
+  serviceTier: z.enum(["standard", "free", "unavailable"]).nullable().optional(),
+  inputPriceUsdPerMillion: z.number().finite().nonnegative().max(1_000_000).nullable().optional(),
+  outputPriceUsdPerMillion: z.number().finite().nonnegative().max(1_000_000).nullable().optional(),
+  cachedInputPriceUsdPerMillion: z.number().finite().nonnegative().max(1_000_000).nullable().optional(),
+  cacheStorageUsdPerMillionTokenHour: z.number().finite().nonnegative().max(1_000_000).nullable().optional(),
+  pricingEffectiveAt: z.string().trim().max(40).nullable().optional(),
+  pricingSource: z.string().trim().max(200).nullable().optional(),
   pricingUnavailable: z.boolean().optional()
 };
 

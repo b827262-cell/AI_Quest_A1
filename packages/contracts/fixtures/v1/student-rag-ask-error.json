@@ -1,0 +1,9 @@
+{
+  "contractVersion": 1,
+  "requestId": "req_contract_fixture_003",
+  "error": {
+    "code": "RAG_INJECTION_BLOCKED",
+    "message": "The request was blocked by the safety policy.",
+    "retryable": false
+  }
+}

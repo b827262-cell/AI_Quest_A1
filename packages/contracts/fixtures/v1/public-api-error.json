@@ -1,0 +1,10 @@
+{
+  "contractVersion": 1,
+  "error": {
+    "code": "BOOK_NOT_FOUND",
+    "category": "business",
+    "message": "Requested resource was not found.",
+    "retryable": false,
+    "requestId": "req_contract_fixture_001"
+  }
+}

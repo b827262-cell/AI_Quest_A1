@@ -26,7 +26,8 @@ export function createAdminOriginMiddleware(env: NodeJS.ProcessEnv = process.env
     if (origin) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token, Authorization");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token, Authorization, X-CSRF-Token");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     }
     if (req.method === "OPTIONS") return res.sendStatus(204);

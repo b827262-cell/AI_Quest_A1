@@ -1,0 +1,42 @@
+{
+  "contractVersion": 1,
+  "requestId": "req_contract_fixture_002",
+  "answer": "檢索增強生成先檢索書本內容，再由模型依證據回答。",
+  "citations": [
+    {
+      "chunkId": "content_contract_fixture_001",
+      "label": "第 1 章：檢索增強生成",
+      "locator": "p.12",
+      "start": 0,
+      "end": 24,
+      "evidenceQuote": "檢索增強生成先檢索書本內容，再由模型依證據回答。",
+      "contentHash": "4af9db7774dd1a6b8c3858e3055a50b976805a3eb2a537d4dd0fa61f9989c71f",
+      "hashAlgorithm": "sha256"
+    }
+  ],
+  "confidence": "high",
+  "grounding": "verified",
+  "citationStatus": "verified",
+  "abstained": false,
+  "claims": [
+    {
+      "claimId": "claim-001",
+      "text": "檢索增強生成先檢索書本內容",
+      "answerStart": 0,
+      "answerEnd": 13,
+      "status": "supported",
+      "citationChunkIds": ["content_contract_fixture_001"],
+      "evidence": [
+        {
+          "quote": "檢索增強生成先檢索書本內容",
+          "contentHash": "06348463d7f07499792b9981db58b0479444b5bc4fa7ea6921fdebde934619b2",
+          "hashAlgorithm": "sha256",
+          "chunkId": "content_contract_fixture_001",
+          "start": 0,
+          "end": 13
+        }
+      ]
+    }
+  ],
+  "unsupportedClaimCount": 0
+}

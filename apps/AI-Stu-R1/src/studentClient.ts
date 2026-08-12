@@ -10,6 +10,12 @@ import type {
   UpdateSmartBookNoteInput,
   GuestAnswerContent
 } from "@ai-smartbook/schema";
+import type {
+  StudentAuthMeResponse,
+  StudentProfile
+} from "@ai-smartbook/auth/browser";
+
+export { type StudentAuthMeResponse, type StudentProfile } from "@ai-smartbook/auth/browser";
 
 export interface PublicSiteConfig {
   siteTitle: string;
@@ -122,15 +128,73 @@ export interface CompleteReaderActionPayload {
   source?: string;
 }
 
+export class StudentApiError extends Error {
+  constructor(public readonly status: number, public readonly code: string, message: string) {
+    super(message);
+    this.name = "StudentApiError";
+  }
+}
+
+/** Public success shape of POST /api/student/books/:bookId/rag-ask. */
+export interface BookRagCitation {
+  chunkId: string;
+  label: string;
+  locator?: string;
+  start?: number;
+  end?: number;
+  evidenceQuote?: string;
+  contentHash?: string;
+  hashAlgorithm?: "sha256";
+}
+
+export interface BookRagEvidence {
+  quote: string;
+  contentHash: string;
+  hashAlgorithm: "sha256";
+  chunkId: string;
+  start: number;
+  end: number;
+}
+
+export type BookRagClaimStatus = "supported" | "unsupported";
+export type BookRagClaimRiskCategory = "general" | "number" | "date" | "formula" | "proper_noun";
+
+export interface BookRagClaim {
+  claimId: string;
+  text: string;
+  answerStart: number;
+  answerEnd: number;
+  status: BookRagClaimStatus;
+  riskCategory?: BookRagClaimRiskCategory;
+  citationChunkIds: string[];
+  evidence: BookRagEvidence[];
+}
+
+export interface BookRagAnswer {
+  contractVersion: number;
+  requestId: string;
+  answer: string;
+  citations: BookRagCitation[];
+  confidence: "high" | "medium" | "low";
+  grounding: "verified" | "unverified" | "abstained";
+  citationStatus: "verified" | "not_checked" | "invalid";
+  abstained: boolean;
+  abstentionReason?: "NO_EVIDENCE" | "INJECTION_BLOCKED" | "INSUFFICIENT_EVIDENCE";
+  claims?: BookRagClaim[];
+  unsupportedClaimCount?: number;
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+    credentials: "same-origin",
     ...init
   });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-    throw new Error(data.error || data.message || `${res.status} ${res.statusText}`);
+    throw new StudentApiError(res.status, data.error || "STUDENT_API_ERROR", data.message || data.error || `${res.status} ${res.statusText}`);
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -140,10 +204,10 @@ async function httpWithSession<T>(path: string, sessionId: string, init?: Reques
   if (init?.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(path, { ...init, headers });
+  const res = await fetch(path, { ...init, credentials: "same-origin", headers });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-    throw new Error(data.error || data.message || `${res.status} ${res.statusText}`);
+    throw new StudentApiError(res.status, data.error || "STUDENT_API_ERROR", data.message || data.error || `${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
 }
@@ -176,6 +240,18 @@ async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
  * an API key and never calls an AI SDK directly.
  */
 export const studentClient = {
+  getStudentMe: () => http<StudentAuthMeResponse>("/api/student/auth/me"),
+
+  logoutStudent: () => http<void>("/api/student/auth/logout", { method: "POST" }),
+
+  getStudentProfile: () => http<{ profile: StudentProfile }>("/api/student/auth/profile"),
+
+  updateStudentProfile: (body: { displayName: string; schoolName: string; gradeLevel: string }) =>
+    http<{ profile: StudentProfile }>("/api/student/auth/profile", {
+      method: "PATCH",
+      body: JSON.stringify(body)
+    }),
+
   getPublicSiteConfig: () => http<PublicSiteConfig>("/api/public/site-config"),
 
   askAsGuest: (body: {
@@ -205,6 +281,31 @@ export const studentClient = {
     }),
 
   listBooks: () => http<{ mode: string; books: Book[] }>("/api/student/books"),
+
+  /**
+   * Scoped RAG question for a book. Identity/scope are injected server-side
+   * from the session; the browser only supplies the query. Citations in the
+   * response were already validated server-side and are safe to render.
+   */
+  askBookRag: async (bookId: string, body: { query: string; conversationId?: string }, signal?: AbortSignal): Promise<BookRagAnswer> => {
+    const res = await fetch(`/api/student/books/${encodeURIComponent(bookId)}/rag-ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(body),
+      signal
+    });
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      const envelope = (data.error && typeof data.error === "object" ? data.error : {}) as { code?: unknown; message?: unknown };
+      const code = typeof envelope.code === "string"
+        ? envelope.code
+        : typeof data.error === "string" ? data.error : "STUDENT_API_ERROR";
+      const message = typeof envelope.message === "string" ? envelope.message : `${res.status} ${res.statusText}`;
+      throw new StudentApiError(res.status, code, message);
+    }
+    return data as unknown as BookRagAnswer;
+  },
 
   getBook: (bookId: string) => http<{ book: BookDetail }>(`/api/student/books/${bookId}`),
 
