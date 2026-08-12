@@ -152,7 +152,7 @@ describe("rule-based grounding validator — fail-closed on validator failure", 
     const v = new RuleBasedGroundingValidator();
     const result = await v.validate(input("answer", [], [], [c]));
     expect(result.verdict).toBe("abstained");
-    expect(result.validatorIdentity).toBe("rule-based-v1");
+    expect(result.validatorIdentity).toBe("rule-based-v2");
   });
 });
 

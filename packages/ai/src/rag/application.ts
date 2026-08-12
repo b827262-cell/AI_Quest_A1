@@ -12,7 +12,7 @@ import { citationFailureReason, validateCitations } from "./citation-validator";
 import { hashEvidenceSpan } from "./evidence-hash";
 import { screenPromptInjection, screenRetrievedChunks } from "./injection-screening";
 import { buildRagPrompt, RAG_SYSTEM_PROMPT, sanitizeGeneratedAnswer } from "./prompt-builder";
-import type { GroundingValidationInput, GroundingValidator, GroundingVerdict, LlmProvider, RagApplication, RagTelemetrySink, RetrievedChunk, Retriever } from "./ports";
+import type { GroundingValidationInput, GroundingValidationResult, GroundingValidator, LlmProvider, RagApplication, RagTelemetrySink, RetrievedChunk, Retriever } from "./ports";
 import { NoopRagTelemetrySink } from "./ports";
 import { RuleBasedGroundingValidator } from "./grounding-validator";
 
@@ -112,16 +112,22 @@ export class RagApplicationService implements RagApplication {
 
     // The final answer is sanitized AFTER claim offsets are derived from the
     // raw model answer, so offsets must be recomputed against the sanitized
-    // text before validation. Sanitization is redaction-only (no length
-    // truncation in practice for grounded answers), but we still re-slice to
-    // guarantee claim.text === answer.slice(start,end) per contract.
+    // text before validation. Any claim/evidence integrity problem fails
+    // closed (R-2/R-4): nothing is silently dropped, clamped or re-derived.
     const sanitizedAnswer = sanitizeGeneratedAnswer(modelAnswer.answer);
     const validatedCitations = citationResult.citations;
-    const claims = recomputeClaimOffsets(modelAnswer.claims ?? [], sanitizedAnswer, screened.chunks, validatedCitations);
+    const claimResult = recomputeClaimOffsets(modelAnswer.claims ?? [], sanitizedAnswer, screened.chunks, validatedCitations);
+    if (!claimResult.ok) {
+      await this.record({ requestId: request.requestId, provider: this.provider.providerId, status: "error", latencyMs: Date.now() - started, retrievedChunkCount: retrieved.length, citationCount: validatedCitations.length, errorCode: "RAG_CITATION_INVALID" });
+      throw new RagApplicationError({ code: "RAG_CITATION_INVALID", reasonCode: claimResult.reasonCode, provider: this.provider.providerId });
+    }
+    const claims = claimResult.claims;
 
-    // Run the independent grounding validator. The generator's confidence is
-    // deliberately excluded from the verdict; disagreement resolves to the
-    // validator's verdict (fail-closed).
+    // Run the independent grounding validator EXACTLY ONCE per request (R-3).
+    // The single authoritative result below is the only source for grounding,
+    // claims, unsupportedClaimCount and span annotations; no second verdict
+    // is ever requested. The generator's confidence is deliberately excluded
+    // from the verdict; disagreement resolves to the validator (fail-closed).
     //
     // Note: the request AbortSignal is intentionally NOT forwarded to the
     // validator. Express 5 aborts req.signal once the JSON body has been
@@ -129,8 +135,7 @@ export class RagApplicationService implements RagApplication {
     // closed on every request. Request-cancellation semantics are preserved at
     // the retriever/generation layers; LLM-backed validators implement their
     // own internal timeouts.
-    let verdict: GroundingVerdict;
-    let validatorIdentity = "unknown";
+    let validation: GroundingValidationResult;
     try {
       const validatorInput: GroundingValidationInput = {
         requestId: request.requestId,
@@ -140,15 +145,18 @@ export class RagApplicationService implements RagApplication {
         retrievedChunks: screened.chunks,
         scope: request.scope
       };
-      const result = await this.groundingValidator.validate(validatorInput);
-      verdict = result.verdict;
-      validatorIdentity = result.validatorIdentity;
+      validation = await this.groundingValidator.validate(validatorInput);
     } catch {
       // Validator failure (timeout/exception) MUST fail closed: never verified.
-      verdict = "abstained";
+      validation = {
+        verdict: "abstained",
+        claimSupport: [],
+        unsupportedClaimCount: claims.length,
+        validatorIdentity: "validator-error"
+      };
     }
 
-    if (verdict === "abstained") {
+    if (validation.verdict === "abstained") {
       // The validator could not establish grounding for any claim. This is a
       // soft abstention (200), distinct from a hard citation-integrity failure.
       const response = abstained(request.requestId, "INSUFFICIENT_EVIDENCE");
@@ -156,45 +164,24 @@ export class RagApplicationService implements RagApplication {
       return response;
     }
 
-    if (verdict === "partial") {
-      // Some claims are unsupported: surface them for reviewer/learner audit.
-      // The answer remains visible (marked inline in the UI) but is NOT
-      // presented as a fully verified success.
-      // Same rationale as the first validation call: no request signal (see
-      // the note above — Express aborts req.signal after body consumption).
-      const validatorResult = await this.groundingValidator.validate({
-        requestId: request.requestId, answer: sanitizedAnswer, claims, citations: validatedCitations, retrievedChunks: screened.chunks, scope: request.scope
-      }).catch(() => ({ claimSupport: [], unsupportedClaimCount: claims.length, verdict: "partial" as const, validatorIdentity }));
-      const annotatedClaims = annotateClaimSupport(claims, validatorResult.claimSupport);
-      const unsupportedClaimCount = annotatedClaims.filter((c) => c.status === "unsupported").length;
-      const response: RagResponse = {
-        contractVersion: 1,
-        requestId: request.requestId,
-        answer: sanitizedAnswer,
-        citations: validatedCitations,
-        confidence: modelAnswer.confidence,
-        grounding: "unverified",
-        citationStatus: "verified",
-        abstained: false,
-        claims: annotatedClaims,
-        unsupportedClaimCount
-      };
-      await this.record({ requestId: request.requestId, provider: this.provider.providerId, status: "success", latencyMs: Date.now() - started, retrievedChunkCount: retrieved.length, citationCount: validatedCitations.length });
-      return response;
-    }
-
-    // verdict === "verified": all claims supported by cited, in-scope evidence.
+    // Every downstream grounding field derives from the single validation
+    // result. Response invariant (R-3): grounding === "verified" IFF
+    // unsupportedClaimCount === 0 — a verdict label can never contradict the
+    // per-claim support it is derived from.
+    const annotatedClaims = annotateClaimSupport(claims, validation.claimSupport);
+    const unsupportedClaimCount = annotatedClaims.filter((c) => c.status === "unsupported").length;
+    const grounding = unsupportedClaimCount === 0 ? "verified" : "unverified";
     const response: RagResponse = {
       contractVersion: 1,
       requestId: request.requestId,
       answer: sanitizedAnswer,
       citations: validatedCitations,
       confidence: modelAnswer.confidence,
-      grounding: "verified",
+      grounding,
       citationStatus: "verified",
       abstained: false,
-      claims,
-      unsupportedClaimCount: 0
+      claims: annotatedClaims,
+      unsupportedClaimCount
     };
     await this.record({ requestId: request.requestId, provider: this.provider.providerId, status: "success", latencyMs: Date.now() - started, retrievedChunkCount: retrieved.length, citationCount: validatedCitations.length });
     return response;
@@ -237,10 +224,10 @@ function parseModelAnswer(text: string, provider: "cerebras" | "fake"): { answer
 }
 
 /**
- * Parse the model-supplied claims array loosely. Offsets are recomputed
- * downstream (see recomputeClaimOffsets) so model-supplied offsets are only
- * used as hints to locate the claim text within the answer. Malformed claims
- * are dropped (not fatal) — the validator will then see fewer claims.
+ * Parse the model-supplied claims array loosely for shape, but fail closed on
+ * integrity problems (R-2): a well-formed claim whose text cannot be located
+ * in the answer, or malformed evidence, is a tampering/integrity signal and
+ * rejects the whole request instead of being silently dropped.
  */
 function parseModelClaims(raw: unknown, answer: string, provider: "cerebras" | "fake"): RagClaimGrounding[] | undefined {
   if (raw === undefined) return undefined;
@@ -254,11 +241,16 @@ function parseModelClaims(raw: unknown, answer: string, provider: "cerebras" | "
     if (typeof e.answerStart !== "number" || typeof e.answerEnd !== "number") continue;
     if (!["supported", "unsupported"].includes(String(e.status))) continue;
     if (!Array.isArray(e.citationChunkIds)) continue;
-    // Locate claim.text within answer (re-derive canonical offsets).
+    // Locate claim.text within answer (re-derive canonical offsets). A claim
+    // text that does not exist in the answer fails closed — never dropped.
     const located = locateClaimOffset(answer, e.text, e.answerStart);
-    if (!located) continue;
+    if (!located) {
+      throw new RagApplicationError({ code: "RAG_CITATION_INVALID", reasonCode: "CLAIM_TEXT_NOT_IN_ANSWER", provider });
+    }
     const evidence = parseModelEvidence(e.evidence);
-    if (evidence === null) continue;
+    if (evidence === null) {
+      throw new RagApplicationError({ code: "RAG_CITATION_INVALID", reasonCode: "CLAIM_EVIDENCE_FORMAT_INVALID", provider });
+    }
     const riskCategory = typeof e.riskCategory === "string"
       && ["general", "number", "date", "formula", "proper_noun"].includes(e.riskCategory)
       ? e.riskCategory as RagClaimGrounding["riskCategory"]
@@ -290,22 +282,25 @@ function locateClaimOffset(answer: string, text: string, hint: number): { start:
 }
 
 /**
- * Parse model evidence and stamp server-derived hashes. The model supplies
- * quote/chunkId/start/end; the hash is ALWAYS re-derived from the actual
- * chunk span, never trusted from model input.
+ * Parse model evidence. The model supplies quote/chunkId/start/end and may
+ * supply a contentHash; the hash is ALWAYS re-derived server-side from the
+ * quote itself (R-4). A model-supplied hash must agree with the quote-derived
+ * hash or the request fails closed downstream (R-2). The model hash is kept
+ * in the placeholder contentHash field ("" means "not supplied").
  */
 function parseModelEvidence(raw: unknown): RagEvidence[] | null {
   if (!Array.isArray(raw)) return [];
+  if (raw.length > 10) return null;
   const out: RagEvidence[] = [];
   for (const item of raw) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const e = item as Record<string, unknown>;
-    if (typeof e.quote !== "string" || typeof e.chunkId !== "number" && typeof e.chunkId !== "string") continue;
-    if (typeof e.start !== "number" || typeof e.end !== "number") continue;
-    // hash is intentionally ignored from model; recomputed by recomputeClaimOffsets.
+    if (typeof e.quote !== "string" || typeof e.chunkId !== "number" && typeof e.chunkId !== "string") return null;
+    if (typeof e.start !== "number" || typeof e.end !== "number") return null;
+    const suppliedHash = typeof e.contentHash === "string" && e.contentHash.length > 0 ? e.contentHash : "";
     out.push({
       quote: e.quote,
-      contentHash: "", // placeholder, filled by recomputeClaimOffsets
+      contentHash: suppliedHash, // verified against hashEvidenceSpan(quote) by recomputeClaimOffsets
       hashAlgorithm: "sha256",
       chunkId: String(e.chunkId),
       start: e.start,
@@ -315,45 +310,93 @@ function parseModelEvidence(raw: unknown): RagEvidence[] | null {
   return out;
 }
 
+/** Deterministic claim-evidence integrity failure reasons (fail-closed, R-2). */
+export type ClaimIntegrityReasonCode =
+  | "CLAIM_TEXT_NOT_IN_ANSWER"
+  | "CLAIM_EVIDENCE_FORMAT_INVALID"
+  | "CLAIM_EVIDENCE_CHUNK_UNKNOWN"
+  | "CLAIM_EVIDENCE_SCOPE_MISMATCH"
+  | "CLAIM_EVIDENCE_QUOTE_MISMATCH"
+  | "CLAIM_EVIDENCE_SPAN_MISMATCH"
+  | "CLAIM_EVIDENCE_HASH_MISMATCH";
+
+export type ClaimRecomputeResult =
+  | { ok: true; claims: RagClaimGrounding[] }
+  | { ok: false; reasonCode: ClaimIntegrityReasonCode };
+
 /**
  * Recompute claim offsets against the sanitized answer and stamp
- * server-derived evidence hashes from the actual retrieved chunk spans.
- * Drops claims/evidence whose offsets or chunk ids are out of scope.
+ * server-derived, quote-based evidence hashes (R-4):
+ *
+ *   start       = actual located offset of the quote inside the chunk
+ *   end         = start + quote.length
+ *   contentHash = hashEvidenceSpan(quote)
+ *
+ * so clients can independently verify both
+ *   hashEvidenceSpan(evidence.quote) === evidence.contentHash
+ * and
+ *   chunk.content.slice(evidence.start, evidence.end) === evidence.quote.
+ *
+ * ANY integrity problem fails closed with a deterministic reason code (R-2):
+ * no silent drops, no clamping of model-supplied offsets, no empty-evidence
+ * fallback. Model-supplied start/end must equal the server-authoritative
+ * location; a disagreement is treated as tampering.
  */
 function recomputeClaimOffsets(
   claims: RagClaimGrounding[],
   sanitizedAnswer: string,
   chunks: readonly RetrievedChunk[],
   validatedCitations: RagCitation[]
-): RagClaimGrounding[] {
+): ClaimRecomputeResult {
   const chunkById = new Map(chunks.map((c) => [c.id, c]));
   const validChunkIds = new Set(validatedCitations.map((c) => c.chunkId));
   const result: RagClaimGrounding[] = [];
 
   for (const claim of claims) {
-    // Re-locate in sanitized answer (sanitization may shift nothing in
-    // practice, but we must guarantee offset contract).
+    // Re-locate in the sanitized answer; the claim text MUST be a real slice
+    // of the final answer (guarantees claim.text === answer.slice(start,end)).
     const located = locateClaimOffset(sanitizedAnswer, claim.text, claim.answerStart);
-    if (!located) continue;
-    // Drop claim if none of its citation chunk ids are in the validated set.
+    if (!located) return { ok: false, reasonCode: "CLAIM_TEXT_NOT_IN_ANSWER" };
+    // Keep only citation chunk ids that were structurally validated; claims
+    // citing unknown chunks are still surfaced but can never be supported.
     const inScopeChunkIds = claim.citationChunkIds.filter((id) => validChunkIds.has(id));
     const stampedEvidence: RagEvidence[] = [];
     for (const ev of claim.evidence) {
+      // Chunk identity: the evidence chunk must be a retrieved chunk.
       const chunk = chunkById.get(ev.chunkId);
-      if (!chunk) continue;
-      // Clamp/verify offsets against actual chunk length.
-      const start = Math.max(0, Math.min(ev.start, chunk.content.length));
-      const end = Math.max(start + 1, Math.min(ev.end, chunk.content.length));
-      const span = chunk.content.slice(start, end);
-      // Verify the quote is a real substring (integrity), else drop evidence.
-      if (!chunk.content.includes(ev.quote)) continue;
+      if (!chunk) return { ok: false, reasonCode: "CLAIM_EVIDENCE_CHUNK_UNKNOWN" };
+      // Scope: the evidence chunk must also be a validated citation.
+      if (!validChunkIds.has(ev.chunkId)) return { ok: false, reasonCode: "CLAIM_EVIDENCE_SCOPE_MISMATCH" };
+      // Quote integrity: non-empty, bounded, and an actual substring of the
+      // cited chunk at a server-located offset (no normalization tricks that
+      // would break raw-offset reconstructability).
+      if (typeof ev.quote !== "string" || ev.quote.length === 0 || ev.quote.length > 800) {
+        return { ok: false, reasonCode: "CLAIM_EVIDENCE_QUOTE_MISMATCH" };
+      }
+      const quoteStart = chunk.content.indexOf(ev.quote);
+      if (quoteStart < 0) return { ok: false, reasonCode: "CLAIM_EVIDENCE_QUOTE_MISMATCH" };
+      const quoteEnd = quoteStart + ev.quote.length;
+      // Span integrity: model offsets must be integers in range and EXACTLY
+      // match the server-authoritative location. Never clamp.
+      if (!Number.isInteger(ev.start) || !Number.isInteger(ev.end)
+        || ev.start < 0 || ev.end < 0 || ev.start > ev.end
+        || ev.end > chunk.content.length
+        || ev.start !== quoteStart || ev.end !== quoteEnd) {
+        return { ok: false, reasonCode: "CLAIM_EVIDENCE_SPAN_MISMATCH" };
+      }
+      // Hash integrity: a model-supplied hash must equal the quote-derived
+      // hash; the stamped hash is ALWAYS derived from the quote itself (R-4).
+      const quoteHash = hashEvidenceSpan(ev.quote);
+      if (ev.contentHash !== "" && ev.contentHash.toLowerCase() !== quoteHash) {
+        return { ok: false, reasonCode: "CLAIM_EVIDENCE_HASH_MISMATCH" };
+      }
       stampedEvidence.push({
         quote: ev.quote,
-        contentHash: hashEvidenceSpan(span),
+        contentHash: quoteHash,
         hashAlgorithm: "sha256",
         chunkId: ev.chunkId,
-        start,
-        end
+        start: quoteStart,
+        end: quoteEnd
       });
     }
     result.push({
@@ -367,7 +410,7 @@ function recomputeClaimOffsets(
       evidence: stampedEvidence
     });
   }
-  return result;
+  return { ok: true, claims: result };
 }
 
 function annotateClaimSupport(

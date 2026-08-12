@@ -16,17 +16,23 @@ import type { RagClaimGrounding, RagClaimRiskCategory } from "./contracts";
  *
  * Rule design (per claim, never aggregated so a strong source cannot mask
  * an unsupported claim):
- *   - general claim: weighted Jaccard over content tokens between the claim
- *     text and each cited chunk must reach the threshold AND at least one
- *     cited chunk must cover the claim's material tokens.
+ *   - general claim: LOCALIZED WINDOW matching. The claim is scored against
+ *     the best token window of each cited chunk, where every candidate
+ *     window size is derived from the claim's own token count. Similarity is
+ *     a Jaccard between the claim tokens and the best window, so chunk
+ *     length can no longer inflate the denominator and starve faithful
+ *     claims of a "verified" verdict. In addition, the fraction of claim
+ *     tokens present anywhere in the cited chunk must reach the coverage
+ *     threshold. Windows whose negation polarity contradicts the claim are
+ *     never eligible support (contradiction fails closed to unsupported).
  *   - high-risk claim (number/date/formula/proper_noun): every material
  *     literal extracted from the claim must occur verbatim in at least one
  *     cited chunk's content. Approximate/paraphrase support is insufficient.
  */
 
 export type RuleBasedValidatorOptions = {
-  /** Minimum weighted Jaccard similarity for a general claim (0..1). */
-  generalJaccardThreshold?: number;
+  /** Minimum localized-window Jaccard similarity for a general claim (0..1). */
+  generalWindowSimilarityThreshold?: number;
   /** Minimum fraction of claim content tokens covered by a cited chunk (0..1). */
   generalCoverageThreshold?: number;
   /** Identity string recorded for audit (default identifies this rule version). */
@@ -34,18 +40,18 @@ export type RuleBasedValidatorOptions = {
 };
 
 const DEFAULTS = {
-  generalJaccardThreshold: 0.45,
+  generalWindowSimilarityThreshold: 0.5,
   generalCoverageThreshold: 0.6,
-  identity: "rule-based-v1"
+  identity: "rule-based-v2"
 } as const;
 
 export class RuleBasedGroundingValidator implements GroundingValidator {
-  private readonly generalJaccardThreshold: number;
+  private readonly generalWindowSimilarityThreshold: number;
   private readonly generalCoverageThreshold: number;
   private readonly identity: string;
 
   constructor(options: RuleBasedValidatorOptions = {}) {
-    this.generalJaccardThreshold = options.generalJaccardThreshold ?? DEFAULTS.generalJaccardThreshold;
+    this.generalWindowSimilarityThreshold = options.generalWindowSimilarityThreshold ?? DEFAULTS.generalWindowSimilarityThreshold;
     this.generalCoverageThreshold = options.generalCoverageThreshold ?? DEFAULTS.generalCoverageThreshold;
     this.identity = options.identity ?? DEFAULTS.identity;
   }
@@ -129,7 +135,7 @@ export class RuleBasedGroundingValidator implements GroundingValidator {
       // Fall through to general assessment if no literal could be extracted.
     }
 
-    // General claim: weighted Jaccard + coverage over the best cited chunk.
+    // General claim: localized-window similarity + whole-chunk coverage.
     const claimTokens = tokenize(claim.text);
     if (claimTokens.length === 0) {
       return {
@@ -144,12 +150,10 @@ export class RuleBasedGroundingValidator implements GroundingValidator {
     let bestSimilarity = 0;
     let bestCoverage = 0;
     let bestChunkId = "";
-    for (let i = 0; i < citedChunkIds.size; i++) {
-      const chunkId = [...citedChunkIds][i];
+    for (const chunkId of citedChunkIds) {
       const chunkTokens = tokenize(chunkById.get(chunkId)!.content);
-      const chunkSet = new Set(chunkTokens);
-      const similarity = weightedJaccard(claimTokens, chunkSet);
-      const coverage = coverageFraction(claimTokens, chunkSet);
+      const { similarity } = localizedWindowSimilarity(claimTokens, chunkTokens);
+      const coverage = coverageFraction(claimTokens, new Set(chunkTokens));
       if (similarity > bestSimilarity || (similarity === bestSimilarity && coverage > bestCoverage)) {
         bestSimilarity = similarity;
         bestCoverage = coverage;
@@ -157,7 +161,7 @@ export class RuleBasedGroundingValidator implements GroundingValidator {
       }
     }
 
-    const supported = bestSimilarity >= this.generalJaccardThreshold
+    const supported = bestSimilarity >= this.generalWindowSimilarityThreshold
       && bestCoverage >= this.generalCoverageThreshold
       && bestChunkId !== "";
 
@@ -166,7 +170,7 @@ export class RuleBasedGroundingValidator implements GroundingValidator {
       status: supported ? "supported" : "unsupported",
       supportedByChunkIds: supported ? [bestChunkId] : [...citedChunkIds],
       riskCategory,
-      reasonCode: supported ? undefined : "low_relevance_or_coverage"
+      reasonCode: supported ? undefined : "low_window_similarity_or_coverage"
     };
   }
 }
@@ -188,21 +192,37 @@ function abstainedResult(identity: string, claims: RagClaimGrounding[]): Groundi
 // --- tokenization & similarity --------------------------------------------
 
 const STOP_WORDS = new Set([
-  // English
+  // English ("not"/"no" etc. are deliberately NOT stop words: negation must
+  // survive tokenization so contradiction polarity can be detected).
   "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
   "of", "in", "on", "at", "to", "for", "with", "by", "from", "as", "and",
-  "or", "not", "but", "if", "then", "this", "that", "these", "those",
+  "or", "but", "if", "then", "this", "that", "these", "those",
   "it", "its", "has", "have", "had", "do", "does", "did", "will", "would",
   // CJK particles/common (bigrams handle most CJK; these filter single noise)
   "的", "是", "在", "了", "和", "與", "或", "不", "為", "以", "及"
 ]);
 
+const NEGATION_TOKENS = new Set([
+  "not", "no", "never", "cannot", "without", "none", "neither", "nor"
+]);
+
+function negationParity(tokens: readonly string[]): number {
+  let count = 0;
+  for (const token of tokens) {
+    if (NEGATION_TOKENS.has(token)) count += 1;
+  }
+  return count % 2;
+}
+
 export function tokenize(text: string): string[] {
   const tokens: string[] = [];
-  // ASCII word tokens (length >= 2), lowercased, stop-word filtered.
+  // ASCII word tokens (length >= 2), lowercased, stop-word filtered. Boundary
+  // punctuation is stripped so "planet." and "planet" compare equal, while
+  // internal separators survive ("forty-two", "3.14", "m/s").
   const ascii = text.toLowerCase().match(/[a-z0-9][a-z0-9._'-]{1,}/g) ?? [];
-  for (const t of ascii) {
-    if (!STOP_WORDS.has(t)) tokens.push(t);
+  for (const raw of ascii) {
+    const t = raw.replace(/^[.,;:!?]+|[.,;:!?]+$/g, "");
+    if (t.length >= 2 && !STOP_WORDS.has(t)) tokens.push(t);
   }
   // CJK bigrams — captures most Chinese semantic units.
   for (const run of text.match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
@@ -214,24 +234,77 @@ export function tokenize(text: string): string[] {
   return tokens;
 }
 
-export function weightedJaccard(
-  claimTokens: string[],
-  chunkSet: Set<string>
-): number {
-  if (claimTokens.length === 0 || chunkSet.size === 0) return 0;
-  let intersection = 0;
-  let union = 0;
-  const seenInClaim = new Set<string>();
-  for (const t of claimTokens) {
-    if (seenInClaim.has(t)) continue;
-    seenInClaim.add(t);
-    union += 1;
-    if (chunkSet.has(t)) intersection += 1;
+/**
+ * Localized window similarity (R-1).
+ *
+ * Slides claim-length-derived windows over the chunk token stream and returns
+ * the best Jaccard similarity between the claim token set and any window.
+ * Candidate window sizes are { n, ceil(1.25n), ceil(1.5n) } where n is the
+ * claim token count (clamped to the chunk length), so:
+ *   - a verbatim claim inside an arbitrarily long chunk reaches similarity 1.0
+ *     (a window of exactly n aligned tokens has union == intersection);
+ *   - close paraphrases still find a near-claim-sized neighbourhood;
+ *   - chunk length never inflates the union term, so long chunks cannot
+ *     starve a faithful claim of support.
+ * Windows whose negation parity contradicts the claim are skipped, so a
+ * chunk that only states the negation of the claim can never support it.
+ */
+export function localizedWindowSimilarity(
+  claimTokens: readonly string[],
+  chunkTokens: readonly string[]
+): { similarity: number; windowStart: number; windowEnd: number } {
+  if (claimTokens.length === 0 || chunkTokens.length === 0) {
+    return { similarity: 0, windowStart: 0, windowEnd: 0 };
   }
-  for (const t of chunkSet) {
-    if (!seenInClaim.has(t)) union += 1;
+  const claimSet = new Set(claimTokens);
+  const claimParity = negationParity(claimTokens);
+  const base = claimTokens.length;
+  const sizes = new Set(
+    [base, Math.ceil(base * 1.25), Math.ceil(base * 1.5)]
+      .map((size) => Math.min(size, chunkTokens.length))
+      .filter((size) => size > 0)
+  );
+
+  let best = { similarity: 0, windowStart: 0, windowEnd: 0 };
+  for (const size of sizes) {
+    const freq = new Map<string, number>();
+    let distinct = 0;
+    let intersection = 0;
+    let negations = 0;
+    for (let i = 0; i < chunkTokens.length; i++) {
+      const added = chunkTokens[i];
+      const addedFreq = (freq.get(added) ?? 0) + 1;
+      freq.set(added, addedFreq);
+      if (addedFreq === 1) {
+        distinct += 1;
+        if (claimSet.has(added)) intersection += 1;
+        if (NEGATION_TOKENS.has(added)) negations += 1;
+      }
+      const removedIndex = i - size;
+      if (removedIndex >= 0) {
+        const removed = chunkTokens[removedIndex];
+        const removedFreq = freq.get(removed)! - 1;
+        if (removedFreq === 0) {
+          freq.delete(removed);
+          distinct -= 1;
+          if (claimSet.has(removed)) intersection -= 1;
+          if (NEGATION_TOKENS.has(removed)) negations -= 1;
+        } else {
+          freq.set(removed, removedFreq);
+        }
+      }
+      if (i < size - 1) continue;
+      // Contradiction guard: a window whose negation polarity disagrees with
+      // the claim states the opposite and can never be supporting evidence.
+      if (negations % 2 !== claimParity) continue;
+      const union = claimSet.size + distinct - intersection;
+      const similarity = union === 0 ? 0 : intersection / union;
+      if (similarity > best.similarity) {
+        best = { similarity, windowStart: removedIndex + 1, windowEnd: i + 1 };
+      }
+    }
   }
-  return union === 0 ? 0 : intersection / union;
+  return best;
 }
 
 export function coverageFraction(claimTokens: string[], chunkSet: Set<string>): number {

@@ -3,6 +3,7 @@ import {
   FakeLlmProvider,
   FakeRetriever,
   RagApplicationService,
+  hashEvidenceSpan,
   type RagTelemetryEvent,
   type RetrievedChunk
 } from "../../src/rag/server";
@@ -26,7 +27,7 @@ describe("RAG application orchestration", () => {
         answerEnd: "The answer is forty-two.".length,
         status: "supported",
         citationChunkIds: ["chunk-1"],
-        evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 25 }]
+        evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 24 }]
       }],
       confidence: "high"
     } });
@@ -72,16 +73,16 @@ describe("RAG application orchestration", () => {
       .rejects.toMatchObject({ code: "RAG_INJECTION_BLOCKED" });
 
     const provider = new FakeLlmProvider({ response: {
-      answer: "apiKey=csk-test-secret-value",
+      answer: "The answer is forty-two. apiKey=csk-test-secret-value",
       citations: [{ chunkId: "chunk-1", label: "Chapter 1" }],
       claims: [{
         claimId: "claim-redact",
-        text: "apiKey=csk-test-secret-value",
+        text: "The answer is forty-two.",
         answerStart: 0,
-        answerEnd: "apiKey=csk-test-secret-value".length,
+        answerEnd: "The answer is forty-two.".length,
         status: "supported",
         citationChunkIds: ["chunk-1"],
-        evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 25 }]
+        evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 24 }]
       }],
       confidence: "low"
     } });
@@ -116,7 +117,7 @@ describe("RAG application claim-level grounding", () => {
           answerEnd: "Quantum mechanics describes subatomic particle behavior.".length,
           status: "supported",
           citationChunkIds: ["chunk-1"],
-          evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 25 }]
+          evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 24 }]
         }],
         confidence: "high"
       } })
@@ -167,10 +168,10 @@ describe("RAG application claim-level grounding", () => {
           claimId: "claim-1",
           text: "The answer is forty-two.",
           answerStart: 0,
-          answerEnd: 25,
+          answerEnd: 24,
           status: "supported",
           citationChunkIds: ["chunk-1"],
-          evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 25 }]
+          evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 24 }]
         }],
         confidence: "high"
       } }),
@@ -194,10 +195,10 @@ describe("RAG application claim-level grounding", () => {
           claimId: "claim-1",
           text: "The answer is forty-two.",
           answerStart: 0,
-          answerEnd: 25,
+          answerEnd: 24,
           status: "supported",
           citationChunkIds: ["chunk-1"],
-          evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 25 }]
+          evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 24 }]
         }],
         confidence: "high"
       } }),
@@ -208,7 +209,7 @@ describe("RAG application claim-level grounding", () => {
     expect(response.abstentionReason).toBe("INSUFFICIENT_EVIDENCE");
   });
 
-  it("stamps server-derived evidence hashes (never trusts model-supplied hashes)", async () => {
+  it("fails closed when the model supplies a contentHash that disagrees with the quote (R-2/R-4)", async () => {
     const application = new RagApplicationService({
       retriever: new FakeRetriever(chunks),
       provider: new FakeLlmProvider({ response: {
@@ -218,13 +219,14 @@ describe("RAG application claim-level grounding", () => {
           claimId: "claim-1",
           text: "The answer is forty-two.",
           answerStart: 0,
-          answerEnd: 25,
+          answerEnd: 24,
           status: "supported",
           citationChunkIds: ["chunk-1"],
           evidence: [{
             quote: "The answer is forty-two.",
-            chunkId: "chunk-1", start: 0, end: 25,
-            // Model supplies a bogus hash; server must override it.
+            chunkId: "chunk-1", start: 0, end: 24,
+            // Model supplies a bogus hash; tampering must fail closed, and the
+            // bogus hash must never surface in any response.
             contentHash: "0".repeat(64),
             hashAlgorithm: "sha256"
           }]
@@ -232,11 +234,36 @@ describe("RAG application claim-level grounding", () => {
         confidence: "high"
       } })
     });
-    const response = await application.answer({ query: "answer", requestId: "rag-hash", topK: 5, maxOutputTokens: 100, scope: TEST_SCOPE });
+    await expect(application.answer({ query: "answer", requestId: "rag-hash", topK: 5, maxOutputTokens: 100, scope: TEST_SCOPE }))
+      .rejects.toMatchObject({ code: "RAG_CITATION_INVALID", reasonCode: "CLAIM_EVIDENCE_HASH_MISMATCH" });
+  });
+
+  it("stamps quote-derived evidence hashes that clients can independently verify (R-4)", async () => {
+    const application = new RagApplicationService({
+      retriever: new FakeRetriever(chunks),
+      provider: new FakeLlmProvider({ response: {
+        answer: "The answer is forty-two.",
+        citations: [{ chunkId: "chunk-1", label: "Chapter 1" }],
+        claims: [{
+          claimId: "claim-1",
+          text: "The answer is forty-two.",
+          answerStart: 0,
+          answerEnd: 24,
+          status: "supported",
+          citationChunkIds: ["chunk-1"],
+          // No model hash supplied: the server must stamp hashEvidenceSpan(quote).
+          evidence: [{ quote: "The answer is forty-two.", chunkId: "chunk-1", start: 0, end: 24 }]
+        }],
+        confidence: "high"
+      } })
+    });
+    const response = await application.answer({ query: "answer", requestId: "rag-hash-stamp", topK: 5, maxOutputTokens: 100, scope: TEST_SCOPE });
     const evidence = response.claims?.[0]?.evidence?.[0];
     expect(evidence).toBeDefined();
-    // The server-derived hash must NOT be the model's bogus zero-hash.
-    expect(evidence!.contentHash).not.toBe("0".repeat(64));
     expect(evidence!.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    // Client-verifiable integrity model: hash derives from the quote itself,
+    // and the chunk slice at [start,end) reproduces the quote exactly.
+    expect(hashEvidenceSpan(evidence!.quote)).toBe(evidence!.contentHash);
+    expect(chunks[0].content.slice(evidence!.start, evidence!.end)).toBe(evidence!.quote);
   });
 });
