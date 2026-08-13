@@ -190,7 +190,7 @@ All items executed by `/tmp/foundation-adversarial/adv-foundation.mjs`; 43/43 PA
 
 ## Remaining risks (documented, not blocking)
 
-- No login rate limiting/lockout on `/api/admin/auth/login` (audit-only). Recommend follow-up.
+- Login password verification and source/account throttling are covered in Round 3 below.
 - Production guarantees depend on `NODE_ENV=production` being set (systemd example sets it).
 - Production without `ADMIN_ALLOWED_ORIGINS` locks out SPA mutations (fail-closed, but operationally fragile).
 - ~~`GUEST_ASK_RETENTION_DAYS` [1,90] clamp dropped in dependencies.ts (introduced by 57b8624)~~ — **BLOCKER FOUND DURING INDEPENDENT REVIEW; FIXED by `f531728`** (see Round 2 section).
@@ -207,6 +207,22 @@ Books commit `e39b312` is intentionally NOT included in this branch or PR. `git 
 
 Round 1 runtime/build evidence was gathered at code HEAD `00dd8e9` (report commit `eee4354`). Round 2 runtime/build evidence was gathered at code HEAD `f531728`; this updated report is committed as a separate documentation-only commit on top of it and changes no code, lockfile, or test files. Neither report commit is itself a runtime-tested code SHA.
 
+## Round 3 — scoped foundation fixes (P1-1, P1-2, P2 only)
+
+- **Baseline:** branch `integration/foundation-baseline` at `a4564a76a7a470dbc1e90dea90d6137e8a13149d` before the Round 3 working-tree changes.
+- **Scope control:** Retention fix `f531728` was not modified. Books commit `e39b312` was not integrated and no Books source was touched.
+- **P1-1 production bootstrap:** `deploy/scripts/install-admin-systemd.sh` now creates a missing `/etc/ai-quest-a1/admin.env` template and exits non-zero without installing or starting the service. An existing file must have nonblank effective values for `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `AI_CREDENTIAL_ENCRYPTION_KEY`, and `GUEST_ASK_IP_HMAC_SECRET` before any `systemctl` command runs. `DEPLOY-1..DEPLOY-6` use command stubs and never invoke real systemd; 6/6 PASS.
+- **P1-2 async KDF and throttling:** request-time password verification uses callback-based asynchronous `crypto.scrypt`; the synchronous helper remains deployment/test-only for generating hashes. The login route atomically reserves independent 15-minute source/IP (20 attempts) and normalized-account (5 attempts) buckets before the KDF. Throttled requests return 429 with `Retry-After` and never enter password verification. Failed attempts remain charged; a successful request releases only its own reservation. Express trusts forwarded IP data only from loopback proxies, matching the supplied Nginx/systemd topology. `AUTH-RL-1..AUTH-RL-10`; 10/10 PASS.
+- **P2 CSRF contract:** `ADMIN_CSRF_COOKIE` environment customization was removed. Server issuance, clearing, and validation plus SPA lookup import the shared canonical `ai_admin_csrf` contract. `CSRF-CONTRACT-1..CSRF-CONTRACT-6`; 6/6 PASS.
+- **Targeted Round 3 test command:** `pnpm --filter AI-adm-D1 exec vitest run src/server/install-admin-systemd.test.ts src/server/ai/admin-auth.test.ts` — 29/29 PASS (the 22 named Round 3 cases plus 7 existing auth-boundary cases).
+- **Final tested code:** `9022000f15aa069cff125d45a252ea053e6765c4` (`fix(admin): complete foundation round 3 safeguards`).
+- **Toolchain:** Codex CLI `0.147.0`; Node `v24.18.1`; pnpm `9.15.0`.
+- **Frozen install:** BLOCKED by execution environment. `CI=true pnpm install --frozen-lockfile` confirmed the lockfile is current and reused 197 cached packages, then failed with `EAI_AGAIN` because registry access was unavailable and ten artifacts were absent from the local store. Ignored dependency artifacts were restored from an existing local worktree solely to continue read-only verification; no source or lockfile was copied.
+- **Workspace gates:** `pnpm run typecheck` PASS; `pnpm run lint` PASS; `pnpm run build` PASS; `pnpm run lint:release-scripts` PASS.
+- **Workspace tests:** `pnpm test` PASS: 74 test files and 1,030 tests passed, including Admin 26 files/250 tests.
+- **Release-script typecheck:** `KNOWN_PREEXISTING_FAILURE` — the two missing-`zai` errors in `scripts/provider-live-smoke.ts` reproduce, and `git diff --exit-code origin/main -- scripts/provider-live-smoke.ts` plus byte comparison both confirm the file is identical to `origin/main`.
+- **Codex execution evidence:** command outputs are preserved under `/tmp/foundation-round3/`; the p1:wa pane maps to `w1:pA`, session `019ff9b2-e634-7be0-8f9e-ba95c2c25c76`.
+
 ## Final verdict
 
-**VERIFIED**
+**FOUNDATION READY FOR INDEPENDENT RE-VERIFICATION**
