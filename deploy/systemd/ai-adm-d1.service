@@ -4,6 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
+# Runs as a dedicated non-root account provisioned by
+# deploy/scripts/install-admin-systemd.sh; data/ and uploads/ are owned by it.
+User=ai-adm-d1
+Group=ai-adm-d1
 WorkingDirectory=/opt/AI-Quest-A1
 EnvironmentFile=/etc/ai-quest-a1/admin.env
 ExecStart=/usr/bin/node /opt/AI-Quest-A1/apps/AI-adm-D1/dist-server/admin-api.mjs

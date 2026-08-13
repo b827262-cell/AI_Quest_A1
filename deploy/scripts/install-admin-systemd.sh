@@ -8,6 +8,10 @@ pnpm --filter AI-adm-D1 build
 pnpm --filter AI-adm-D1 server:build
 
 sudo mkdir -p /etc/ai-quest-a1 "$PROJECT_ROOT/data" "$PROJECT_ROOT/uploads"
+if ! id -u ai-adm-d1 >/dev/null 2>&1; then
+  sudo useradd --system --no-create-home --shell /usr/sbin/nologin ai-adm-d1
+fi
+sudo chown -R ai-adm-d1:ai-adm-d1 "$PROJECT_ROOT/data" "$PROJECT_ROOT/uploads"
 if [ ! -f /etc/ai-quest-a1/admin.env ]; then
   sudo cp deploy/systemd/admin.env.example /etc/ai-quest-a1/admin.env
   sudo chmod 600 /etc/ai-quest-a1/admin.env

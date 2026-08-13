@@ -16,9 +16,11 @@ pnpm --filter AI-adm-D1 server:build
 ```
 
 Run `apps/AI-adm-D1/dist-server/admin-api.mjs` with
-`deploy/systemd/ai-adm-d1.service`. The service must receive
+`deploy/systemd/ai-adm-d1.service`. The service runs as the dedicated
+non-root `ai-adm-d1` account and must receive
 `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `ADMIN_SESSION_SECURE=true`,
-`ADMIN_ALLOWED_ORIGINS`, `AI_CREDENTIAL_ENCRYPTION_KEY`, and `SQLITE_PATH`
+`ADMIN_ALLOWED_ORIGINS`, `AI_CREDENTIAL_ENCRYPTION_KEY`,
+`GUEST_ASK_IP_HMAC_SECRET`, and `SQLITE_PATH`
 through a protected environment file. Generate the hash without placing the
 password in a command argument:
 
