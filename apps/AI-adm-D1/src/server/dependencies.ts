@@ -1,4 +1,4 @@
-import { createAiProvider } from "@ai-smartbook/ai";
+import { createAiProvider, resolveGuestAskRetentionDays } from "@ai-smartbook/ai";
 import { createRepositories, getDb, runMigrations, type DbHandle } from "@ai-smartbook/db";
 import { resolve } from "node:path";
 import { buildGateway } from "./ai/gateway-instance";
@@ -51,7 +51,7 @@ export function createAdminDependencies(options: AdminDependencyOptions = {}): A
     aiGateway,
     gatewayConfig,
     guestAskIpHmacSecret: resolveGuestAskIpHmacSecret(),
-    guestAskRetentionDays: Number(env.GUEST_ASK_RETENTION_DAYS || 7),
+    guestAskRetentionDays: resolveGuestAskRetentionDays(env),
     analytics,
     evaluationService,
     liveEvaluationService,
