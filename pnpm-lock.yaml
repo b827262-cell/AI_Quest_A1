@@ -87,12 +87,18 @@ importers:
       '@ai-smartbook/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      better-sqlite3:
+        specifier: latest
+        version: 13.0.3
       express:
         specifier: ^4.19.2
         version: 4.22.2
       multer:
         specifier: ^1.4.5-lts.1
         version: 1.4.5-lts.2
+      pdf-parse:
+        specifier: latest
+        version: 2.4.5
       react:
         specifier: ^19.0.0
         version: 19.2.7
@@ -1027,6 +1033,10 @@ packages:
 
   better-sqlite3@13.0.2:
     resolution: {integrity: sha512-jW6oufeDhXZaiX9Lw5A+oerVClx4iFrI6uDj1zu7SqUAjak9vbJvA0NEcKLNxHiQHb6kYCoFzzXYV0YOauhV3g==}
+    engines: {node: '>=22'}
+
+  better-sqlite3@13.0.3:
+    resolution: {integrity: sha512-RbOBxmLBG8uvFUc15X9+9SFemKcQ0WBuISBVkpuiaUB2qblC8UWlHEjdWVoZ8AdhSwmoEgsiXKfopX0CQxaACQ==}
     engines: {node: '>=22'}
 
   body-parser@1.20.5:
@@ -2343,6 +2353,10 @@ snapshots:
   asynckit@0.4.0: {}
 
   better-sqlite3@13.0.2:
+    dependencies:
+      node-addon-api: 8.9.0
+
+  better-sqlite3@13.0.3:
     dependencies:
       node-addon-api: 8.9.0
 
