@@ -1,16 +1,21 @@
 import {
   createHash,
   randomBytes,
+  scrypt,
   scryptSync,
   timingSafeEqual
 } from "node:crypto";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { AdminSessionRepo } from "@ai-smartbook/db";
+import { ADMIN_CSRF_COOKIE } from "../../admin-auth-contract";
 import { resolveAdminAllowedOrigins } from "./admin-origin";
 
 export const ADMIN_SESSION_COOKIE = "ai_admin_session";
-export const ADMIN_CSRF_COOKIE = "ai_admin_csrf";
+export { ADMIN_CSRF_COOKIE } from "../../admin-auth-contract";
 export const DEFAULT_ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+export const ADMIN_LOGIN_THROTTLE_WINDOW_MS = 15 * 60 * 1000;
+export const ADMIN_LOGIN_SOURCE_LIMIT = 20;
+export const ADMIN_LOGIN_ACCOUNT_LIMIT = 5;
 
 export type AdminAuthActor =
   | { kind: "session"; id: string; username: string }
@@ -32,7 +37,6 @@ export type AdminAuthConfig = {
   passwordHash: string | undefined;
   sessionTtlMs: number;
   sessionCookie: string;
-  csrfCookie: string;
   secureCookies: boolean;
   /** Retained as a compatibility field; insecure development bypass is gone. */
   allowInsecureDev: false;
@@ -51,7 +55,6 @@ export function resolveAdminAuthConfig(env: NodeJS.ProcessEnv = process.env): Ad
       ? Math.floor(configuredTtl)
       : DEFAULT_ADMIN_SESSION_TTL_MS,
     sessionCookie: env.ADMIN_SESSION_COOKIE?.trim() || ADMIN_SESSION_COOKIE,
-    csrfCookie: env.ADMIN_CSRF_COOKIE?.trim() || ADMIN_CSRF_COOKIE,
     secureCookies: env.ADMIN_SESSION_SECURE !== "false",
     allowInsecureDev: false
   };
@@ -139,12 +142,26 @@ export function hashAdminPassword(password: string): string {
   return ["scrypt", cost, blockSize, parallelization, salt.toString("base64url"), derived.toString("base64url")].join("$");
 }
 
-function verifyPassword(password: string, config: AdminAuthConfig): boolean {
+function deriveScryptKey(
+  password: string,
+  salt: Buffer,
+  length: number,
+  options: { N: number; r: number; p: number; maxmem: number }
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, length, options, (error, derivedKey) => {
+      if (error) reject(error);
+      else resolve(derivedKey);
+    });
+  });
+}
+
+async function verifyPassword(password: string, config: AdminAuthConfig): Promise<boolean> {
   if (config.passwordHash) {
     const parsed = parsePasswordHash(config.passwordHash);
     if (!parsed) return false;
     try {
-      const derived = scryptSync(password, parsed.salt, parsed.derived.length, {
+      const derived = await deriveScryptKey(password, parsed.salt, parsed.derived.length, {
         N: parsed.cost,
         r: parsed.blockSize,
         p: parsed.parallelization,
@@ -161,12 +178,98 @@ function verifyPassword(password: string, config: AdminAuthConfig): boolean {
   return !config.production && config.password !== undefined && sameSecret(password, config.password);
 }
 
-export function adminCredentialsMatch(
+export async function adminCredentialsMatch(
   username: string,
   password: string,
   config: AdminAuthConfig = resolveAdminAuthConfig()
-): boolean {
-  return Boolean(config.username && sameSecret(username, config.username) && verifyPassword(password, config));
+): Promise<boolean> {
+  const usernameMatches = Boolean(config.username && sameSecret(username, config.username));
+  const passwordMatches = await verifyPassword(password, config);
+  return usernameMatches && passwordMatches;
+}
+
+type LoginAttempt = { id: number; attemptedAt: number };
+
+export type AdminLoginThrottleReservation = {
+  allowed: boolean;
+  retryAfterSeconds: number;
+  finish(success: boolean): void;
+};
+
+export type AdminLoginThrottle = {
+  reserve(source: string, account: string, now?: number): AdminLoginThrottleReservation;
+};
+
+/**
+ * Reserves source and account capacity before password verification begins.
+ * Failed reservations remain in their buckets; successful authentication
+ * releases only its own reservation from both buckets.
+ */
+export function createAdminLoginThrottle(options: {
+  windowMs?: number;
+  sourceLimit?: number;
+  accountLimit?: number;
+} = {}): AdminLoginThrottle {
+  const windowMs = options.windowMs ?? ADMIN_LOGIN_THROTTLE_WINDOW_MS;
+  const sourceLimit = options.sourceLimit ?? ADMIN_LOGIN_SOURCE_LIMIT;
+  const accountLimit = options.accountLimit ?? ADMIN_LOGIN_ACCOUNT_LIMIT;
+  const sourceAttempts = new Map<string, LoginAttempt[]>();
+  const accountAttempts = new Map<string, LoginAttempt[]>();
+  let nextAttemptId = 1;
+
+  function activeAttempts(store: Map<string, LoginAttempt[]>, key: string, now: number): LoginAttempt[] {
+    const active = (store.get(key) ?? []).filter((attempt) => now - attempt.attemptedAt < windowMs);
+    if (active.length > 0) store.set(key, active);
+    else store.delete(key);
+    return active;
+  }
+
+  function retryAt(attempts: LoginAttempt[], limit: number): number {
+    return attempts.length >= limit ? attempts[attempts.length - limit]!.attemptedAt + windowMs : 0;
+  }
+
+  return {
+    reserve(source, account, now = Date.now()) {
+      const sourceKey = source || "unknown";
+      const accountKey = digestAdminSecret(account.trim().toLowerCase());
+      const activeSource = activeAttempts(sourceAttempts, sourceKey, now);
+      const activeAccount = activeAttempts(accountAttempts, accountKey, now);
+      const sourceRetryAt = retryAt(activeSource, sourceLimit);
+      const accountRetryAt = retryAt(activeAccount, accountLimit);
+      const blockedUntil = Math.max(sourceRetryAt, accountRetryAt);
+      if (blockedUntil > now) {
+        return {
+          allowed: false,
+          retryAfterSeconds: Math.max(1, Math.ceil((blockedUntil - now) / 1000)),
+          finish() {}
+        };
+      }
+
+      const attempt: LoginAttempt = { id: nextAttemptId++, attemptedAt: now };
+      activeSource.push(attempt);
+      activeAccount.push(attempt);
+      sourceAttempts.set(sourceKey, activeSource);
+      accountAttempts.set(accountKey, activeAccount);
+      let finished = false;
+      return {
+        allowed: true,
+        retryAfterSeconds: 0,
+        finish(success) {
+          if (finished) return;
+          finished = true;
+          if (!success) return;
+          const currentSource = sourceAttempts.get(sourceKey) ?? [];
+          const withoutSuccess = currentSource.filter((entry) => entry.id !== attempt.id);
+          if (withoutSuccess.length > 0) sourceAttempts.set(sourceKey, withoutSuccess);
+          else sourceAttempts.delete(sourceKey);
+          const currentAccount = accountAttempts.get(accountKey) ?? [];
+          const accountWithoutSuccess = currentAccount.filter((entry) => entry.id !== attempt.id);
+          if (accountWithoutSuccess.length > 0) accountAttempts.set(accountKey, accountWithoutSuccess);
+          else accountAttempts.delete(accountKey);
+        }
+      };
+    }
+  };
 }
 
 export function createAdminSessionSecrets() {
@@ -198,14 +301,14 @@ function csrfCookieOptions(config: AdminAuthConfig) {
 
 export function setAdminSessionCookies(res: Response, config: AdminAuthConfig, sessionToken: string, csrfToken: string): void {
   res.cookie(config.sessionCookie, sessionToken, sessionCookieOptions(config));
-  res.cookie(config.csrfCookie, csrfToken, csrfCookieOptions(config));
+  res.cookie(ADMIN_CSRF_COOKIE, csrfToken, csrfCookieOptions(config));
 }
 
 export function clearAdminSessionCookies(res: Response, config: AdminAuthConfig): void {
   const { maxAge: _sessionMaxAge, ...sessionOptions } = sessionCookieOptions(config);
   const { maxAge: _csrfMaxAge, ...csrfOptions } = csrfCookieOptions(config);
   res.clearCookie(config.sessionCookie, sessionOptions);
-  res.clearCookie(config.csrfCookie, { ...csrfOptions, httpOnly: false });
+  res.clearCookie(ADMIN_CSRF_COOKIE, { ...csrfOptions, httpOnly: false });
 }
 
 /** One boundary for every `/api/admin/*` route. */
@@ -246,7 +349,6 @@ export function createAdminCsrfMiddleware(
   env: NodeJS.ProcessEnv = process.env,
   sessions?: AdminSessionRepo
 ): RequestHandler {
-  const config = resolveAdminAuthConfig(env);
   const allowedOrigins = resolveAdminAllowedOrigins(env);
   return (req: Request, res: Response, next: NextFunction) => {
     if (!isUnsafeMethod(req.method) || req.adminAuth?.kind !== "session") return next();
@@ -257,7 +359,7 @@ export function createAdminCsrfMiddleware(
     }
 
     const headerToken = req.header("x-csrf-token")?.trim();
-    const cookieToken = readCookie(req, config.csrfCookie);
+    const cookieToken = readCookie(req, ADMIN_CSRF_COOKIE);
     if (!headerToken || !cookieToken || !sameSecret(headerToken, cookieToken) || !sessions) {
       return res.status(403).json({ error: "csrf validation failed" });
     }

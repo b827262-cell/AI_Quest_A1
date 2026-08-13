@@ -30,6 +30,7 @@ import {
   clearAdminSessionCookies,
   createAdminAuthMiddleware,
   createAdminCsrfMiddleware,
+  createAdminLoginThrottle,
   createAdminSessionSecrets,
   digestAdminSecret,
   resolveAdminAuthConfig,
@@ -298,6 +299,7 @@ const appearanceUpload = multer({
 });
 
 const app = express();
+app.set("trust proxy", "loopback");
 app.use(express.json({ limit: "2mb" }));
 app.get("/health/live", (_req, res) => {
   res.status(200).json({ status: "live" });
@@ -322,11 +324,22 @@ app.use("/api/uploads/appearance", express.static(APPEARANCE_UPLOAD_DIR));
 const adminAuthConfig = resolveAdminAuthConfig(env);
 const adminAuthMiddleware = createAdminAuthMiddleware(env, repos.adminSessions);
 const adminCsrfMiddleware = createAdminCsrfMiddleware(env, repos.adminSessions);
+const adminLoginThrottle = createAdminLoginThrottle();
 
-app.post("/api/admin/auth/login", (req, res) => {
+app.post("/api/admin/auth/login", async (req, res) => {
   const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
-  if (!adminCredentialsMatch(username, password, adminAuthConfig)) {
+  const reservation = adminLoginThrottle.reserve(req.ip || "unknown", username);
+  if (!reservation.allowed) {
+    repos.aiProviders.audit("admin.auth.login.throttled", "admin_session", undefined, { username: username.slice(0, 80) });
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Retry-After", String(reservation.retryAfterSeconds));
+    return fail(res, 429, "too many administrator login attempts");
+  }
+
+  const credentialsMatch = await adminCredentialsMatch(username, password, adminAuthConfig);
+  reservation.finish(credentialsMatch);
+  if (!credentialsMatch) {
     repos.aiProviders.audit("admin.auth.login.failed", "admin_session", undefined, { username: username.slice(0, 80) });
     res.setHeader("Cache-Control", "no-store");
     return fail(res, 401, "invalid administrator credentials");

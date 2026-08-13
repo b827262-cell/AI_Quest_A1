@@ -19,6 +19,7 @@ import type {
   UpdateBookInput
 } from "@ai-smartbook/schema";
 import type { SiteConfig, SiteConfigUpdate } from "@ai-smartbook/schema";
+import { ADMIN_CSRF_COOKIE } from "./admin-auth-contract";
 
 export interface ChapterInput {
   title: string;
@@ -333,7 +334,7 @@ export interface UploadBookFileOptions {
 
 export function readCsrfCookie(): string {
   if (typeof document === "undefined") return "";
-  const prefix = "ai_admin_csrf=";
+  const prefix = `${ADMIN_CSRF_COOKIE}=`;
   for (const item of document.cookie.split(";")) {
     const value = item.trim();
     if (!value.startsWith(prefix)) continue;
