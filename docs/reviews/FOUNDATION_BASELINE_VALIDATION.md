@@ -6,9 +6,11 @@
 - **origin/main before integration:** `ac2d31d4f2931bd21b82c4eed44ea694887b8829`
 - **Foundation candidate (original HEAD):** `e60b708d3cf1dd29dc21a998f29bfc7e4faf8489`
 - **Integration branch:** `integration/foundation-baseline`
-- **Integration branch HEAD (tested):** `00dd8e9cc08c7269a14b3fa87b4f93cfd8479a06`
+- **Tested code HEAD (round 2):** `f531728` (`fix(admin): restore guest retention boundary`)
+- **Report HEAD (round 2 docs commit):** see `git log` — documentation-only commit on top of `f531728`
+- **Round 1 tested code HEAD:** `00dd8e9cc08c7269a14b3fa87b4f93cfd8479a06` (round 1 report commit `eee4354`)
 - **merge-base(origin/main, candidate):** `ac2d31d4f2931bd21b82c4eed44ea694887b8829`
-- **Topology:** ahead_by = 6 (original foundation commits) + 2 hardening commits, behind_by = 0; original 6 commits preserved verbatim, no rewrite/squash
+- **Topology:** ahead_by = 6 (original foundation commits) + 2 hardening commits + 1 retention-boundary fix, behind_by = 0; original 6 commits preserved verbatim, no rewrite/squash
 - **Books exclusion check:** `git merge-base e39b312 e60b708` = `e60b708` — `e39b312` is a child of the foundation HEAD and is NOT part of this branch
 
 ## Commit list (original 6)
@@ -173,13 +175,25 @@ All items executed by `/tmp/foundation-adversarial/adv-foundation.mjs`; 43/43 PA
 1. **BLOCKER (fixed, `7c82be6`):** production server bundle could not boot — externalized `better-sqlite3` undeclared by `AI-adm-D1`; `pdf-parse` bundled pdfjs-dist browser build crashing on `DOMMatrix`. Declared both deps, externalized `pdf-parse`; contract test added; runtime-verified.
 2. **Production security flaws (fixed, `00dd8e9`):** nginx missing `client_max_body_size`; systemd running as root; `admin.env.example` missing production-required `GUEST_ASK_IP_HMAC_SECRET`. All fixed and pinned by regression tests.
 3. **Pre-existing on origin/main (not fixed, evidence above):** `typecheck:release-scripts` failure (`zai` missing in provider-live-smoke.ts). Outside foundation scope.
+4. **BLOCKER FOUND DURING INDEPENDENT REVIEW — FIXED by `f531728`:** `GUEST_ASK_RETENTION_DAYS` boundary regression (details in the Round 2 section below).
+
+## Round 2 — independent review blocker: guest retention boundary
+
+- **Root cause:** the app/dependency split (57b8624) replaced the shared `resolveGuestAskRetentionDays(env)` call (used by `index.ts` at `ac2d31d`) with `Number(env.GUEST_ASK_RETENTION_DAYS || 7)` in `apps/AI-adm-D1/src/server/dependencies.ts`, dropping the contract: default 7, invalid/≤0 → default, floor, clamp to [1, 90].
+- **Before (evidence at `eee4354`):** the new regression test failed for RET-2 (`"abc"` → `NaN`), RET-3 (`"0"`/`"-5"` → `0`/`-5`), RET-4 (`"0.5"` → `0.5`), RET-5 (`"999"` → `999`, expected `90`), RET-6 (`"12.8"` → `12.8`).
+- **After:** `dependencies.ts` imports and uses `resolveGuestAskRetentionDays(env)` from `@ai-smartbook/ai` (the existing source of truth; no re-implementation).
+- **Regression test:** `apps/AI-adm-D1/src/server/dependencies-retention.test.ts` — RET-1..RET-7 driven through `createAdminDependencies()` (the integration boundary, not just the resolver). 7/7 PASS at `f531728`.
+- **Runtime RET matrix:** production bundle booted per env value; retention proven by the actual `guest_ask_answers.expires_at` horizon: unset→7.00d, `abc`→7.00d, `-5`→7.00d, `0.5`→1.00d, `999`→90.00d, `12.8`→12.00d, `30`→30.00d. 7/7 PASS.
+- **Retested gates at `f531728`:** frozen install PASS; typecheck PASS; lint PASS; build PASS; workspace tests PASS (schema 4, ai 604, db 167, stu 5, adm 221 incl. 7 new RET tests); lint:release-scripts PASS; production client + server builds PASS; foundation targeted gates PASS (admin-auth 7, admin-api.integration 6, gemini-priority 4, security-bundle 1, deployment-boundary 5, server-bundle-contract 1, dependencies-retention 7, guest-surface-contract 6); existing adversarial matrix 43/43 PASS ×3 runs (fresh DB, pre-foundation upgrade, migration re-run); RET runtime matrix 7/7 PASS.
+- **`typecheck:release-scripts`** still fails with the identical, independently-confirmed pre-existing `zai` errors in `scripts/provider-live-smoke.ts`; that file was not modified in round 2 (round 2 diff = `dependencies.ts` + regression test only).
+- **New tested code HEAD:** `f531728`.
 
 ## Remaining risks (documented, not blocking)
 
 - No login rate limiting/lockout on `/api/admin/auth/login` (audit-only). Recommend follow-up.
 - Production guarantees depend on `NODE_ENV=production` being set (systemd example sets it).
 - Production without `ADMIN_ALLOWED_ORIGINS` locks out SPA mutations (fail-closed, but operationally fragile).
-- `GUEST_ASK_RETENTION_DAYS` [1,90] clamp dropped in dependencies.ts (introduced by 57b8624).
+- ~~`GUEST_ASK_RETENTION_DAYS` [1,90] clamp dropped in dependencies.ts (introduced by 57b8624)~~ — **BLOCKER FOUND DURING INDEPENDENT REVIEW; FIXED by `f531728`** (see Round 2 section).
 - Lockfile float in 57b8624 (vite 8.1.5→8.2.0, tsx patch, rolldown bindings) — accepted as installed-and-tested.
 - Commit e60b708 mixes unrelated student-app cleanups (no functional impact).
 - Migration rollback unsupported (additive-only DDL).
@@ -191,7 +205,7 @@ Books commit `e39b312` is intentionally NOT included in this branch or PR. `git 
 
 ## Note on report commit
 
-All runtime/build evidence above was gathered at code HEAD `00dd8e9`. This report is committed as a documentation-only commit on top; it changes no code, lockfile, or test files.
+Round 1 runtime/build evidence was gathered at code HEAD `00dd8e9` (report commit `eee4354`). Round 2 runtime/build evidence was gathered at code HEAD `f531728`; this updated report is committed as a separate documentation-only commit on top of it and changes no code, lockfile, or test files. Neither report commit is itself a runtime-tested code SHA.
 
 ## Final verdict
 
