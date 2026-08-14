@@ -71,7 +71,8 @@ async function start() {
     openai: "OPENAI_API_KEY",
     gemini: "GEMINI_API_KEY",
     kimi: "KIMI_API_KEY",
-    qwen: "QWEN_API_KEY"
+    qwen: "QWEN_API_KEY",
+    zai: "ZAI_API_KEY"
   }[provider];
   if (!provider || !providerEnvName || !process.env[providerEnvName]) {
     throw new Error("NO_CREDENTIAL");

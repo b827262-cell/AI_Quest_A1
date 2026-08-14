@@ -66,6 +66,7 @@ import {
   buildChapterPreviewRowsFromPdfOutline,
   extractPdfOutline,
   buildPdfJsonIndex,
+  InvalidPdfPageNumberError,
   normalizeChaptersToReaderOutline,
   normalizeReaderOutline,
   isStructuredReaderOutline,
@@ -1985,6 +1986,9 @@ app.post("/api/admin/books/:bookId/files/:fileId/generate-json-index", async (re
     });
     res.json({ index });
   } catch (err) {
+    if (err instanceof InvalidPdfPageNumberError) {
+      return fail(res, 400, err.message);
+    }
     fail(res, 500, "generate json index failed");
   }
 });
@@ -2030,6 +2034,9 @@ app.post("/api/admin/books/:bookId/files/:fileId/save-json-index", async (req, r
     if (parsed.data.setActive) setActiveQaReferenceId(book.id, record.id);
     res.status(201).json({ index: summarizeStoredJsonIndex(record, getActiveQaReferenceId(book.id)) });
   } catch (err) {
+    if (err instanceof InvalidPdfPageNumberError) {
+      return fail(res, 400, err.message);
+    }
     fail(res, 500, "save json index failed");
   }
 });

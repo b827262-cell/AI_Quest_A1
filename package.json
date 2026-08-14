@@ -2,6 +2,7 @@
   "name": "ai-smartbook-r1",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "description": "Modular SmartBook R1 monorepo: student frontend, admin backend, SQLite, PDF parsing, admin AI modules.",
   "packageManager": "pnpm@9.15.0",
   "devEngines": {

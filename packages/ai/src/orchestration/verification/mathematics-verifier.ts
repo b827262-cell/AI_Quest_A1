@@ -161,7 +161,7 @@ function extractEquation(question: string): [string, string] | undefined {
 function extractExpression(question: string): string | undefined {
   const equation = extractEquation(question);
   if (equation) return undefined;
-  const normalizedQuestion = question.replace(/米|公尺|公分|公尺|公斤|千克|kg|cm|m\b/gi, "");
+  const normalizedQuestion = question.replace(/米|公尺|公分|公斤|千克|kg|cm|m\b/gi, "");
   const matches = normalizedQuestion.match(/[-+]?\d+(?:\.\d+)?%?(?:\s*[+\-*/^×÷()]\s*[-+]?\d+(?:\.\d+)?%?)+/g);
   return matches?.sort((left, right) => right.length - left.length)[0];
 }

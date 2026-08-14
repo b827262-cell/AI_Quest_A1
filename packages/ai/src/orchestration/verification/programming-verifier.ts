@@ -47,14 +47,21 @@ function declaredIdentifiers(source: string): Set<string> {
   return declared;
 }
 
+function codeSnippets(text: string): string[] {
+  const blocks = codeBlocks(text);
+  const inline = [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1] ?? "");
+  const varMentions = [...text.matchAll(/(?:變數|variable)\s*([A-Za-z_]\w*)/gi)].map((m) => m[1] ?? "");
+  return [...blocks, ...inline, ...varMentions];
+}
+
 function hasUndefinedVariable(question: string, answer: string): boolean {
-  const blocks = codeBlocks(answer);
-  const source = blocks.join("\n");
+  const snippets = codeSnippets(answer);
+  const source = snippets.join("\n");
   const explicit = [...answer.matchAll(/(?:不存在|未宣告|undefined|undeclared)(?:的)?\s*(?:變數\s*)?([A-Za-z_]\w*)/gi)];
   const declared = declaredIdentifiers(question);
   if (explicit.some((match) => !declared.has(match[1]))) return true;
-  if (/(?:不存在|未宣告|undefined|undeclared)/i.test(answer)) {
-    const mentioned = answer.match(IDENTIFIER) ?? [];
+  if (source && /(?:不存在|未宣告|undefined|undeclared)/i.test(answer)) {
+    const mentioned = source.match(IDENTIFIER) ?? [];
     if (mentioned.some((identifier) => !declared.has(identifier) && !COMMON_IDENTIFIERS.has(identifier))) return true;
   }
   if (!source) return false;

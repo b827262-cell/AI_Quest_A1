@@ -21,8 +21,12 @@ function tokenizeQuery(question: string): string[] {
     if (t.length >= 2 && /[a-z0-9]/.test(t)) grams.add(t);
   }
   const cleaned = question.replace(/[\s,，。．.!?？！、:：;；()「」『』\[\]]+/g, "").toLowerCase();
-  for (let i = 0; i < cleaned.length - 1; i++) {
-    grams.add(cleaned.slice(i, i + 2));
+  if (cleaned.length === 1) {
+    grams.add(cleaned);
+  } else {
+    for (let i = 0; i < cleaned.length - 1; i++) {
+      grams.add(cleaned.slice(i, i + 2));
+    }
   }
   return [...grams];
 }

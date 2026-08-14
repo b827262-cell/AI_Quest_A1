@@ -20,7 +20,7 @@ grep -r "@ai-smartbook/db" packages/book-core/package.json 2>/dev/null && echo "
 grep -rI "API_KEY" deploy/systemd/student.env.example 2>/dev/null && echo "❌ FAIL: student.env has API_KEY" && FAIL=1
 
 # No forbidden tech
-grep -rI "mysql\|MySQL\|docker\|Docker\|PM2\|pm2\|redis\|Redis" apps/ packages/ 2>/dev/null && echo "❌ FAIL: forbidden tech reference found" && FAIL=1
+grep -rIE "\b(mysql|MySQL|docker|Docker|PM2|pm2|redis|Redis)\b" apps/ packages/ 2>/dev/null && echo "❌ FAIL: forbidden tech reference found" && FAIL=1
 
 [ $FAIL -eq 0 ] && echo "✅ All boundary checks passed" || echo "❌ Boundary violations detected"
 exit $FAIL

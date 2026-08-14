@@ -52,8 +52,8 @@ export function importStudentSync(dbPath: string, pkg: SyncPackage): void {
     }
 
     const insertBook = sqlite.prepare(
-      `INSERT INTO books (id, title, subtitle, description, cover_url, status, created_at, updated_at)
-       VALUES (@id, @title, @subtitle, @description, @coverUrl, @status, @createdAt, @updatedAt)`
+      `INSERT INTO books (id, title, subtitle, description, cover_url, category, status, created_at, updated_at)
+       VALUES (@id, @title, @subtitle, @description, @coverUrl, @category, @status, @createdAt, @updatedAt)`
     );
     for (const b of validated.books) {
       insertBook.run({
@@ -62,6 +62,7 @@ export function importStudentSync(dbPath: string, pkg: SyncPackage): void {
         subtitle: b.subtitle ?? null,
         description: b.description ?? null,
         coverUrl: b.coverUrl ?? null,
+        category: b.category ?? "未分類",
         status: b.status,
         createdAt: b.createdAt,
         updatedAt: b.updatedAt
@@ -69,8 +70,8 @@ export function importStudentSync(dbPath: string, pkg: SyncPackage): void {
     }
 
     const insertChapter = sqlite.prepare(
-      `INSERT INTO book_chapters (id, book_id, title, summary, order_index, page_start, page_end, status, created_at, updated_at)
-       VALUES (@id, @bookId, @title, @summary, @orderIndex, @pageStart, @pageEnd, @status, @createdAt, @updatedAt)`
+      `INSERT INTO book_chapters (id, book_id, title, summary, order_index, page_start, page_end, level, source, status, created_at, updated_at)
+       VALUES (@id, @bookId, @title, @summary, @orderIndex, @pageStart, @pageEnd, @level, @source, @status, @createdAt, @updatedAt)`
     );
     for (const c of validated.chapters) {
       insertChapter.run({
@@ -81,6 +82,8 @@ export function importStudentSync(dbPath: string, pkg: SyncPackage): void {
         orderIndex: c.orderIndex,
         pageStart: c.pageStart ?? null,
         pageEnd: c.pageEnd ?? null,
+        level: c.level ?? 0,
+        source: c.source ?? "manual",
         status: c.status,
         createdAt: c.createdAt,
         updatedAt: c.updatedAt
