@@ -96,10 +96,17 @@ function normalizeChapters(chapters: BookChapter[]): ResolvedChapter[] {
     .sort((a, b) => a.orderIndex - b.orderIndex);
 }
 
+export class InvalidPdfPageNumberError extends Error {
+  constructor(message = "PDF index generation requires parsed content rows with physical PDF page numbers.") {
+    super(message);
+    this.name = "InvalidPdfPageNumberError";
+  }
+}
+
 function ensurePhysicalPageContents(contents: PdfIndexContentRow[]): PdfIndexContentRow[] {
   const invalid = contents.find((content) => !validPageNumber(content.pageNumber));
   if (invalid) {
-    throw new Error("PDF index generation requires parsed content rows with physical PDF page numbers.");
+    throw new InvalidPdfPageNumberError();
   }
   return [...contents].sort((a, b) => a.orderIndex - b.orderIndex);
 }

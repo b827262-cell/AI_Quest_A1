@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppearance } from "../../appearance";
-
-// Front-end identity constants (no auth API in scope).
-const ADMIN_IDENTITY = { org: "admin", initial: "管", label: "管理者" };
+import { useAdminAuth } from "../../admin-auth";
 
 /** Sticky white top bar: hamburger, configurable brand (name + logo), home. */
 export function AdminTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { settings } = useAppearance();
+  const { user, logout } = useAdminAuth();
   const [logoFailed, setLogoFailed] = useState(false);
 
   // Reset the logo error state when the URL changes so a new valid logo shows.
@@ -52,10 +51,13 @@ export function AdminTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }
       </Link>
 
       <div className="admin-topbar-right">
-        <span className="admin-identity-name">{ADMIN_IDENTITY.org}</span>
-        <span className="admin-avatar" title={ADMIN_IDENTITY.label} aria-label={ADMIN_IDENTITY.label}>
-          {ADMIN_IDENTITY.initial}
+        <span className="admin-identity-name">{user?.username ?? "管理者"}</span>
+        <span className="admin-avatar" title="管理者" aria-label="管理者">
+          {(user?.username?.slice(0, 1) || "管").toUpperCase()}
         </span>
+        <button type="button" className="admin-btn secondary admin-logout" onClick={() => void logout()}>
+          登出
+        </button>
       </div>
     </header>
   );

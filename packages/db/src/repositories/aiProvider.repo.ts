@@ -31,6 +31,7 @@ export class AiProviderIdentityConflictError extends Error {
 const providerIds = new Set<ProviderId>(["openai", "gemini", "kimi", "qwen", "zai"]);
 const auditMetadataKeys = new Set([
   "provider", "status", "result", "lastActiveCredential", "credentialCount", "dryRun",
+  "actorId", "method", "path", "statusCode",
   // Token Pool provenance (spec §6): pool type + logical model id only, never keys.
   "poolType", "logicalModelId", "dailyLimit", "contextWindowTokens",
   "validationReason", "httpStatus", "region", "health", "billingMode", "usageScope",

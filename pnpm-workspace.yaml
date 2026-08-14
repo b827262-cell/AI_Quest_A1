@@ -6,3 +6,7 @@ packages:
 # node_modules tree is present. Dependency installation stays an explicit
 # bootstrap/CI step; validation commands must never mutate the workspace.
 verifyDepsBeforeRun: false
+
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild

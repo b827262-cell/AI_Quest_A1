@@ -75,14 +75,6 @@ function fmtChange(v: number | string | null | undefined): string {
   return n >= 0 ? `▲ ${abs}` : `▼ ${abs}`;
 }
 
-function fmtSpot(v: number | string | null | undefined): string {
-  if (v == null || v === "") return "N/A";
-  const n = typeof v === "string" ? parseFloat(v) : v;
-  if (!isFinite(n)) return "N/A";
-  const yi = n / 1e8;
-  return `${yi >= 0 ? "▲ " : "▼ "}${Math.abs(yi).toFixed(2)} 億`;
-}
-
 function Chip({ label, val, pos, neg }: { label: string; val: string; pos?: boolean; neg?: boolean }) {
   const cls = pos ? " pos" : neg ? " neg" : "";
   return (

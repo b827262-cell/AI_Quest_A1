@@ -38,41 +38,53 @@ export function makeAiDailyUsageRepo(db: Db) {
      * Uses integer micro-USD so totals stay exact (spec §13.10).
      */
     accumulate(delta: DailyUsageDelta): Row {
-      const ts = nowIso();
-      const existing = this.find(delta.date, delta.scopeType, delta.scopeKey);
-      if (existing) {
-        const patch: Partial<Row> = {
-          requestCount: existing.requestCount + 1,
-          inputTokens: existing.inputTokens + delta.inputTokens,
-          outputTokens: existing.outputTokens + delta.outputTokens,
-          totalTokens: existing.totalTokens + delta.totalTokens,
-          estimatedCostMicroUsd: existing.estimatedCostMicroUsd + delta.estimatedCostMicroUsd,
-          actualCostMicroUsd: existing.actualCostMicroUsd + delta.actualCostMicroUsd,
+      return db.transaction((tx) => {
+        const ts = nowIso();
+        const existing = tx
+          .select()
+          .from(aiDailyUsage)
+          .where(
+            and(
+              eq(aiDailyUsage.date, delta.date),
+              eq(aiDailyUsage.scopeType, delta.scopeType),
+              eq(aiDailyUsage.scopeKey, delta.scopeKey)
+            )
+          )
+          .get();
+        if (existing) {
+          const patch: Partial<Row> = {
+            requestCount: existing.requestCount + 1,
+            inputTokens: existing.inputTokens + delta.inputTokens,
+            outputTokens: existing.outputTokens + delta.outputTokens,
+            totalTokens: existing.totalTokens + delta.totalTokens,
+            estimatedCostMicroUsd: existing.estimatedCostMicroUsd + delta.estimatedCostMicroUsd,
+            actualCostMicroUsd: existing.actualCostMicroUsd + delta.actualCostMicroUsd,
+            updatedAt: ts
+          };
+          tx.update(aiDailyUsage)
+            .set(patch)
+            .where(eq(aiDailyUsage.id, existing.id))
+            .run();
+          return { ...existing, ...patch } as Row;
+        }
+        const row: Row = {
+          id: newId("aid"),
+          date: delta.date,
+          scopeType: delta.scopeType,
+          scopeKey: delta.scopeKey,
+          requestCount: 1,
+          inputTokens: delta.inputTokens,
+          outputTokens: delta.outputTokens,
+          totalTokens: delta.totalTokens,
+          estimatedCostMicroUsd: delta.estimatedCostMicroUsd,
+          actualCostMicroUsd: delta.actualCostMicroUsd,
+          reservedTokens: 0,
+          reservedCostMicroUsd: 0,
           updatedAt: ts
         };
-        db.update(aiDailyUsage)
-          .set(patch)
-          .where(eq(aiDailyUsage.id, existing.id))
-          .run();
-        return { ...existing, ...patch } as Row;
-      }
-      const row: Row = {
-        id: newId("aid"),
-        date: delta.date,
-        scopeType: delta.scopeType,
-        scopeKey: delta.scopeKey,
-        requestCount: 1,
-        inputTokens: delta.inputTokens,
-        outputTokens: delta.outputTokens,
-        totalTokens: delta.totalTokens,
-        estimatedCostMicroUsd: delta.estimatedCostMicroUsd,
-        actualCostMicroUsd: delta.actualCostMicroUsd,
-        reservedTokens: 0,
-        reservedCostMicroUsd: 0,
-        updatedAt: ts
-      };
-      db.insert(aiDailyUsage).values(row).run();
-      return row;
+        tx.insert(aiDailyUsage).values(row).run();
+        return row;
+      });
     },
 
     /** Sum across all scopes for a given date (for global budget checks). */

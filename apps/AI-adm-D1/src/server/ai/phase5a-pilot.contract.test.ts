@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const server = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+const server = readFileSync(new URL("../app.ts", import.meta.url), "utf8");
 const service = readFileSync(new URL("./pilot-service.ts", import.meta.url), "utf8");
 const page = readFileSync(new URL("../../pages/AiQualityEvaluationsPage.tsx", import.meta.url), "utf8");
 

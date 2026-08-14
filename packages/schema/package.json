@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
+    "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=.",
+    "test": "vitest run"
   },
   "devDependencies": {
     "typescript": "latest"

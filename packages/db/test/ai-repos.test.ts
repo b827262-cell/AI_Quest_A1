@@ -4,7 +4,11 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { runMigrations } from "../src/migrate";
 import { schema } from "../src/schema";
 import { createRepositories } from "../src/repositories";
-import { upsertAiProviderConfigInputSchema } from "@ai-smartbook/schema";
+import {
+  createAiCredentialModelQuotaInputSchema,
+  updateAiCredentialModelQuotaInputSchema,
+  upsertAiProviderConfigInputSchema
+} from "@ai-smartbook/schema";
 
 /**
  * Integration tests for the Phase 2 AI repos against an in-memory SQLite DB.
@@ -397,6 +401,95 @@ describe("AI repos integration", () => {
     expect(current.minuteResetAt).toBeTruthy();
     expect(current.dailyResetAt).toBeTruthy();
     expect(handle.repos.aiCredentialModelQuotas.reserve(credential.id, "model-b", 4).allowed).toBe(true);
+  });
+
+  it("persists the nullable pricing payload for a second credential model without duplicates", () => {
+    const provider = handle.repos.aiProviders.upsertConfig({ provider: "zai", displayName: "Nullable quota Z.AI" });
+    const credential = handle.repos.aiProviders.createCredential({
+      providerConfigId: provider.id,
+      name: "terra-credential",
+      model: "gpt-5.6-terra",
+      encryptedApiKey: "v1.encrypted-terra",
+      maskedApiKey: "zai****rra",
+      keyFingerprint: "nullable-quota-terra-fingerprint",
+      status: "active"
+    });
+    const payload = {
+      model: "gpt-5.6-luna",
+      rpmLimit: null,
+      tpmLimit: null,
+      rpdLimit: null,
+      resetTimezone: "Asia/Taipei",
+      enabled: true,
+      isDefault: false,
+      currency: null,
+      serviceTier: null,
+      inputPriceUsdPerMillion: null,
+      outputPriceUsdPerMillion: null,
+      cachedInputPriceUsdPerMillion: null,
+      cacheStorageUsdPerMillionTokenHour: null,
+      pricingEffectiveAt: null,
+      pricingSource: null,
+      pricingUnavailable: false
+    };
+    const parsed = createAiCredentialModelQuotaInputSchema.safeParse(payload);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error(parsed.error.message);
+
+    const created = handle.repos.aiCredentialModelQuotas.create({ ...parsed.data, credentialId: credential.id });
+    expect(created).toMatchObject({
+      model: "gpt-5.6-luna",
+      currency: null,
+      serviceTier: null,
+      inputPriceUsdPerMillion: null,
+      outputPriceUsdPerMillion: null,
+      cachedInputPriceUsdPerMillion: null,
+      cacheStorageUsdPerMillionTokenHour: null,
+      pricingEffectiveAt: null,
+      pricingSource: null,
+      pricingUnavailable: false,
+      isDefault: false
+    });
+    expect(handle.repos.aiCredentialModelQuotas.list(credential.id)).toHaveLength(2);
+
+    const duplicate = handle.repos.aiCredentialModelQuotas.findForCredential(credential.id, "GPT-5.6-LUNA");
+    expect(duplicate?.id).toBe(created.id);
+    expect(() => handle.repos.aiCredentialModelQuotas.create({ ...parsed.data, credentialId: credential.id })).toThrow();
+    expect(handle.repos.aiCredentialModelQuotas.list(credential.id).filter((row) => row.model === "gpt-5.6-luna")).toHaveLength(1);
+
+    const priced = handle.repos.aiCredentialModelQuotas.update(created.id, {
+      currency: "USD",
+      serviceTier: "standard",
+      inputPriceUsdPerMillion: 1,
+      outputPriceUsdPerMillion: 2,
+      cachedInputPriceUsdPerMillion: 0.5,
+      cacheStorageUsdPerMillionTokenHour: 0.25,
+      pricingEffectiveAt: "2026-08-03",
+      pricingSource: "test"
+    });
+    expect(priced).toMatchObject({ currency: "USD", serviceTier: "standard", pricingSource: "test" });
+
+    const clearPayload = updateAiCredentialModelQuotaInputSchema.parse({
+      currency: null,
+      serviceTier: null,
+      inputPriceUsdPerMillion: null,
+      outputPriceUsdPerMillion: null,
+      cachedInputPriceUsdPerMillion: null,
+      cacheStorageUsdPerMillionTokenHour: null,
+      pricingEffectiveAt: null,
+      pricingSource: null
+    });
+    const cleared = handle.repos.aiCredentialModelQuotas.update(created.id, clearPayload);
+    expect(cleared).toMatchObject({
+      currency: null,
+      serviceTier: null,
+      inputPriceUsdPerMillion: null,
+      outputPriceUsdPerMillion: null,
+      cachedInputPriceUsdPerMillion: null,
+      cacheStorageUsdPerMillionTokenHour: null,
+      pricingEffectiveAt: null,
+      pricingSource: null
+    });
   });
 
   it("creates the first credential model and its quota limits as one default row", () => {

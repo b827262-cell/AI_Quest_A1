@@ -291,6 +291,18 @@ const STATEMENTS = [
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS admin_sessions (
+    id TEXT PRIMARY KEY,
+    token_digest TEXT NOT NULL UNIQUE,
+    csrf_token_digest TEXT NOT NULL,
+    username TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    revoked_at TEXT,
+    ip_address TEXT,
+    user_agent TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS ai_evaluation_runs (
     id TEXT PRIMARY KEY,
     dataset_id TEXT NOT NULL,
@@ -644,6 +656,8 @@ const STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_ai_credential_model_quotas_credential ON ai_credential_model_quotas(credential_id, enabled)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_credential_model_quotas_model ON ai_credential_model_quotas(credential_id, model COLLATE NOCASE)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_admin_audit_logs_created ON ai_admin_audit_logs(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_admin_sessions_username ON admin_sessions(username)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_evaluation_runs_dataset_created ON ai_evaluation_runs(dataset_id, dataset_version, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_evaluation_runs_mode_created ON ai_evaluation_runs(execution_mode, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_evaluation_runs_status_created ON ai_evaluation_runs(status, created_at)`,
