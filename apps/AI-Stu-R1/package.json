@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "build": "vite build",
+    "build": "vite build && node ../../scripts/sites-normalize-vite-output.mjs . ai_quest_a1_student_sites",
     "server:build": "esbuild server/stu-api.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist-server/stu-api.mjs --external:better-sqlite3 --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\"",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -28,6 +28,8 @@
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@openai/sites-vite-plugin": "0.1.0",
     "@types/express": "latest",
     "@types/node": "latest",
     "@types/react": "^19.0.0",
@@ -37,6 +39,7 @@
     "happy-dom": "^20.11.1",
     "tsx": "latest",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "wrangler": "4.92.0"
   }
 }

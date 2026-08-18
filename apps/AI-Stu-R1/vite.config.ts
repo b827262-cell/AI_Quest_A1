@@ -1,8 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { cloudflare } from "@cloudflare/vite-plugin";
+import { sites } from "@openai/sites-vite-plugin";
 
-export default defineConfig({
-  plugins: [react()],
+process.env.WRANGLER_WRITE_LOGS ??= "false";
+
+export default defineConfig(({ command }) => ({
+  plugins: [react(), ...(command === "build" ? [sites(), cloudflare()] : [])],
   server: {
     proxy: {
       "/api/student": {
@@ -30,4 +34,4 @@ export default defineConfig({
       }
     }
   }
-});
+}));

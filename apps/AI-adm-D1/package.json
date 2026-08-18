@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0 --port 5174",
     "server:dev": "tsx src/server/index.ts",
     "server:build": "esbuild src/server/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist-server/admin-api.mjs --external:better-sqlite3 --external:pdf-parse --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\"",
-    "build": "vite build",
+    "build": "vite build && node ../../scripts/sites-normalize-vite-output.mjs . ai_quest_a1_admin_sites",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
@@ -29,6 +29,8 @@
     "zod": "latest"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@openai/sites-vite-plugin": "0.1.0",
     "@types/express": "latest",
     "@types/multer": "latest",
     "@types/node": "latest",
@@ -40,6 +42,7 @@
     "supertest": "^7.2.2",
     "tsx": "latest",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "wrangler": "4.92.0"
   }
 }
