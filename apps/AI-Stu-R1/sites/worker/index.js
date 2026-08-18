@@ -5,12 +5,21 @@
  */
 const worker = {
   async fetch(request, env) {
+    const url = new URL(request.url);
+    const isSpaRoute = request.method === "GET"
+      && !url.pathname.startsWith("/api/")
+      && !url.pathname.startsWith("/assets/")
+      && !/\.[^/]+$/.test(url.pathname);
+
+    if (isSpaRoute && url.pathname !== "/") {
+      return env.ASSETS.fetch(new Request(new URL("/", request.url), request));
+    }
+
     const response = await env.ASSETS.fetch(request);
     if (response.status !== 404 || request.method !== "GET") return response;
 
-    const url = new URL(request.url);
     if (url.pathname.startsWith("/api/")) return response;
-    return env.ASSETS.fetch(new Request(new URL("/index.html", request.url), request));
+    return env.ASSETS.fetch(new Request(new URL("/", request.url), request));
   },
 };
 
