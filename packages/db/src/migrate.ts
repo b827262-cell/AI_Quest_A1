@@ -303,6 +303,38 @@ const STATEMENTS = [
     ip_address TEXT,
     user_agent TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS student_users (
+    id TEXT PRIMARY KEY,
+    google_subject TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    avatar_url TEXT,
+    school_name TEXT,
+    grade_level TEXT,
+    profile_completed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS student_sessions (
+    id TEXT PRIMARY KEY,
+    token_digest TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    revoked_at TEXT,
+    ip_address TEXT,
+    user_agent TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS student_oauth_states (
+    id TEXT PRIMARY KEY,
+    state_digest TEXT NOT NULL UNIQUE,
+    verifier_ciphertext TEXT NOT NULL,
+    return_to TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS ai_evaluation_runs (
     id TEXT PRIMARY KEY,
     dataset_id TEXT NOT NULL,
@@ -658,6 +690,9 @@ const STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_ai_admin_audit_logs_created ON ai_admin_audit_logs(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_admin_sessions_username ON admin_sessions(username)`,
+  `CREATE INDEX IF NOT EXISTS idx_student_sessions_expires ON student_sessions(expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_student_sessions_user ON student_sessions(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_student_oauth_states_expires ON student_oauth_states(expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_evaluation_runs_dataset_created ON ai_evaluation_runs(dataset_id, dataset_version, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_evaluation_runs_mode_created ON ai_evaluation_runs(execution_mode, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_evaluation_runs_status_created ON ai_evaluation_runs(status, created_at)`,

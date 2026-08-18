@@ -381,6 +381,44 @@ export const adminSessions = sqliteTable("admin_sessions", {
   userAgent: text("user_agent")
 });
 
+/** Google-linked Student identities. Provider tokens are deliberately absent. */
+export const studentUsers = sqliteTable("student_users", {
+  id: text("id").primaryKey(),
+  googleSubject: text("google_subject").notNull().unique(),
+  email: text("email").notNull(),
+  displayName: text("display_name").notNull(),
+  avatarUrl: text("avatar_url"),
+  schoolName: text("school_name"),
+  gradeLevel: text("grade_level"),
+  profileCompleted: integer("profile_completed", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull()
+});
+
+/** Revocable Student browser sessions; only the token digest is persisted. */
+export const studentSessions = sqliteTable("student_sessions", {
+  id: text("id").primaryKey(),
+  tokenDigest: text("token_digest").notNull().unique(),
+  userId: text("user_id").notNull(),
+  createdAt: text("created_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  lastSeenAt: text("last_seen_at").notNull(),
+  revokedAt: text("revoked_at"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent")
+});
+
+/** One-time OAuth state and encrypted PKCE verifier; expires quickly. */
+export const studentOAuthStates = sqliteTable("student_oauth_states", {
+  id: text("id").primaryKey(),
+  stateDigest: text("state_digest").notNull().unique(),
+  verifierCiphertext: text("verifier_ciphertext").notNull(),
+  returnTo: text("return_to").notNull(),
+  createdAt: text("created_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  consumedAt: text("consumed_at")
+});
+
 /** Safe, offline evaluation run summaries. No question/answer/prompt payloads. */
 export const aiEvaluationRuns = sqliteTable("ai_evaluation_runs", {
   id: text("id").primaryKey(),
@@ -961,6 +999,9 @@ export type DbSchema = {
   aiCredentialDailyLimits: typeof aiCredentialDailyLimits;
   aiCredentialDailyUsage: typeof aiCredentialDailyUsage;
   aiCredentialDailyReservations: typeof aiCredentialDailyReservations;
+  studentUsers: typeof studentUsers;
+  studentSessions: typeof studentSessions;
+  studentOAuthStates: typeof studentOAuthStates;
 };
 
 export const schema = {
@@ -1007,5 +1048,8 @@ export const schema = {
   aiTokenPoolReservations,
   aiCredentialDailyLimits,
   aiCredentialDailyUsage,
-  aiCredentialDailyReservations
+  aiCredentialDailyReservations,
+  studentUsers,
+  studentSessions,
+  studentOAuthStates
 };

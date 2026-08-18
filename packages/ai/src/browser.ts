@@ -1,6 +1,7 @@
 /** Explicit browser-safe entry. It contains no Node built-ins or secrets. */
 export * from "./gateway/pricing";
 export type { AiProviderId } from "./gateway/ai-types";
+export * from "./rag";
 
 // Pure feature-gate helpers only; no filesystem, provider or credential access.
 export {

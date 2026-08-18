@@ -1,5 +1,6 @@
 export * from "./provider";
 export * from "./ai-client";
+export * from "./rag";
 export { MockAiProvider } from "./providers/mock.provider";
 export { GeminiAiProvider } from "./providers/gemini.provider";
 export { OpenAiCompatibleProvider } from "./providers/openai-compatible.provider";

@@ -1,7 +1,6 @@
 import { Link } from "react-router-dom";
 import type { StudentBook } from "../bookDisplay";
 import { getBookAuthorName, getBookCoverUrl } from "../bookDisplay";
-import { readStudentProfile } from "../readerProfile";
 
 /**
  * Reader-specific top bar (below the global StudentHeader). Compact: back link,
@@ -15,7 +14,6 @@ export function ReaderTopBar({
   book: StudentBook;
   onToggleHistory: () => void;
 }) {
-  const profile = readStudentProfile();
   const cover = getBookCoverUrl(book);
 
   return (
@@ -41,7 +39,7 @@ export function ReaderTopBar({
 
       <div className="reader-topbar-right">
         <span className="student-points">
-          <strong>{profile.points}</strong> 點
+          <strong>0</strong> 點
         </span>
       </div>
     </div>

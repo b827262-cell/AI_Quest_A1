@@ -18,3 +18,12 @@ export interface GoogleOAuthAdapter {
 export function requireRole(_role: Role) {
   return true;
 }
+
+export type {
+  StudentAuthErrorCode,
+  StudentAuthMeResponse,
+  StudentProfile,
+  StudentRedirectReason,
+  StudentSession,
+  StudentUser
+} from "./shared";
