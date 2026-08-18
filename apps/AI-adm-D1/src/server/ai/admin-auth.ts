@@ -37,6 +37,7 @@ export type AdminAuthConfig = {
   passwordHash: string | undefined;
   sessionTtlMs: number;
   sessionCookie: string;
+  sessionCookieDomain: string | undefined;
   secureCookies: boolean;
   /** Retained as a compatibility field; insecure development bypass is gone. */
   allowInsecureDev: false;
@@ -55,6 +56,7 @@ export function resolveAdminAuthConfig(env: NodeJS.ProcessEnv = process.env): Ad
       ? Math.floor(configuredTtl)
       : DEFAULT_ADMIN_SESSION_TTL_MS,
     sessionCookie: env.ADMIN_SESSION_COOKIE?.trim() || ADMIN_SESSION_COOKIE,
+    sessionCookieDomain: env.ADMIN_SESSION_COOKIE_DOMAIN?.trim() || undefined,
     secureCookies: env.ADMIN_SESSION_SECURE !== "false",
     allowInsecureDev: false
   };
@@ -285,7 +287,8 @@ function sessionCookieOptions(config: AdminAuthConfig) {
     secure: config.secureCookies,
     sameSite: "strict" as const,
     path: "/",
-    maxAge: config.sessionTtlMs
+    maxAge: config.sessionTtlMs,
+    ...(config.sessionCookieDomain ? { domain: config.sessionCookieDomain } : {})
   };
 }
 
@@ -295,7 +298,8 @@ function csrfCookieOptions(config: AdminAuthConfig) {
     secure: config.secureCookies,
     sameSite: "strict" as const,
     path: "/",
-    maxAge: config.sessionTtlMs
+    maxAge: config.sessionTtlMs,
+    ...(config.sessionCookieDomain ? { domain: config.sessionCookieDomain } : {})
   };
 }
 

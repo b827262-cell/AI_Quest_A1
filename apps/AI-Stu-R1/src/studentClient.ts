@@ -14,6 +14,7 @@ import type {
   StudentAuthMeResponse,
   StudentProfile
 } from "@ai-smartbook/auth/browser";
+import { resolveStudentAdminApiUrl, resolveStudentApiUrl } from "./apiBase";
 
 export { type StudentAuthMeResponse, type StudentProfile } from "@ai-smartbook/auth/browser";
 
@@ -184,10 +185,12 @@ export interface BookRagAnswer {
   unsupportedClaimCount?: number;
 }
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+type ApiUrlResolver = (path: string) => string;
+
+async function http<T>(path: string, init?: RequestInit, resolveUrl: ApiUrlResolver = resolveStudentApiUrl): Promise<T> {
+  const res = await fetch(resolveUrl(path), {
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
-    credentials: "same-origin",
+    credentials: "include",
     ...init
   });
   if (!res.ok) {
@@ -198,13 +201,18 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function httpWithSession<T>(path: string, sessionId: string, init?: RequestInit): Promise<T> {
+async function httpWithSession<T>(
+  path: string,
+  sessionId: string,
+  init?: RequestInit,
+  resolveUrl: ApiUrlResolver = resolveStudentApiUrl
+): Promise<T> {
   const headers = new Headers(init?.headers as HeadersInit | undefined);
   headers.set("X-Student-Session-Id", sessionId);
   if (init?.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(path, { ...init, credentials: "same-origin", headers });
+  const res = await fetch(resolveUrl(path), { ...init, credentials: "include", headers });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     throw new StudentApiError(res.status, data.error || "STUDENT_API_ERROR", data.message || data.error || `${res.status} ${res.statusText}`);
@@ -215,17 +223,19 @@ async function httpWithSession<T>(path: string, sessionId: string, init?: Reques
 async function httpWithOptionalSession<T>(
   path: string,
   sessionId: string | undefined,
-  init?: RequestInit
+  init?: RequestInit,
+  resolveUrl: ApiUrlResolver = resolveStudentApiUrl
 ): Promise<T> {
   if (!sessionId) {
-    return http<T>(path, init);
+    return http<T>(path, init, resolveUrl);
   }
-  return httpWithSession<T>(path, sessionId, init);
+  return httpWithSession<T>(path, sessionId, init, resolveUrl);
 }
 
 async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
-  const res = await fetch(path, {
+  const res = await fetch(resolveStudentApiUrl(path), {
     headers: { "X-Student-Session-Id": sessionId },
+    credentials: "include",
     cache: "no-store"
   });
   if (!res.ok) {
@@ -236,8 +246,9 @@ async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
 }
 
 /**
- * Student-facing API client. It only talks to /api/student/* — it never stores
- * an API key and never calls an AI SDK directly.
+ * Student-facing API client. It keeps primary Student API calls separate from
+ * the central Admin API's public/read surfaces, never stores an API key, and
+ * never calls an AI SDK directly.
  */
 export const studentClient = {
   getStudentMe: () => http<StudentAuthMeResponse>("/api/student/auth/me"),
@@ -252,7 +263,7 @@ export const studentClient = {
       body: JSON.stringify(body)
     }),
 
-  getPublicSiteConfig: () => http<PublicSiteConfig>("/api/public/site-config"),
+  getPublicSiteConfig: () => http<PublicSiteConfig>("/api/public/site-config", undefined, resolveStudentAdminApiUrl),
 
   askAsGuest: (body: {
     question: string;
@@ -264,7 +275,7 @@ export const studentClient = {
       method: "POST",
       body: JSON.stringify(body),
       signal
-    }),
+    }, resolveStudentAdminApiUrl),
 
   // Restore a saved guest answer. The recovery token is sent via a header
   // (never in the URL query string) and authorizes the restore; IP is not an
@@ -272,13 +283,13 @@ export const studentClient = {
   getSavedGuestAnswer: (requestId: string, recoveryToken: string) =>
     http<GuestAskResponse>(`/api/public/guest-ask/${encodeURIComponent(requestId)}`, {
       headers: { "x-guest-recovery-token": recoveryToken }
-    }),
+    }, resolveStudentAdminApiUrl),
 
   sendGuestFeedback: (body: { requestId: string; helpful: boolean }) =>
     http<{ accepted: boolean }>("/api/public/guest-feedback", {
       method: "POST",
       body: JSON.stringify(body)
-    }),
+    }, resolveStudentAdminApiUrl),
 
   listBooks: () => http<{ mode: string; books: Book[] }>("/api/student/books"),
 
@@ -288,10 +299,10 @@ export const studentClient = {
    * response were already validated server-side and are safe to render.
    */
   askBookRag: async (bookId: string, body: { query: string; conversationId?: string }, signal?: AbortSignal): Promise<BookRagAnswer> => {
-    const res = await fetch(`/api/student/books/${encodeURIComponent(bookId)}/rag-ask`, {
+    const res = await fetch(resolveStudentApiUrl(`/api/student/books/${encodeURIComponent(bookId)}/rag-ask`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
+      credentials: "include",
       body: JSON.stringify(body),
       signal
     });
@@ -310,7 +321,7 @@ export const studentClient = {
   getBook: (bookId: string) => http<{ book: BookDetail }>(`/api/student/books/${bookId}`),
 
   getOutline: (bookId: string) =>
-    http<ReaderOutlineResponse>(`/api/student/books/${bookId}/outline`),
+    http<ReaderOutlineResponse>(`/api/student/books/${bookId}/outline`, undefined, resolveStudentAdminApiUrl),
 
   getContents: (bookId: string) =>
     http<{ contents: BookContent[] }>(`/api/student/books/${bookId}/contents`),
@@ -335,35 +346,42 @@ export const studentClient = {
 
   getBookChatSession: (bookId: string, sessionId: string) =>
     http<{ sessionId: string; messages: ChatMessage[] }>(
-      `/api/student/books/${bookId}/chat-sessions/${sessionId}`
+      `/api/student/books/${bookId}/chat-sessions/${sessionId}`,
+      undefined,
+      resolveStudentAdminApiUrl
     ),
 
   getAppearanceSettings: () =>
-    http<{ settings: AppearanceSettings }>("/api/appearance-settings"),
+    http<{ settings: AppearanceSettings }>("/api/appearance-settings", undefined, resolveStudentAdminApiUrl),
 
   // ---- Smart Notes -------------------------------------------------------
   listNotes: (bookId: string) =>
-    http<{ notes: SmartBookNote[] }>(`/api/student/books/${bookId}/notes`),
+    http<{ notes: SmartBookNote[] }>(`/api/student/books/${bookId}/notes`, undefined, resolveStudentAdminApiUrl),
 
   createNote: (bookId: string, input: CreateSmartBookNoteInput) =>
     http<{ note: SmartBookNote }>(`/api/student/books/${bookId}/notes`, {
       method: "POST",
       body: JSON.stringify(input)
-    }),
+    }, resolveStudentAdminApiUrl),
 
   updateNote: (bookId: string, noteId: string, input: UpdateSmartBookNoteInput) =>
     http<{ note: SmartBookNote }>(`/api/student/books/${bookId}/notes/${noteId}`, {
       method: "PATCH",
       body: JSON.stringify(input)
-    }),
+    }, resolveStudentAdminApiUrl),
 
   deleteNote: (bookId: string, noteId: string) =>
     http<{ deleted: boolean }>(`/api/student/books/${bookId}/notes/${noteId}`, {
       method: "DELETE"
-    }),
+    }, resolveStudentAdminApiUrl),
 
   getBookProgressSummary: (bookId: string, sessionId: string) =>
-    httpWithSession<ReaderProgressSummary>(`/api/student/books/${bookId}/progress-summary`, sessionId),
+    httpWithSession<ReaderProgressSummary>(
+      `/api/student/books/${bookId}/progress-summary`,
+      sessionId,
+      undefined,
+      resolveStudentAdminApiUrl
+    ),
 
   saveBookProgress: (bookId: string, payload: SaveReaderProgressPayload, sessionId: string) =>
     httpWithSession<ReaderProgressSummary>(
@@ -372,7 +390,8 @@ export const studentClient = {
       {
         method: "POST",
         body: JSON.stringify(payload)
-      }
+      },
+      resolveStudentAdminApiUrl
     ),
 
   completeReaderAction: (bookId: string, payload: CompleteReaderActionPayload, sessionId: string) =>
@@ -382,7 +401,8 @@ export const studentClient = {
       {
         method: "POST",
         body: JSON.stringify(payload)
-      }
+      },
+      resolveStudentAdminApiUrl
     ),
 
   getKnowledgePoints: (
@@ -402,7 +422,9 @@ export const studentClient = {
       completedPointsCount: number;
     }>(
       `/api/student/books/${bookId}/knowledge-points${suffix}`,
-      sessionId
+      sessionId,
+      undefined,
+      resolveStudentAdminApiUrl
     );
   },
 
@@ -412,13 +434,23 @@ export const studentClient = {
       chapterId: string;
       points: KnowledgePoint[];
       completedPointsCount: number;
-    }>(`/api/student/books/${bookId}/chapters/${chapterId}/knowledge-points`, sessionId),
+    }>(
+      `/api/student/books/${bookId}/chapters/${chapterId}/knowledge-points`,
+      sessionId,
+      undefined,
+      resolveStudentAdminApiUrl
+    ),
 
   getKnowledgePoint: (bookId: string, pointId: string, sessionId?: string) =>
     httpWithOptionalSession<{
       bookId: string;
       point: KnowledgePoint;
-    }>(`/api/student/books/${bookId}/knowledge-points/${pointId}`, sessionId),
+    }>(
+      `/api/student/books/${bookId}/knowledge-points/${pointId}`,
+      sessionId,
+      undefined,
+      resolveStudentAdminApiUrl
+    ),
 
   completeKnowledgePoint: (bookId: string, pointId: string, sessionId: string) =>
     httpWithSession<{
@@ -428,5 +460,5 @@ export const studentClient = {
     }>(`/api/student/books/${bookId}/knowledge-points/${pointId}/complete`, sessionId, {
       method: "POST",
       body: "{}"
-    })
+    }, resolveStudentAdminApiUrl)
 };

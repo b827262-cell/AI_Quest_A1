@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { resolveStudentApiUrl } from "../apiBase";
 import { PrimaryButton } from "../components/ui/Buttons";
 import { useStudentAuth } from "../student-auth";
 
@@ -23,7 +24,7 @@ export function LoginPage() {
   function beginGoogleLogin() {
     setError("");
     try {
-      window.location.assign(`/api/student/auth/google/start?returnTo=${encodeURIComponent(from)}`);
+      window.location.assign(resolveStudentApiUrl(`/api/student/auth/google/start?returnTo=${encodeURIComponent(from)}`));
     } catch {
       setError("無法啟動 Google 登入，請稍後再試。" );
     }

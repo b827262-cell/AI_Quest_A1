@@ -26,10 +26,12 @@ export interface StudentAuthConfig {
   googleClientId: string | undefined;
   googleClientSecret: string | undefined;
   googleRedirectUri: string | undefined;
+  webOrigin: string | undefined;
   sessionSecret: string | undefined;
   sessionTtlMs: number;
   oauthStateTtlMs: number;
   sessionCookie: string;
+  sessionCookieDomain: string | undefined;
   secureCookies: boolean;
   allowedOrigins: Set<string>;
   googleAuthorizationEndpoint: string;
@@ -121,6 +123,7 @@ export function resolveStudentAuthConfig(env: NodeJS.ProcessEnv = process.env): 
     googleClientId: env.GOOGLE_CLIENT_ID?.trim() || undefined,
     googleClientSecret: env.GOOGLE_CLIENT_SECRET || undefined,
     googleRedirectUri: env.GOOGLE_REDIRECT_URI?.trim() || undefined,
+    webOrigin: env.STUDENT_WEB_ORIGIN?.trim().replace(/\/$/, "") || undefined,
     sessionSecret: env.STUDENT_SESSION_SECRET || env.SESSION_SECRET || undefined,
     sessionTtlMs: Number.isFinite(configuredSessionTtl) && configuredSessionTtl > 0
       ? Math.floor(configuredSessionTtl)
@@ -129,6 +132,7 @@ export function resolveStudentAuthConfig(env: NodeJS.ProcessEnv = process.env): 
       ? Math.floor(configuredStateTtl)
       : DEFAULT_STUDENT_OAUTH_STATE_TTL_MS,
     sessionCookie: env.STUDENT_SESSION_COOKIE?.trim() || STUDENT_SESSION_COOKIE,
+    sessionCookieDomain: env.STUDENT_SESSION_COOKIE_DOMAIN?.trim() || undefined,
     // Secure is deliberately not configurable off. Local HTTP tests can still
     // inspect the Set-Cookie boundary; real browser deployments must use HTTPS.
     secureCookies: true,
@@ -147,6 +151,9 @@ export function assertStudentAuthConfig(config: StudentAuthConfig): void {
   }
   if (!config.sessionSecret || config.sessionSecret.length < 32) {
     throw new Error("production Student auth requires a 32-character session secret");
+  }
+  if (config.webOrigin && !config.webOrigin.startsWith("https://")) {
+    throw new Error("production Student web origin must use HTTPS");
   }
   for (const endpoint of [config.googleAuthorizationEndpoint, config.googleTokenEndpoint, config.googleUserinfoEndpoint]) {
     if (!endpoint.startsWith("https://")) throw new Error("production Google auth endpoints must use HTTPS");
@@ -403,8 +410,16 @@ export function studentSessionCookieOptions(config: StudentAuthConfig): {
   sameSite: "strict";
   path: string;
   maxAge: number;
+  domain?: string;
 } {
-  return { httpOnly: true, secure: config.secureCookies, sameSite: "strict", path: "/", maxAge: config.sessionTtlMs };
+  return {
+    httpOnly: true,
+    secure: config.secureCookies,
+    sameSite: "strict",
+    path: "/",
+    maxAge: config.sessionTtlMs,
+    ...(config.sessionCookieDomain ? { domain: config.sessionCookieDomain } : {})
+  };
 }
 
 export function clearStudentSessionCookieOptions(config: StudentAuthConfig) {

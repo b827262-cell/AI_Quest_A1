@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { resolveStudentFlowApiUrl } from "../apiBase";
 
 interface LatestRecord {
   日期?: string;
@@ -91,7 +92,7 @@ export function InstitutionalFlowPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/institutional-flow")
+    fetch(resolveStudentFlowApiUrl("/api/institutional-flow"))
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<FlowData>;

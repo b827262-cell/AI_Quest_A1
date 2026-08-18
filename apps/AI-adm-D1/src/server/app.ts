@@ -327,7 +327,9 @@ app.get("/health/ready", (_req, res) => {
     res.status(503).json({ status: "not_ready" });
   }
 });
-app.use("/api/admin", createAdminOriginMiddleware(env));
+// All browser-facing API routes need the same exact-origin CORS boundary:
+// the student SPA reads public settings/guest endpoints from this API too.
+app.use("/api", createAdminOriginMiddleware(env));
 // Serve uploaded appearance images read-only (rides the /api proxy in both apps).
 app.use("/api/uploads/appearance", express.static(APPEARANCE_UPLOAD_DIR));
 

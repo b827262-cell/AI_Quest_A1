@@ -20,6 +20,7 @@ import type {
 } from "@ai-smartbook/schema";
 import type { SiteConfig, SiteConfigUpdate } from "@ai-smartbook/schema";
 import { ADMIN_CSRF_COOKIE } from "./admin-auth-contract";
+import { resolveAdminApiUrl } from "./apiBase";
 
 export interface ChapterInput {
   title: string;
@@ -282,9 +283,9 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     const csrfToken = readCsrfCookie();
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
   }
-  const res = await fetch(path, {
+  const res = await fetch(resolveAdminApiUrl(path), {
     ...init,
-    credentials: "same-origin",
+    credentials: "include",
     headers
   });
   if (!res.ok) {
@@ -780,8 +781,8 @@ export const adminApi = {
       headers: { "x-confirm-delete": "true" }
     }),
   downloadAiEvaluationReport: async (id: string, format: "json" | "markdown") => {
-    const response = await fetch(`/api/admin/ai-evaluations/${encodeURIComponent(id)}/report?format=${format}`, {
-      credentials: "same-origin"
+    const response = await fetch(resolveAdminApiUrl(`/api/admin/ai-evaluations/${encodeURIComponent(id)}/report?format=${format}`), {
+      credentials: "include"
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as { error?: string };

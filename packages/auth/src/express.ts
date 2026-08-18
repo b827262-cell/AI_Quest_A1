@@ -53,12 +53,46 @@ function publicMe(auth: StudentAuthService, rawToken: string | undefined): Stude
   return response;
 }
 
+function studentWebTarget(config: StudentAuthConfig, target: string): string {
+  return config.webOrigin ? new URL(target, `${config.webOrigin}/`).toString() : target;
+}
+
 function rejectOrigin(req: Request, res: Response, config: StudentAuthConfig): boolean {
   if (!studentOriginAllowed(config, req.header("origin"))) {
     res.status(403).json({ error: "STUDENT_ORIGIN_NOT_ALLOWED" });
     return true;
   }
   return false;
+}
+
+/**
+ * CORS boundary for the standalone Student API. Origins are reflected only
+ * after an exact allowlist match; no wildcard or credentialed wildcard is
+ * ever emitted.
+ */
+export function createStudentOriginMiddleware(config: StudentAuthConfig): RequestHandler {
+  return (req, res, next) => {
+    const origin = req.header("origin");
+    if (origin && !studentOriginAllowed(config, origin)) {
+      res.status(403).json({ error: "student origin is not allowed" });
+      return;
+    }
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, X-Student-Session-Id, X-Guest-Recovery-Token"
+      );
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    }
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  };
 }
 
 export function createStudentSessionMiddleware(
@@ -115,8 +149,10 @@ export function createStudentAuthRouter(
       });
       setStudentSessionCookie(res, config, result.sessionToken);
       res.setHeader("Cache-Control", "no-store");
-      const target = result.profile.profileCompleted ? result.returnTo : `/profile-completion?next=${encodeURIComponent(result.returnTo)}`;
-      res.redirect(302, target);
+      const target = result.profile.profileCompleted
+        ? result.returnTo
+        : `/profile-completion?next=${encodeURIComponent(result.returnTo)}`;
+      res.redirect(302, studentWebTarget(config, target));
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       const stateError = message === "oauth state is invalid";
