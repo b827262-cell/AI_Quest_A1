@@ -20,7 +20,7 @@ delete workerConfig.dev;
 workerConfig.main = "./server/index.js";
 workerConfig.assets = {
   ...(workerConfig.assets ?? {}),
-  directory: ".",
+  directory: "./client",
   not_found_handling: "single-page-application"
 };
 
@@ -28,6 +28,5 @@ await mkdir(resolve(dist, "server"), { recursive: true });
 await writeFile(resolve(dist, "server/index.js"), workerCode);
 await writeFile(resolve(dist, "wrangler.json"), `${JSON.stringify(workerConfig)}\n`);
 await rm(workerOutput, { recursive: true, force: true });
-await rm(resolve(dist, "client"), { recursive: true, force: true });
 
 console.log(`Normalized Sites output for ${projectRoot}`);
