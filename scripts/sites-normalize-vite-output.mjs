@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const [projectRoot, workerDirectory] = process.argv.slice(2);
@@ -11,6 +11,17 @@ const dist = resolve(projectRoot, "dist");
 const workerOutput = resolve(dist, workerDirectory);
 const workerSource = resolve(workerOutput, "index.js");
 const workerConfigSource = resolve(workerOutput, "wrangler.json");
+const clientOutput = resolve(dist, "client");
+const assetDirectory = resolve(clientOutput, "assets");
+
+try {
+  await access(resolve(clientOutput, "index.html"));
+  await access(assetDirectory);
+} catch {
+  throw new Error(
+    `Unsupported Vite output layout: expected ${clientOutput}/index.html and ${assetDirectory}/`
+  );
+}
 
 const workerCode = await readFile(workerSource, "utf8");
 const workerConfig = JSON.parse(await readFile(workerConfigSource, "utf8"));
@@ -29,7 +40,6 @@ await writeFile(resolve(dist, "server/index.js"), workerCode);
 await writeFile(resolve(dist, "wrangler.json"), `${JSON.stringify(workerConfig)}\n`);
 await rm(workerOutput, { recursive: true, force: true });
 
-const assetDirectory = resolve(dist, "assets");
 for (const filename of await readdir(assetDirectory)) {
   if (!filename.endsWith(".js")) continue;
   const assetPath = resolve(assetDirectory, filename);

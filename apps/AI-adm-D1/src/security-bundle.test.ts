@@ -9,9 +9,9 @@ function requireBuiltBundle(): void {
   // so it needs `pnpm build` to have run before `pnpm test`. Fail with an
   // actionable message instead of an opaque assertion (release gates must
   // always order build before test; never rely on a stale local dist/).
-  if (!existsSync(join(distRoot, "index.html"))) {
+  if (!existsSync(join(distRoot, "client", "index.html"))) {
     throw new Error(
-      "dist/index.html not found: the admin production bundle has not been built. "
+      "dist/client/index.html not found: the admin production bundle has not been built. "
       + "Run `pnpm build` (or `pnpm --filter AI-adm-D1 build`) BEFORE `pnpm test`. "
       + "Release gates must keep the build -> test order."
     );
@@ -21,7 +21,9 @@ function requireBuiltBundle(): void {
 describe("admin production bundle security", () => {
   it("does not contain the server-only ADMIN_API_TOKEN name or value", () => {
     requireBuiltBundle();
-    const files = [join(distRoot, "index.html"), ...readdirSync(join(distRoot, "assets")).map((file) => join(distRoot, "assets", file))];
+    const clientRoot = join(distRoot, "client");
+    const assetRoot = join(clientRoot, "assets");
+    const files = [join(clientRoot, "index.html"), ...readdirSync(assetRoot).map((file) => join(assetRoot, file))];
     const token = process.env.ADMIN_API_TOKEN?.trim();
     for (const file of files) {
       const contents = readFileSync(file, "utf8");
