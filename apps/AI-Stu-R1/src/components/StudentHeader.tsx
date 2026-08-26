@@ -128,7 +128,7 @@ export function StudentHeader() {
       }}
     >
       <div className="student-header-inner">
-        <Link className="brand-link" to="/books" style={{ gap: a.studentHeaderBrandGap }}>
+        <Link className="brand-link" to="/dashboard" style={{ gap: a.studentHeaderBrandGap }}>
           <BrandLogo url={a.studentHeaderBrandLogoUrl} size={a.studentHeaderBrandLogoSize} />
           <span style={{ color: a.studentHeaderBrandTextColor, fontSize: a.studentHeaderBrandFontSize }}>
             {a.studentHeaderBrandText}
@@ -137,7 +137,7 @@ export function StudentHeader() {
 
         <Link
           className="home-pill"
-          to="/books"
+          to="/dashboard"
           style={{
             background: a.studentHeaderHomeButtonBg,
             color: a.studentHeaderHomeButtonTextColor,
