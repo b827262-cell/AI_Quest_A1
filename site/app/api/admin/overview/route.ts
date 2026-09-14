@@ -1,5 +1,5 @@
 import { getAuthFromRequest } from "../../auth-helper";
-import { getDb } from "../../../../db";
+import { getDb, isProductionEnvironment } from "../../../../db";
 import { adminOverview } from "../../../../db/schema";
 
 export async function GET(request: Request) {
@@ -35,8 +35,14 @@ export async function GET(request: Request) {
       if (row.metricName === "總對話數") defaultTotals.totalSessions = row.metricValue;
       if (row.metricName === "總訊息數") defaultTotals.totalMessages = row.metricValue;
     }
-  } catch {
-    // Graceful fallback to default synthetic metrics
+  } catch (error) {
+    if (isProductionEnvironment()) {
+      return Response.json(
+        { error: "database_unavailable", message: "D1 database binding 'DB' is unavailable in production" },
+        { status: 503 }
+      );
+    }
+    // Graceful fallback to default synthetic metrics in dev/test
   }
 
   return Response.json({

@@ -4,10 +4,13 @@ export type AuthContext = {
   email: string | null;
   displayName: string | null;
   role: "admin" | "student" | "guest";
+  isDemo: boolean;
 };
 
 export function getAuthFromRequest(request: Request): AuthContext {
   const headers = request.headers;
+  const isProd = process.env.NODE_ENV === "production";
+  const demoHeader = headers.get("x-demo-mode") === "true";
   const userId = headers.get("oai-authenticated-user-id");
   const email = headers.get("oai-authenticated-user-email");
   const roleHeader = headers.get("oai-authenticated-user-role");
@@ -22,6 +25,7 @@ export function getAuthFromRequest(request: Request): AuthContext {
     displayName = email;
   }
 
+  // 1. Unauthenticated
   if (!userId && !email && !adminKey) {
     return {
       isAuthenticated: false,
@@ -29,10 +33,11 @@ export function getAuthFromRequest(request: Request): AuthContext {
       email: null,
       displayName: null,
       role: "guest",
+      isDemo: demoHeader || !isProd,
     };
   }
 
-  // Determine role
+  // 2. Role determination
   let role: "admin" | "student" = "student";
   if (
     roleHeader === "admin" ||
@@ -48,5 +53,6 @@ export function getAuthFromRequest(request: Request): AuthContext {
     email: email ?? (role === "admin" ? "admin.tester@synthetic.ai-smartbook.test" : "student.alice@synthetic.ai-smartbook.test"),
     displayName: displayName ?? (role === "admin" ? "合成管理員" : "測試學生 Alice"),
     role,
+    isDemo: demoHeader || !isProd,
   };
 }
