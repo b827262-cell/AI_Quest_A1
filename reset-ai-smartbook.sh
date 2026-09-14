@@ -45,7 +45,7 @@ LOG_DIR="$PROJECT_ROOT/logs/dev"
 ADMIN_API_CMD="${ADMIN_API_CMD:-pnpm --filter AI-adm-D1 server:dev}"
 ADMIN_WEB_CMD="${ADMIN_WEB_CMD:-pnpm --filter AI-adm-D1 dev}"
 STUDENT_API_CMD="${STUDENT_API_CMD:-pnpm --filter AI-Stu-R1 server:dev}"
-STUDENT_WEB_CMD="${STUDENT_WEB_CMD:-pnpm --filter AI-Stu-R1 dev}"
+STUDENT_WEB_CMD="${STUDENT_WEB_CMD:-STUDENT_API_TARGET=http://127.0.0.1:4310 pnpm --filter AI-Stu-R1 dev}"
 
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
@@ -200,37 +200,64 @@ verify_admin_readiness() {
 }
 
 verify_admin_proxy() {
-  local username password login_payload login_status proxy_status headers session_cookie csrf_cookie cookie_header
+  local username password login_payload login_status proxy_status headers session_cookie csrf_cookie cookie_header body_file
   username="$(read_env_value ADMIN_USERNAME)"
   password="$(read_env_value ADMIN_PASSWORD)"
-  if [[ -z "$username" || -z "$password" ]]; then
-    fail "Vite proxy readiness 無法驗證：ADMIN_USERNAME／ADMIN_PASSWORD 未設定。"
-    return 1
+
+  # Mode A: Plaintext credentials available (Local development mode) -> Full login probe
+  if [[ -n "$username" && -n "$password" ]]; then
+    headers="$RUN_DIR/admin-proxy-headers.$$.tmp"
+    rm -f "$headers"
+    login_payload="$(ADMIN_LOGIN_USER="$username" ADMIN_LOGIN_PASSWORD="$password" node -e 'process.stdout.write(JSON.stringify({username: process.env.ADMIN_LOGIN_USER, password: process.env.ADMIN_LOGIN_PASSWORD}))')"
+    if ! login_status="$(curl -sS --max-time 5 -D "$headers" -o /dev/null -w '%{http_code}' \
+      -H 'Origin: http://127.0.0.1:5174' -H 'Content-Type: application/json' \
+      --data-binary "$login_payload" "${URLS[admin-web]}/api/admin/auth/login")"; then
+      login_status="000"
+    fi
+    session_cookie="$(sed -nE 's/^[Ss]et-[Cc]ookie:[[:space:]]*(ai_admin_session=[^;]+).*/\1/p' "$headers" | head -n 1)"
+    csrf_cookie="$(sed -nE 's/^[Ss]et-[Cc]ookie:[[:space:]]*(ai_admin_csrf=[^;]+).*/\1/p' "$headers" | head -n 1)"
+    cookie_header="$session_cookie; $csrf_cookie"
+    if [[ "$login_status" == "200" && -n "$session_cookie" && -n "$csrf_cookie" ]]; then
+      proxy_status="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+        -H "Cookie: $cookie_header" "${URLS[admin-web]}/api/admin/accounts" 2>/dev/null || printf '000')"
+    else
+      proxy_status="000"
+    fi
+    rm -f "$headers"
+    if [[ "$proxy_status" != "200" ]]; then
+      fail "Vite proxy readiness 失敗（Full login probe）：login=$login_status status=$proxy_status"
+      return 1
+    fi
+    return 0
   fi
 
+  # Mode B: Hardened / production-style configuration (no plaintext password) -> Unauthenticated proxy probe
   headers="$RUN_DIR/admin-proxy-headers.$$.tmp"
-  rm -f "$headers"
-  login_payload="$(ADMIN_LOGIN_USER="$username" ADMIN_LOGIN_PASSWORD="$password" node -e 'process.stdout.write(JSON.stringify({username: process.env.ADMIN_LOGIN_USER, password: process.env.ADMIN_LOGIN_PASSWORD}))')"
-  if ! login_status="$(curl -sS --max-time 5 -D "$headers" -o /dev/null -w '%{http_code}' \
-    -H 'Origin: http://127.0.0.1:5174' -H 'Content-Type: application/json' \
-    --data-binary "$login_payload" "${URLS[admin-web]}/api/admin/auth/login")"; then
-    login_status="000"
-  fi
-  session_cookie="$(sed -nE 's/^[Ss]et-[Cc]ookie:[[:space:]]*(ai_admin_session=[^;]+).*/\1/p' "$headers" | head -n 1)"
-  csrf_cookie="$(sed -nE 's/^[Ss]et-[Cc]ookie:[[:space:]]*(ai_admin_csrf=[^;]+).*/\1/p' "$headers" | head -n 1)"
-  cookie_header="$session_cookie; $csrf_cookie"
-  if [[ "$login_status" == "200" && -n "$session_cookie" && -n "$csrf_cookie" ]]; then
-    proxy_status="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
-      -H "Cookie: $cookie_header" "${URLS[admin-web]}/api/admin/accounts" 2>/dev/null || printf '000')"
-  else
+  body_file="$RUN_DIR/admin-proxy-body.$$.tmp"
+  rm -f "$headers" "$body_file"
+
+  if ! proxy_status="$(curl -sS --max-time 5 -D "$headers" -o "$body_file" -w '%{http_code}' \
+    -H 'Accept: application/json' \
+    "${URLS[admin-web]}/api/admin/auth/me" 2>/dev/null)"; then
     proxy_status="000"
   fi
-  rm -f "$headers"
-  if [[ "$proxy_status" != "200" ]]; then
-    fail "Vite proxy readiness 失敗：login=$login_status status=$proxy_status"
-    return 1
+
+  local content_type is_json_auth_error
+  content_type="$(grep -i '^content-type:' "$headers" 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+  is_json_auth_error=0
+  if grep -q '"error":"admin authentication required"' "$body_file" 2>/dev/null; then
+    is_json_auth_error=1
   fi
-  return 0
+
+  rm -f "$headers" "$body_file"
+
+  # 401 + JSON auth error confirms: Vite -> Proxy -> Admin API -> AdminAuthMiddleware responded
+  if [[ "$proxy_status" == "401" && "$content_type" == *"application/json"* && "$is_json_auth_error" -eq 1 ]]; then
+    return 0
+  fi
+
+  fail "Vite proxy readiness 失敗（Unauthenticated probe）：status=$proxy_status content_type=$content_type is_json_error=$is_json_auth_error"
+  return 1
 }
 
 kill_port() {

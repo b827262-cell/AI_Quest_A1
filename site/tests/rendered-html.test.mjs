@@ -20,9 +20,9 @@ test("renders the AI-SmartBook learning homepage", async () => {
 
   const html = await response.text();
   assert.match(html, /AI-SmartBook/);
-  assert.match(html, /把每一次閱讀/);
-  assert.match(html, /試用學習助教/);
-  assert.match(html, /公開 AI 提問/);
-  assert.match(html, /核心體驗完成/);
+  assert.match(html, /今天想學習什麼？/);
+  assert.match(html, /快速理解/);
+  assert.match(html, /教材連結/);
+  assert.match(html, /學習留存/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview|react-loading-skeleton/);
 });

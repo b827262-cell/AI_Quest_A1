@@ -22,6 +22,7 @@ data/*.sqlite-*
 uploads
 exports/*.json
 release-artifacts/
+*.tar.gz
 tmp_*.ts
 .aider*
 
