@@ -24,15 +24,26 @@ export function normalizeTimezone(timezone: string | null | undefined): string {
   return value;
 }
 
-export function localParts(date: Date, timezone: string): { year: number; month: number; day: number } {
+export function localParts(date: Date, timezone: string): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     year: "numeric",
     month: "2-digit",
-    day: "2-digit"
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
   }).formatToParts(date);
   const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return { year: Number(value.year), month: Number(value.month), day: Number(value.day) };
+  return {
+    year: Number(value.year),
+    month: Number(value.month),
+    day: Number(value.day),
+    hour: Number(value.hour === "24" ? 0 : value.hour),
+    minute: Number(value.minute),
+    second: Number(value.second)
+  };
 }
 
 /** Daily date key (YYYY-MM-DD) in the given timezone. */
@@ -45,11 +56,11 @@ export function localDateKey(date: Date, timezone: string): string {
 
 /** Convert a local midnight to UTC, including DST-aware timezones. */
 export function localMidnightUtc(year: number, month: number, day: number, timezone: string): Date {
-  const target = Date.UTC(year, month - 1, day);
+  const target = Date.UTC(year, month - 1, day, 0, 0, 0);
   let candidate = target;
   for (let i = 0; i < 4; i += 1) {
     const parts = localParts(new Date(candidate), timezone);
-    const observedAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day);
+    const observedAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
     candidate = target - (observedAsUtc - candidate);
   }
   return new Date(candidate);
