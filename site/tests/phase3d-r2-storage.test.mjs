@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 class TestMockR2Bucket {
   constructor() {
     this.objects = new Map();
+    this.failDelete = false;
   }
 
   async put(key, value, options) {
@@ -51,7 +52,21 @@ class TestMockR2Bucket {
     };
   }
 
+  async head(key) {
+    const item = this.objects.get(key);
+    if (!item) return null;
+    return {
+      key,
+      size: item.body.length,
+      etag: item.etag,
+      httpEtag: `"${item.etag}"`,
+      httpMetadata: item.httpMetadata,
+      customMetadata: item.customMetadata,
+    };
+  }
+
   async delete(key) {
+    if (this.failDelete) throw new Error("synthetic R2 delete failure");
     this.objects.delete(key);
   }
 }
@@ -183,6 +198,23 @@ test("Phase 3D: Admin upload invalid file returns 400 invalid_pdf", async () => 
   assert.equal(data.error, "invalid_pdf");
 });
 
+test("Phase 3D: Admin upload rejects a PDF body with a non-PDF media type", async () => {
+  const mediaTypeRes = await requestWorker(`/api/admin/books/upload?id=book-bad-media-type`, {
+    method: "POST",
+    headers: {
+      "content-type": "text/plain",
+      "oai-authenticated-user-id": "admin-synth-001",
+      "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+      "oai-authenticated-user-role": "admin",
+    },
+    body: SYNTHETIC_PDF_BYTES,
+    booksBucket: new TestMockR2Bucket(),
+  });
+  assert.equal(mediaTypeRes.status, 415);
+  const data = await mediaTypeRes.json();
+  assert.equal(data.error, "unsupported_media_type");
+});
+
 test("Phase 3D: Full textbook lifecycle (Upload -> List -> Detail -> Content Stream -> Delete -> Idempotent Delete -> 404)", async () => {
   const bookId = `book-lifecycle-${Date.now().toString(36)}`;
   const mockBucket = new TestMockR2Bucket();
@@ -203,6 +235,7 @@ test("Phase 3D: Full textbook lifecycle (Upload -> List -> Detail -> Content Str
   const uploadData = await uploadRes.json();
   assert.equal(uploadData.book.id, bookId);
   assert.ok(uploadData.book.objectKey.startsWith(`textbooks/${bookId}/`));
+  const objectKey = uploadData.book.objectKey;
 
   // 2. Student List Books -> Should contain newly uploaded book
   const listRes = await requestWorker("/api/student/books", {
@@ -249,6 +282,7 @@ test("Phase 3D: Full textbook lifecycle (Upload -> List -> Detail -> Content Str
   const deleteData = await deleteRes.json();
   assert.equal(deleteData.deleted, true);
   assert.equal(deleteData.storageState, "deleted");
+  assert.equal(await mockBucket.head(objectKey), null, "R2 object must be physically absent");
 
   // 6. Idempotent Second Delete -> Safe 200
   const secondDeleteRes = await requestWorker(`/api/admin/books/${bookId}`, {
@@ -275,6 +309,75 @@ test("Phase 3D: Full textbook lifecycle (Upload -> List -> Detail -> Content Str
     booksBucket: mockBucket,
   });
   assert.equal(postDeleteDetailRes.status, 404);
+});
+
+test("Phase 3D: R2 delete failure is controlled and leaves metadata active", async () => {
+  const bookId = `book-delete-failure-${Date.now().toString(36)}`;
+  const mockBucket = new TestMockR2Bucket();
+  const authHeaders = {
+    "oai-authenticated-user-id": "admin-synth-001",
+    "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+    "oai-authenticated-user-role": "admin",
+  };
+
+  const uploadRes = await requestWorker(`/api/admin/books/upload?id=${bookId}`, {
+    method: "POST",
+    headers: { "content-type": "application/pdf", ...authHeaders },
+    body: SYNTHETIC_PDF_BYTES,
+    booksBucket: mockBucket,
+  });
+  assert.equal(uploadRes.status, 201);
+  const { book } = await uploadRes.json();
+
+  mockBucket.failDelete = true;
+  const deleteRes = await requestWorker(`/api/admin/books/${bookId}`, {
+    method: "DELETE",
+    headers: authHeaders,
+    booksBucket: mockBucket,
+  });
+  assert.equal(deleteRes.status, 502);
+  assert.equal((await deleteRes.json()).error, "r2_delete_failed");
+  assert.ok(await mockBucket.head(book.objectKey), "Failed deletion must leave the R2 object present");
+
+  const detailRes = await requestWorker(`/api/admin/books/${bookId}`, {
+    headers: authHeaders,
+    booksBucket: mockBucket,
+  });
+  assert.equal(detailRes.status, 200);
+  assert.equal((await detailRes.json()).book.storageState, "active");
+});
+
+test("Phase 3D: Missing active R2 object returns controlled 404", async () => {
+  const bookId = `book-missing-object-${Date.now().toString(36)}`;
+  const mockBucket = new TestMockR2Bucket();
+  const authHeaders = {
+    "oai-authenticated-user-id": "admin-synth-001",
+    "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+    "oai-authenticated-user-role": "admin",
+  };
+
+  const uploadRes = await requestWorker(`/api/admin/books/upload?id=${bookId}`, {
+    method: "POST",
+    headers: { "content-type": "application/pdf", ...authHeaders },
+    body: SYNTHETIC_PDF_BYTES,
+    booksBucket: mockBucket,
+  });
+  const { book } = await uploadRes.json();
+  await mockBucket.delete(book.objectKey);
+
+  const contentRes = await requestWorker(`/api/student/books/${bookId}/content`, {
+    booksBucket: mockBucket,
+  });
+  assert.equal(contentRes.status, 404);
+  assert.equal((await contentRes.json()).error, "object_not_found");
+
+  const deleteRes = await requestWorker(`/api/admin/books/${bookId}`, {
+    method: "DELETE",
+    headers: authHeaders,
+    booksBucket: mockBucket,
+  });
+  assert.equal(deleteRes.status, 404);
+  assert.equal((await deleteRes.json()).error, "object_not_found");
 });
 
 test("Phase 3D: Production missing R2 binding returns controlled 503 r2_unavailable", async () => {

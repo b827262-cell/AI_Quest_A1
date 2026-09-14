@@ -56,6 +56,7 @@ export async function POST(request: Request) {
 
   // 3. Parse and extract PDF bytes and metadata
   const contentType = request.headers.get("content-type") || "";
+  const normalizedContentType = contentType.split(";", 1)[0].trim().toLowerCase();
   let pdfBytes: Uint8Array;
   let bookId: string | null = null;
   let bookTitle: string | null = null;
@@ -66,7 +67,7 @@ export async function POST(request: Request) {
   bookTitle = reqUrl.searchParams.get("title");
   bookDescription = reqUrl.searchParams.get("description") || "";
 
-  if (contentType.includes("multipart/form-data")) {
+  if (normalizedContentType === "multipart/form-data") {
     try {
       const formData = await request.formData();
       const file = formData.get("file") as File | null;
@@ -74,6 +75,15 @@ export async function POST(request: Request) {
         return Response.json(
           { error: "missing_file", message: "Multipart field 'file' is required" },
           { status: 400, headers: cors.corsHeaders }
+        );
+      }
+      if (file.type.toLowerCase() !== "application/pdf") {
+        return Response.json(
+          {
+            error: "unsupported_media_type",
+            message: "Uploaded textbook files must declare application/pdf",
+          },
+          { status: 415, headers: cors.corsHeaders }
         );
       }
       bookId = (formData.get("id") as string) || (formData.get("bookId") as string) || bookId;
@@ -87,15 +97,14 @@ export async function POST(request: Request) {
         { status: 400, headers: cors.corsHeaders }
       );
     }
-  } else if (contentType.includes("application/pdf") || contentType.includes("application/octet-stream")) {
+  } else if (normalizedContentType === "application/pdf") {
     pdfBytes = new Uint8Array(await request.arrayBuffer());
     bookTitle = bookTitle || request.headers.get("x-book-title");
     bookId = bookId || request.headers.get("x-book-id");
-  } else {
-    // Attempt to parse JSON body if base64 encoded or fallback to raw buffer
+  } else if (normalizedContentType === "application/json") {
     try {
       const json = await request.clone().json();
-      if (json && json.pdfBase64) {
+      if (json && json.pdfBase64 && json.contentType === "application/pdf") {
         const binary = atob(json.pdfBase64);
         pdfBytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
@@ -105,11 +114,28 @@ export async function POST(request: Request) {
         bookTitle = json.title || bookTitle;
         bookDescription = json.description || bookDescription;
       } else {
-        pdfBytes = new Uint8Array(await request.arrayBuffer());
+        return Response.json(
+          {
+            error: "unsupported_media_type",
+            message: "Base64 uploads must declare contentType application/pdf",
+          },
+          { status: 415, headers: cors.corsHeaders }
+        );
       }
     } catch {
-      pdfBytes = new Uint8Array(await request.arrayBuffer());
+      return Response.json(
+        { error: "malformed_json", message: "Failed to parse JSON upload body" },
+        { status: 400, headers: cors.corsHeaders }
+      );
     }
+  } else {
+    return Response.json(
+      {
+        error: "unsupported_media_type",
+        message: "Uploaded textbook files must declare application/pdf",
+      },
+      { status: 415, headers: cors.corsHeaders }
+    );
   }
 
   // Set default bookId and title if missing

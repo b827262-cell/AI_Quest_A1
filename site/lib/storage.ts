@@ -59,6 +59,19 @@ export class InMemoryR2Bucket {
     };
   }
 
+  async head(key: string) {
+    const item = this.objects.get(key);
+    if (!item) return null;
+    return {
+      key,
+      size: item.body.length,
+      etag: item.etag,
+      httpEtag: `"${item.etag}"`,
+      httpMetadata: item.httpMetadata,
+      customMetadata: item.customMetadata,
+    };
+  }
+
   async delete(key: string) {
     this.objects.delete(key);
   }
@@ -167,4 +180,51 @@ export async function calculateSha256(buffer: Uint8Array): Promise<string> {
   const hashBuffer = await crypto.subtle.digest("SHA-256", buffer as any);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export type StoredObjectSnapshot = {
+  body: Uint8Array;
+  httpMetadata?: unknown;
+  customMetadata?: unknown;
+};
+
+/**
+ * Deletes an existing object and confirms that R2 no longer returns metadata for it.
+ * The returned snapshot can be used to compensate if the following D1 update fails.
+ */
+export async function deleteObjectWithVerification(
+  bucket: Awaited<ReturnType<typeof getStorageBucket>>,
+  objectKey: string
+): Promise<StoredObjectSnapshot | null> {
+  const object = await bucket.get(objectKey);
+  if (!object) return null;
+
+  const snapshot: StoredObjectSnapshot = {
+    body: new Uint8Array(await object.arrayBuffer()),
+    httpMetadata: object.httpMetadata,
+    customMetadata: object.customMetadata,
+  };
+
+  await bucket.delete(objectKey);
+  const remaining =
+    typeof bucket.head === "function"
+      ? await bucket.head(objectKey)
+      : await bucket.get(objectKey);
+  if (remaining) {
+    throw new Error(`R2 object '${objectKey}' still exists after deletion`);
+  }
+
+  return snapshot;
+}
+
+/** Restores a previously deleted object when the corresponding D1 update fails. */
+export async function restoreStorageObject(
+  bucket: Awaited<ReturnType<typeof getStorageBucket>>,
+  objectKey: string,
+  snapshot: StoredObjectSnapshot
+): Promise<void> {
+  await bucket.put(objectKey, snapshot.body, {
+    httpMetadata: snapshot.httpMetadata,
+    customMetadata: snapshot.customMetadata,
+  });
 }
