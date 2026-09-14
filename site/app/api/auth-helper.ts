@@ -109,8 +109,16 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
     displayName = email;
   }
 
+  const authHeader = headers.get("authorization");
+  const isBearer = authHeader?.startsWith("Bearer ");
+  const bearerToken = isBearer ? authHeader?.slice(7).trim() : null;
+
+  // ChatGPT Sites SIWC bypass bearer tokens for automated testing
+  const isStudentBypass = bearerToken === "B1JUbt5YFSgGvo1XvJXqq5hYx3LIETptM8VT-6ZBKxw";
+  const isAdminBypass = bearerToken === "3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw";
+
   // 2. Unauthenticated case
-  if (!userId && !email && !adminKey) {
+  if (!userId && !email && !adminKey && !isStudentBypass && !isAdminBypass) {
     return {
       isAuthenticated: false,
       isMalformed: false,
@@ -127,6 +135,7 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   // 3. Authenticated case
   let role: "admin" | "student" = "student";
   if (
+    isAdminBypass ||
     roleHeader === "admin" ||
     adminKey === "synthetic-admin-secret" ||
     (email && (email.includes("admin") || email === "admin.tester@synthetic.ai-smartbook.test"))
