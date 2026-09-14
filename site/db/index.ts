@@ -29,6 +29,10 @@ export async function getDb(d1Database?: D1Database) {
   }
 
   if (!targetDb) {
+    targetDb = (globalThis as any)?.DB || (globalThis as any)?.__env__?.DB;
+  }
+
+  if (!targetDb) {
     throw new D1UnavailableError(
       "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
     );

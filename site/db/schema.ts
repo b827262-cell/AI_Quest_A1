@@ -27,7 +27,13 @@ export const books = sqliteTable("books", {
   totalChapters: integer("total_chapters").notNull().default(1),
   totalPages: integer("total_pages").notNull().default(100),
   isSynthetic: integer("is_synthetic", { mode: "boolean" }).notNull().default(true),
+  objectKey: text("object_key").default(""),
+  contentType: text("content_type").notNull().default("application/pdf"),
+  byteSize: integer("byte_size").notNull().default(0),
+  sha256: text("sha256").default(""),
+  storageState: text("storage_state").notNull().default("active"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const adminOverview = sqliteTable("admin_overview", {

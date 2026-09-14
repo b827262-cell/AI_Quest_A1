@@ -63,7 +63,7 @@ export async function delegateToBackend(request: Request, path: string): Promise
 
   let body: BodyInit | undefined = undefined;
   if (request.method !== "GET" && request.method !== "HEAD") {
-    body = await request.text();
+    body = await request.arrayBuffer();
   }
 
   try {
@@ -83,7 +83,7 @@ export async function delegateToBackend(request: Request, path: string): Promise
 
     responseHeaders.set("x-data-plane", "shared-backend");
 
-    const responseBody = await backendResponse.text();
+    const responseBody = await backendResponse.arrayBuffer();
     return new Response(responseBody, {
       status: backendResponse.status,
       headers: responseHeaders,
@@ -139,7 +139,7 @@ export function handleCors(request: Request): {
         status: 204,
         headers: {
           "Access-Control-Allow-Origin": origin,
-          "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, PUT, POST, DELETE, OPTIONS",
           "Access-Control-Allow-Headers":
             "Authorization, Content-Type, x-validation-gate, x-demo-mode, x-admin-key, oai-authenticated-user-id, oai-authenticated-user-email, oai-authenticated-user-full-name, oai-authenticated-user-full-name-encoding, oai-authenticated-user-role",
           "Access-Control-Max-Age": "86400",

@@ -119,7 +119,8 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   const isValidationGateActive =
     validationGate === "e500-release-validation-20260914" ||
     validationGate === "e500-release-validation" ||
-    validationGate === "e500-phase3c-validation";
+    validationGate === "e500-phase3c-validation" ||
+    validationGate === "e500-phase3d-validation";
 
   const allowBearerBypass = !isProd || isValidationGateActive;
 
