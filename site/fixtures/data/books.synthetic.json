@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "count": 2,
+    "provenance": "100% synthetic (site/fixtures/generate.ts)"
+  },
+  "items": [
+    {
+      "id": "book-synth-001",
+      "title": "計算機系統導論 (Synthetic)",
+      "description": "純合成教材，涵蓋計算機硬體結構、二進位運算與作業系統概論。",
+      "totalChapters": 8,
+      "totalPages": 160,
+      "isSynthetic": true,
+      "createdAt": "2026-09-14T00:00:00.000Z",
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    },
+    {
+      "id": "book-synth-002",
+      "title": "高中數學演算法與邏輯思考 (Synthetic)",
+      "description": "純合成教材，解析基礎數論、遞迴與圖論思考。",
+      "totalChapters": 6,
+      "totalPages": 120,
+      "isSynthetic": true,
+      "createdAt": "2026-09-14T00:00:00.000Z",
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    }
+  ]
+}

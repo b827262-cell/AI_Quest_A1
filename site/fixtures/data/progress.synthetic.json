@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "count": 2,
+    "provenance": "100% synthetic (site/fixtures/generate.ts)"
+  },
+  "items": [
+    {
+      "id": "prog-synth-001",
+      "studentId": "student-synth-001",
+      "bookId": "book-synth-001",
+      "progressPercent": 68,
+      "lastReadChapter": "ch-03-binary-arithmetic",
+      "lastReadPage": 42,
+      "updatedAt": "2026-09-14T00:00:00.000Z",
+      "isSynthetic": true,
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    },
+    {
+      "id": "prog-synth-002",
+      "studentId": "student-synth-002",
+      "bookId": "book-synth-002",
+      "progressPercent": 25,
+      "lastReadChapter": "ch-01-recursion-basics",
+      "lastReadPage": 15,
+      "updatedAt": "2026-09-14T00:00:00.000Z",
+      "isSynthetic": true,
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    }
+  ]
+}

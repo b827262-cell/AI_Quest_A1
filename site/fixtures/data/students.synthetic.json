@@ -1,0 +1,41 @@
+{
+  "metadata": {
+    "count": 3,
+    "provenance": "100% synthetic (site/fixtures/generate.ts)"
+  },
+  "items": [
+    {
+      "id": "student-synth-001",
+      "email": "student.alice@synthetic.ai-smartbook.test",
+      "displayName": "測試學生 Alice",
+      "role": "student",
+      "isSynthetic": true,
+      "schoolName": "合成測試中學",
+      "gradeLevel": "高一",
+      "createdAt": "2026-09-14T00:00:00.000Z",
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    },
+    {
+      "id": "student-synth-002",
+      "email": "student.bob@synthetic.ai-smartbook.test",
+      "displayName": "測試學生 Bob",
+      "role": "student",
+      "isSynthetic": true,
+      "schoolName": "合成測試學院",
+      "gradeLevel": "大一",
+      "createdAt": "2026-09-14T00:00:00.000Z",
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    },
+    {
+      "id": "admin-synth-001",
+      "email": "admin.tester@synthetic.ai-smartbook.test",
+      "displayName": "合成管理員",
+      "role": "admin",
+      "isSynthetic": true,
+      "schoolName": "系統管理部",
+      "gradeLevel": "職員",
+      "createdAt": "2026-09-14T00:00:00.000Z",
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    }
+  ]
+}

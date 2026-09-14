@@ -9,9 +9,13 @@
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/api-runtime.test.mjs tests/fixture-safety.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "fixture:generate": "tsx fixtures/generate.ts",
+    "fixture:seed:d1": "tsx fixtures/seed-d1.ts",
+    "fixture:seed:r2": "tsx fixtures/seed-r2.ts",
+    "fixture:safety": "tsx scripts/scan-fixture-safety.ts && tsx scripts/scan-secrets.ts && tsx scripts/verify-no-production-data.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

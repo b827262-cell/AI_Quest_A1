@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "count": 2,
+    "provenance": "100% synthetic (site/fixtures/generate.ts)"
+  },
+  "items": [
+    {
+      "id": "rag-synth-001",
+      "bookId": "book-synth-001",
+      "chapterId": "ch-03-binary-arithmetic",
+      "chunkIndex": 0,
+      "heading": "二進位補數與加法運算",
+      "content": "二進位補數（Two's complement）是用於表示有號整數的常見方式。將數字取反加一即可獲得負數表示。",
+      "isSynthetic": true,
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    },
+    {
+      "id": "rag-synth-002",
+      "bookId": "book-synth-002",
+      "chapterId": "ch-01-recursion-basics",
+      "chunkIndex": 0,
+      "heading": "遞迴的基本條件與終止狀態",
+      "content": "遞迴函式必須包含基準條件（Base Case）與遞迴步驟（Recursive Step），確保執行時能順利終止。",
+      "isSynthetic": true,
+      "provenance": "100% synthetic (site/fixtures/generate.ts)"
+    }
+  ]
+}
