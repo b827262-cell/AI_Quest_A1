@@ -1,7 +1,14 @@
-import { getAuthFromRequest } from "../../../auth-helper";
+import { getNormalizedAuth } from "../../../auth-helper";
 
 export async function GET(request: Request) {
-  const auth = getAuthFromRequest(request);
+  const auth = getNormalizedAuth(request);
+
+  if (auth.isMalformed) {
+    return Response.json(
+      { error: "malformed_auth", message: auth.malformedReason },
+      { status: 401 }
+    );
+  }
 
   if (!auth.isAuthenticated) {
     return Response.json(
@@ -20,11 +27,6 @@ export async function GET(request: Request) {
   return Response.json({
     authenticated: true,
     role: "admin",
-    user: {
-      id: auth.userId,
-      email: auth.email,
-      displayName: auth.displayName,
-      isSynthetic: true,
-    },
+    user: auth.user,
   });
 }

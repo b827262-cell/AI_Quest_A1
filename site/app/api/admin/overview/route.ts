@@ -1,9 +1,16 @@
-import { getAuthFromRequest } from "../../auth-helper";
+import { getNormalizedAuth } from "../../auth-helper";
 import { getDb, isProductionEnvironment } from "../../../../db";
 import { adminOverview } from "../../../../db/schema";
 
 export async function GET(request: Request) {
-  const auth = getAuthFromRequest(request);
+  const auth = getNormalizedAuth(request);
+
+  if (auth.isMalformed) {
+    return Response.json(
+      { error: "malformed_auth", message: auth.malformedReason },
+      { status: 401 }
+    );
+  }
 
   if (!auth.isAuthenticated) {
     return Response.json(

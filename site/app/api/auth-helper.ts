@@ -1,43 +1,129 @@
-export type AuthContext = {
+export type NormalizedUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  role: "admin" | "student";
+  isSynthetic?: boolean;
+};
+
+export type NormalizedAuthContext = {
   isAuthenticated: boolean;
+  isMalformed: boolean;
+  malformedReason?: string;
+  user: NormalizedUser | null;
+  role: "admin" | "student" | "guest";
+  isSynthetic: boolean;
+  isDemo: boolean;
+  // Backward compatibility convenience fields
   userId: string | null;
   email: string | null;
   displayName: string | null;
-  role: "admin" | "student" | "guest";
-  isDemo: boolean;
 };
 
-export function getAuthFromRequest(request: Request): AuthContext {
+export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   const headers = request.headers;
-  const isProd = process.env.NODE_ENV === "production";
+  const envObj = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  const isProd = envObj?.NODE_ENV === "production";
   const demoHeader = headers.get("x-demo-mode") === "true";
+
   const userId = headers.get("oai-authenticated-user-id");
   const email = headers.get("oai-authenticated-user-email");
   const roleHeader = headers.get("oai-authenticated-user-role");
   const adminKey = headers.get("x-admin-key");
 
-  let displayName: string | null = null;
+  // 1. Detect malformed auth headers
+  // A. Partial / mismatched auth
+  if ((userId && !email) || (!userId && email)) {
+    return {
+      isAuthenticated: false,
+      isMalformed: true,
+      malformedReason: "Inconsistent auth headers: both user-id and user-email must be provided",
+      user: null,
+      role: "guest",
+      isSynthetic: false,
+      isDemo: false,
+      userId: null,
+      email: null,
+      displayName: null,
+    };
+  }
+
+  // B. Malformed email
+  if (email && (!email.includes("@") || email.includes(" ") || email.length < 3)) {
+    return {
+      isAuthenticated: false,
+      isMalformed: true,
+      malformedReason: "Malformed user-email header format",
+      user: null,
+      role: "guest",
+      isSynthetic: false,
+      isDemo: false,
+      userId: null,
+      email: null,
+      displayName: null,
+    };
+  }
+
+  // C. Malformed name encoding
   const rawFullName = headers.get("oai-authenticated-user-full-name");
   const encoding = headers.get("oai-authenticated-user-full-name-encoding");
+  let displayName: string | null = null;
+
   if (rawFullName) {
-    displayName = encoding === "percent-encoded-utf-8" ? decodeURIComponent(rawFullName) : rawFullName;
+    if (encoding && encoding !== "percent-encoded-utf-8") {
+      return {
+        isAuthenticated: false,
+        isMalformed: true,
+        malformedReason: "Invalid name encoding header: expected percent-encoded-utf-8",
+        user: null,
+        role: "guest",
+        isSynthetic: false,
+        isDemo: false,
+        userId: null,
+        email: null,
+        displayName: null,
+      };
+    }
+    if (encoding === "percent-encoded-utf-8") {
+      try {
+        displayName = decodeURIComponent(rawFullName);
+      } catch {
+        return {
+          isAuthenticated: false,
+          isMalformed: true,
+          malformedReason: "Malformed percent-encoded full name header",
+          user: null,
+          role: "guest",
+          isSynthetic: false,
+          isDemo: false,
+          userId: null,
+          email: null,
+          displayName: null,
+        };
+      }
+    } else {
+      displayName = rawFullName;
+    }
   } else if (email) {
     displayName = email;
   }
 
-  // 1. Unauthenticated
+  // 2. Unauthenticated case
   if (!userId && !email && !adminKey) {
     return {
       isAuthenticated: false,
+      isMalformed: false,
+      user: null,
+      role: "guest",
+      isSynthetic: false,
+      isDemo: demoHeader || !isProd,
       userId: null,
       email: null,
       displayName: null,
-      role: "guest",
-      isDemo: demoHeader || !isProd,
     };
   }
 
-  // 2. Role determination
+  // 3. Authenticated case
   let role: "admin" | "student" = "student";
   if (
     roleHeader === "admin" ||
@@ -47,12 +133,33 @@ export function getAuthFromRequest(request: Request): AuthContext {
     role = "admin";
   }
 
+  const effectiveId = userId ?? (role === "admin" ? "admin-synth-001" : "student-synth-001");
+  const effectiveEmail = email ?? (role === "admin" ? "admin.tester@synthetic.ai-smartbook.test" : "student.alice@synthetic.ai-smartbook.test");
+  const effectiveDisplayName = displayName ?? (role === "admin" ? "合成管理員" : "測試學生 Alice");
+
+  const isSynthetic =
+    effectiveEmail.includes("@synthetic.") ||
+    effectiveId.includes("-synth-");
+
+  const normalizedUser: NormalizedUser = {
+    id: effectiveId,
+    email: effectiveEmail,
+    displayName: effectiveDisplayName,
+    role,
+    isSynthetic,
+  };
+
   return {
     isAuthenticated: true,
-    userId: userId ?? (role === "admin" ? "admin-synth-001" : "student-synth-001"),
-    email: email ?? (role === "admin" ? "admin.tester@synthetic.ai-smartbook.test" : "student.alice@synthetic.ai-smartbook.test"),
-    displayName: displayName ?? (role === "admin" ? "合成管理員" : "測試學生 Alice"),
+    isMalformed: false,
+    user: normalizedUser,
     role,
+    isSynthetic,
     isDemo: demoHeader || !isProd,
+    userId: effectiveId,
+    email: effectiveEmail,
+    displayName: effectiveDisplayName,
   };
 }
+
+export const getAuthFromRequest = getNormalizedAuth;

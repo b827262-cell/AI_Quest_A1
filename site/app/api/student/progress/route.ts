@@ -1,10 +1,28 @@
-import { getAuthFromRequest } from "../../auth-helper";
+import { getNormalizedAuth } from "../../auth-helper";
 import { getStudentProgress, saveStudentProgress } from "../../../../lib/progress-store";
 import { D1UnavailableError, isProductionEnvironment } from "../../../../db";
 
 export async function GET(request: Request) {
-  const auth = getAuthFromRequest(request);
-  const studentId = auth.userId ?? "student-synth-001";
+  const auth = getNormalizedAuth(request);
+
+  if (auth.isMalformed) {
+    return Response.json(
+      { error: "malformed_auth", message: auth.malformedReason },
+      { status: 401 }
+    );
+  }
+
+  // In production without authentication and not in demo mode, return guest empty progress
+  if (!auth.isAuthenticated && isProductionEnvironment() && !auth.isDemo) {
+    return Response.json({
+      authenticated: false,
+      guest: true,
+      studentId: null,
+      progress: [],
+    });
+  }
+
+  const studentId = auth.user?.id ?? "student-synth-001";
 
   try {
     const result = await getStudentProgress(studentId);
@@ -26,7 +44,14 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  const auth = getAuthFromRequest(request);
+  const auth = getNormalizedAuth(request);
+
+  if (auth.isMalformed) {
+    return Response.json(
+      { error: "malformed_auth", message: auth.malformedReason },
+      { status: 401 }
+    );
+  }
 
   // In production, unauthenticated requests must never silently update synthetic data
   if (!auth.isAuthenticated && isProductionEnvironment() && !auth.isDemo) {
@@ -36,7 +61,7 @@ export async function PUT(request: Request) {
     );
   }
 
-  const studentId = auth.userId ?? "student-synth-001";
+  const studentId = auth.user?.id ?? "student-synth-001";
 
   let body: {
     bookId?: string;

@@ -1,22 +1,35 @@
-import { getAuthFromRequest } from "../../auth-helper";
+import { getNormalizedAuth } from "../../auth-helper";
+import { isProductionEnvironment } from "../../../../db";
 
 export async function GET(request: Request) {
-  const auth = getAuthFromRequest(request);
+  const auth = getNormalizedAuth(request);
+
+  if (auth.isMalformed) {
+    return Response.json(
+      { error: "malformed_auth", message: auth.malformedReason },
+      { status: 401 }
+    );
+  }
 
   if (auth.isAuthenticated) {
     return Response.json({
       authenticated: true,
-      user: {
-        id: auth.userId,
-        email: auth.email,
-        displayName: auth.displayName,
-        role: auth.role,
-        isSynthetic: true,
-      },
+      user: auth.user,
+      role: auth.role,
+      isSynthetic: auth.isSynthetic,
     });
   }
 
-  // Unauthenticated visitor / guest mode with deterministic default synthetic preview
+  // In production without demo mode, guests have no synthetic user identity
+  if (isProductionEnvironment() && !auth.isDemo) {
+    return Response.json({
+      authenticated: false,
+      guest: true,
+      user: null,
+    });
+  }
+
+  // Dev / test / demo mode preview
   return Response.json({
     authenticated: false,
     guest: true,
@@ -27,5 +40,6 @@ export async function GET(request: Request) {
       role: "student",
       isSynthetic: true,
     },
+    isDemo: true,
   });
 }
