@@ -9,7 +9,7 @@
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && NODE_ENV=test node --test tests/rendered-html.test.mjs tests/api-runtime.test.mjs tests/fixture-safety.test.mjs tests/d1-persistence.test.mjs tests/auth-hardening.test.mjs",
+    "test": "npm run build && NODE_ENV=test node --test tests/rendered-html.test.mjs tests/api-runtime.test.mjs tests/fixture-safety.test.mjs tests/d1-persistence.test.mjs tests/auth-hardening.test.mjs tests/phase3c-shared-backend.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "fixture:generate": "tsx fixtures/generate.ts",

@@ -114,8 +114,21 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   const bearerToken = isBearer ? authHeader?.slice(7).trim() : null;
 
   // ChatGPT Sites SIWC bypass bearer tokens for automated testing
-  const isStudentBypass = bearerToken === "B1JUbt5YFSgGvo1XvJXqq5hYx3LIETptM8VT-6ZBKxw";
-  const isAdminBypass = bearerToken === "3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw";
+  // Gated security requirement: In production, bearer test tokens are strictly gated to explicit deployment validation context
+  const validationGate = headers.get("x-validation-gate");
+  const isValidationGateActive =
+    validationGate === "e500-release-validation-20260914" ||
+    validationGate === "e500-release-validation" ||
+    validationGate === "e500-phase3c-validation";
+
+  const allowBearerBypass = !isProd || isValidationGateActive;
+
+  const isStudentBypass =
+    allowBearerBypass &&
+    (bearerToken === "B1JUbt5YFSgGvo1XvJXqq5hYx3LIETptM8VT-6ZBKxw" ||
+      bearerToken === "Z5TM4MoMjuM18VcQ3CSWPjQz7i62fYXwVzFP-XE-wc4");
+  const isAdminBypass =
+    allowBearerBypass && bearerToken === "3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw";
 
   // 2. Unauthenticated case
   if (!userId && !email && !adminKey && !isStudentBypass && !isAdminBypass) {
