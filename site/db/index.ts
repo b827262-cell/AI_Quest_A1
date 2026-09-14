@@ -11,8 +11,8 @@ export class D1UnavailableError extends Error {
 export function isProductionEnvironment(): boolean {
   const env = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env;
   if (!env) return true;
-  if (env["NODE_ENV"] === "test") return false;
-  return env["NODE_ENV"] === "production";
+  if (env["NODE_ENV"] === "test" || env["NODE_ENV"] === "development") return false;
+  return true;
 }
 
 export async function getDb(d1Database?: D1Database) {
