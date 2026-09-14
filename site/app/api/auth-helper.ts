@@ -1,3 +1,5 @@
+import { isProductionEnvironment } from "../../db";
+
 export type NormalizedUser = {
   id: string;
   email: string;
@@ -22,8 +24,7 @@ export type NormalizedAuthContext = {
 
 export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   const headers = request.headers;
-  const envObj = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env;
-  const isProd = envObj?.NODE_ENV === "production";
+  const isProd = isProductionEnvironment();
   const demoHeader = headers.get("x-demo-mode") === "true";
 
   const userId = headers.get("oai-authenticated-user-id");

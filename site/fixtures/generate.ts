@@ -8,9 +8,6 @@ const FIXTURES_DIR = __dirname;
 const DATA_DIR = path.join(FIXTURES_DIR, "data");
 const ASSETS_DIR = path.join(FIXTURES_DIR, "assets");
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-fs.mkdirSync(ASSETS_DIR, { recursive: true });
-
 const TIMESTAMP = "2026-09-14T00:00:00.000Z";
 const PROVENANCE = "100% synthetic (site/fixtures/generate.ts)";
 
@@ -160,6 +157,9 @@ startxref
 }
 
 export function generateAllFixtures() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(ASSETS_DIR, { recursive: true });
+
   fs.writeFileSync(
     path.join(DATA_DIR, "students.synthetic.json"),
     JSON.stringify({ metadata: { count: syntheticStudents.length, provenance: PROVENANCE }, items: syntheticStudents }, null, 2)
