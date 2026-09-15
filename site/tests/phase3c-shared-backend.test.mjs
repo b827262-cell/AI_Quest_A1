@@ -21,6 +21,7 @@ async function requestWorker(pathname, options = {}) {
     {
       ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
       DB: options.db,
+      RELEASE_VALIDATION_SECRET: options.releaseValidationSecret,
     },
     { waitUntil() {}, passThroughOnException() {} }
   );
@@ -125,6 +126,36 @@ test("Phase 3C: Production rejects synthetic bearer bypass even with the former 
       },
     });
     assert.equal(resAdmin.status, 401);
+  } finally {
+    process.env.NODE_ENV = originalEnv;
+  }
+});
+
+test("Phase 3C: Production validation bearer requires the configured server-side gate secret", async () => {
+  const originalEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  const releaseValidationSecret = "synthetic-unit-test-gate-secret-32-bytes";
+
+  try {
+    const resStudent = await requestWorker("/api/student/me", {
+      headers: {
+        authorization: "Bearer B1JUbt5YFSgGvo1XvJXqq5hYx3LIETptM8VT-6ZBKxw",
+        "x-validation-gate": releaseValidationSecret,
+      },
+      releaseValidationSecret,
+    });
+    assert.equal(resStudent.status, 200);
+    assert.equal((await resStudent.json()).role, "student");
+
+    const resAdmin = await requestWorker("/api/admin/auth/me", {
+      headers: {
+        authorization: "Bearer 3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw",
+        "x-validation-gate": releaseValidationSecret,
+      },
+      releaseValidationSecret,
+    });
+    assert.equal(resAdmin.status, 200);
+    assert.equal((await resAdmin.json()).role, "admin");
   } finally {
     process.env.NODE_ENV = originalEnv;
   }

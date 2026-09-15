@@ -6,6 +6,7 @@ interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
   BOOKS_BUCKET?: any;
+  RELEASE_VALIDATION_SECRET?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -30,6 +31,7 @@ const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     (globalThis as any).BOOKS_BUCKET = env.BOOKS_BUCKET;
     (globalThis as any).DB = env.DB;
+    (globalThis as any).RELEASE_VALIDATION_SECRET = env.RELEASE_VALIDATION_SECRET;
     const url = new URL(request.url);
 
     if (url.pathname === "/_vinext/image") {

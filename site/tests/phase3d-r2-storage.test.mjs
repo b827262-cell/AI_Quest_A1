@@ -105,6 +105,7 @@ async function requestWorker(pathname, options = {}) {
       ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
       DB: options.db,
       BOOKS_BUCKET: options.booksBucket,
+      RELEASE_VALIDATION_SECRET: options.releaseValidationSecret,
     },
     { waitUntil() {}, passThroughOnException() {} }
   );

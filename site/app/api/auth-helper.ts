@@ -113,16 +113,24 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   const isBearer = authHeader?.startsWith("Bearer ");
   const bearerToken = isBearer ? authHeader?.slice(7).trim() : null;
 
-  // Synthetic credentials are local test fixtures, never production auth.
-  // A second public header cannot make committed bearer values secret.
+  // Synthetic credentials are local test fixtures. Production validation is
+  // allowed only with a separately configured server-side secret.
   const allowSyntheticAuth = !isProd;
+  const configuredValidationGate = (globalThis as any)?.RELEASE_VALIDATION_SECRET;
+  const suppliedValidationGate = headers.get("x-validation-gate");
+  const allowProductionValidation =
+    isProd &&
+    typeof configuredValidationGate === "string" &&
+    configuredValidationGate.length >= 32 &&
+    suppliedValidationGate === configuredValidationGate;
+  const allowBearerBypass = allowSyntheticAuth || allowProductionValidation;
 
   const isStudentBypass =
-    allowSyntheticAuth &&
+    allowBearerBypass &&
     (bearerToken === "B1JUbt5YFSgGvo1XvJXqq5hYx3LIETptM8VT-6ZBKxw" ||
       bearerToken === "Z5TM4MoMjuM18VcQ3CSWPjQz7i62fYXwVzFP-XE-wc4");
   const isAdminBypass =
-    allowSyntheticAuth && bearerToken === "3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw";
+    allowBearerBypass && bearerToken === "3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw";
   const isSyntheticAdminKey =
     allowSyntheticAuth && adminKey === "synthetic-admin-secret";
 
