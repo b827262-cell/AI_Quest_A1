@@ -35,6 +35,7 @@ function buildTestApp() {
     ADMIN_SESSION_SECURE: "true"
   };
   process.env = { ...process.env, ...env, SQLITE_PATH: join(directory, "admin.db") };
+  delete process.env.ADMIN_PASSWORD_HASH;
   const dependencies = createAdminTestDependencies(process.env, dbHandle);
   return { app: createAdminApp(dependencies), dependencies, dbHandle, token };
 }
