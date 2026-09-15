@@ -2,7 +2,7 @@
 
 - Date: 2026-09-15 (Asia/Taipei)
 - Requested model alias: `terra`, medium reasoning
-- Actual model: **GPT-5 (supported ChatGPT-backed Codex model), medium reasoning**; Terra was unavailable on this account.
+- Actual model: **gpt-5.6-sol, medium reasoning**; Terra was unavailable on this ChatGPT-backed Codex account.
 - Starting HEAD: `44f521ade332d4899c589d45f51b80b5c0ae0448`
 - Implementation HEAD: `ef8ddb549d643aa9042339ca8418c283461d0a83`
 - Final Git HEAD: the report commit containing this document; its exact SHA is recorded in the required terminal status line and final handoff because a commit cannot embed its own SHA.
