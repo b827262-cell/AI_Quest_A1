@@ -1,51 +1,12 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../client";
 import { aiModelDailyLimits, aiTokenPoolReservations, aiTokenPools } from "../schema";
+import { nextDailyReset } from "./timezone.util";
 import { newId } from "./util";
 
 type ReservationRow = typeof aiTokenPoolReservations.$inferSelect;
 
 export const DEFAULT_TOKEN_POOL_TIMEZONE = "Asia/Taipei";
-
-function localParts(date: Date, timezone: string): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  }).formatToParts(date);
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return {
-    year: Number(value.year),
-    month: Number(value.month),
-    day: Number(value.day),
-    hour: Number(value.hour === "24" ? 0 : value.hour),
-    minute: Number(value.minute),
-    second: Number(value.second)
-  };
-}
-
-/** Convert a local midnight to UTC, including DST-aware timezones. */
-function localMidnightUtc(year: number, month: number, day: number, timezone: string): Date {
-  const target = Date.UTC(year, month - 1, day, 0, 0, 0);
-  let candidate = target;
-  for (let i = 0; i < 4; i += 1) {
-    const parts = localParts(new Date(candidate), timezone);
-    const observedAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
-    candidate = target - (observedAsUtc - candidate);
-  }
-  return new Date(candidate);
-}
-
-function nextDailyReset(now: Date, timezone: string): string {
-  const current = localParts(now, timezone);
-  const nextDay = new Date(Date.UTC(current.year, current.month - 1, current.day + 1));
-  return localMidnightUtc(nextDay.getUTCFullYear(), nextDay.getUTCMonth() + 1, nextDay.getUTCDate(), timezone).toISOString();
-}
 
 export interface ReserveTokenPoolInput {
   reservationKey: string;

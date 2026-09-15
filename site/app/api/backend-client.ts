@@ -141,7 +141,7 @@ export function handleCors(request: Request): {
           "Access-Control-Allow-Origin": origin,
           "Access-Control-Allow-Methods": "GET, PUT, POST, DELETE, OPTIONS",
           "Access-Control-Allow-Headers":
-            "Authorization, Content-Type, x-validation-gate, x-demo-mode, x-admin-key, oai-authenticated-user-id, oai-authenticated-user-email, oai-authenticated-user-full-name, oai-authenticated-user-full-name-encoding, oai-authenticated-user-role",
+            "Authorization, Content-Type, x-demo-mode, oai-authenticated-user-id, oai-authenticated-user-email, oai-authenticated-user-full-name, oai-authenticated-user-full-name-encoding, oai-authenticated-user-role",
           "Access-Control-Max-Age": "86400",
           Vary: "Origin",
         },

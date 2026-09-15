@@ -19,6 +19,13 @@ export type BookItem = {
   updatedAt: string;
 };
 
+export class BookAlreadyExistsError extends Error {
+  constructor(id: string) {
+    super(`Textbook '${id}' already exists`);
+    this.name = "BookAlreadyExistsError";
+  }
+}
+
 // In-memory fallback store for dev/test environments
 const inMemoryBookStore = new Map<string, BookItem>();
 
@@ -106,11 +113,10 @@ export async function saveBookMetadata(
     updatedAt: now,
   };
 
-  inMemoryBookStore.set(item.id, fullItem);
-
+  let persistedToD1 = false;
   try {
     const db = await getDb(d1Database);
-    await db
+    const inserted = await db
       .insert(books)
       .values({
         id: fullItem.id,
@@ -125,24 +131,20 @@ export async function saveBookMetadata(
         sha256: fullItem.sha256,
         storageState: fullItem.storageState,
       })
-      .onConflictDoUpdate({
-        target: books.id,
-        set: {
-          title: fullItem.title,
-          description: fullItem.description,
-          objectKey: fullItem.objectKey,
-          contentType: fullItem.contentType,
-          byteSize: fullItem.byteSize,
-          sha256: fullItem.sha256,
-          storageState: fullItem.storageState,
-          updatedAt: sql`CURRENT_TIMESTAMP`,
-        },
-      });
+      .onConflictDoNothing()
+      .returning({ id: books.id });
+    if (inserted.length === 0) throw new BookAlreadyExistsError(item.id);
+    persistedToD1 = true;
   } catch (err) {
-    if (isProductionEnvironment()) {
+    if (err instanceof BookAlreadyExistsError || isProductionEnvironment()) {
       throw err;
     }
   }
+
+  if (!persistedToD1 && inMemoryBookStore.has(item.id)) {
+    throw new BookAlreadyExistsError(item.id);
+  }
+  inMemoryBookStore.set(item.id, fullItem);
 
   return fullItem;
 }

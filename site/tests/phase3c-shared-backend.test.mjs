@@ -100,12 +100,12 @@ test("Phase 3C: Gated security - Production bearer bypass is rejected without va
   }
 });
 
-test("Phase 3C: Gated security - Production bearer bypass is accepted with active validation gate header", async () => {
+test("Phase 3C: Production rejects synthetic bearer bypass even with the former public gate header", async () => {
   const originalEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = "production";
 
   try {
-    // 1. Student with validation gate header
+    // 1. A public header must not turn the committed student fixture into production auth.
     const resStudent = await requestWorker("/api/student/me", {
       headers: {
         authorization: "Bearer B1JUbt5YFSgGvo1XvJXqq5hYx3LIETptM8VT-6ZBKxw",
@@ -114,22 +114,31 @@ test("Phase 3C: Gated security - Production bearer bypass is accepted with activ
     });
     assert.equal(resStudent.status, 200);
     const dataStudent = await resStudent.json();
-    assert.equal(dataStudent.authenticated, true);
-    assert.equal(dataStudent.role, "student");
-    assert.equal(dataStudent.user?.id, "student-synth-001");
+    assert.equal(dataStudent.authenticated, false);
+    assert.equal(dataStudent.guest, true);
 
-    // 2. Admin with validation gate header
+    // 2. The committed admin fixture must also remain unauthorized.
     const resAdmin = await requestWorker("/api/admin/auth/me", {
       headers: {
         authorization: "Bearer 3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw",
         "x-validation-gate": "e500-release-validation-20260914",
       },
     });
-    assert.equal(resAdmin.status, 200);
-    const dataAdmin = await resAdmin.json();
-    assert.equal(dataAdmin.authenticated, true);
-    assert.equal(dataAdmin.role, "admin");
-    assert.equal(dataAdmin.user?.id, "admin-synth-001");
+    assert.equal(resAdmin.status, 401);
+  } finally {
+    process.env.NODE_ENV = originalEnv;
+  }
+});
+
+test("Phase 3C: Production rejects the synthetic admin-key fixture", async () => {
+  const originalEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+
+  try {
+    const res = await requestWorker("/api/admin/auth/me", {
+      headers: { "x-admin-key": "synthetic-admin-secret" },
+    });
+    assert.equal(res.status, 401);
   } finally {
     process.env.NODE_ENV = originalEnv;
   }

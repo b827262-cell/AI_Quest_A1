@@ -113,26 +113,21 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   const isBearer = authHeader?.startsWith("Bearer ");
   const bearerToken = isBearer ? authHeader?.slice(7).trim() : null;
 
-  // ChatGPT Sites SIWC bypass bearer tokens for automated testing
-  // Gated security requirement: In production, bearer test tokens are strictly gated to explicit deployment validation context
-  const validationGate = headers.get("x-validation-gate");
-  const isValidationGateActive =
-    validationGate === "e500-release-validation-20260914" ||
-    validationGate === "e500-release-validation" ||
-    validationGate === "e500-phase3c-validation" ||
-    validationGate === "e500-phase3d-validation";
-
-  const allowBearerBypass = !isProd || isValidationGateActive;
+  // Synthetic credentials are local test fixtures, never production auth.
+  // A second public header cannot make committed bearer values secret.
+  const allowSyntheticAuth = !isProd;
 
   const isStudentBypass =
-    allowBearerBypass &&
+    allowSyntheticAuth &&
     (bearerToken === "B1JUbt5YFSgGvo1XvJXqq5hYx3LIETptM8VT-6ZBKxw" ||
       bearerToken === "Z5TM4MoMjuM18VcQ3CSWPjQz7i62fYXwVzFP-XE-wc4");
   const isAdminBypass =
-    allowBearerBypass && bearerToken === "3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw";
+    allowSyntheticAuth && bearerToken === "3wdv7mrWFW85fy0Sj7p2mXRBp84v4LlVigJHGM10siw";
+  const isSyntheticAdminKey =
+    allowSyntheticAuth && adminKey === "synthetic-admin-secret";
 
   // 2. Unauthenticated case
-  if (!userId && !email && !adminKey && !isStudentBypass && !isAdminBypass) {
+  if (!userId && !email && !isSyntheticAdminKey && !isStudentBypass && !isAdminBypass) {
     return {
       isAuthenticated: false,
       isMalformed: false,
@@ -151,7 +146,7 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   if (
     isAdminBypass ||
     roleHeader === "admin" ||
-    adminKey === "synthetic-admin-secret" ||
+    isSyntheticAdminKey ||
     (email && (email.includes("admin") || email === "admin.tester@synthetic.ai-smartbook.test"))
   ) {
     role = "admin";

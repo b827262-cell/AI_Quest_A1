@@ -54,16 +54,32 @@ export function localDateKey(date: Date, timezone: string): string {
   return `${year}-${mm}-${dd}`;
 }
 
-/** Convert a local midnight to UTC, including DST-aware timezones. */
+function localDateOrdinal(date: Date, timezone: string): number {
+  const { year, month, day } = localParts(date, timezone);
+  return Date.UTC(year, month - 1, day);
+}
+
+/**
+ * Convert the start of a local calendar date to UTC.
+ *
+ * Binary-searching the local date boundary also handles zones where a clock
+ * change skips 00:00 (the day starts at 01:00) and historical skipped dates.
+ */
 export function localMidnightUtc(year: number, month: number, day: number, timezone: string): Date {
   const target = Date.UTC(year, month - 1, day, 0, 0, 0);
-  let candidate = target;
-  for (let i = 0; i < 4; i += 1) {
-    const parts = localParts(new Date(candidate), timezone);
-    const observedAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
-    candidate = target - (observedAsUtc - candidate);
+  let lower = target - 36 * 60 * 60 * 1000;
+  let upper = target + 36 * 60 * 60 * 1000;
+
+  while (lower < upper) {
+    const midpoint = lower + Math.floor((upper - lower) / 2);
+    if (localDateOrdinal(new Date(midpoint), timezone) < target) {
+      lower = midpoint + 1;
+    } else {
+      upper = midpoint;
+    }
   }
-  return new Date(candidate);
+
+  return new Date(lower);
 }
 
 /** ISO timestamp of the next local midnight after `now`. */

@@ -7,6 +7,7 @@ class TestMockR2Bucket {
   constructor() {
     this.objects = new Map();
     this.failDelete = false;
+    this.dropPut = false;
   }
 
   async put(key, value, options) {
@@ -23,12 +24,14 @@ class TestMockR2Bucket {
       bytes = new Uint8Array(0);
     }
     const etag = `mock-etag-${Date.now()}`;
-    this.objects.set(key, {
-      body: bytes,
-      httpMetadata: options?.httpMetadata,
-      customMetadata: options?.customMetadata,
-      etag,
-    });
+    if (!this.dropPut) {
+      this.objects.set(key, {
+        body: bytes,
+        httpMetadata: options?.httpMetadata,
+        customMetadata: options?.customMetadata,
+        etag,
+      });
+    }
     return {
       key,
       size: bytes.length,
@@ -198,6 +201,93 @@ test("Phase 3D: Admin upload invalid file returns 400 invalid_pdf", async () => 
   assert.equal(data.error, "invalid_pdf");
 });
 
+test("Phase 3D: Empty and oversized PDF uploads are rejected before storage", async () => {
+  const mockBucket = new TestMockR2Bucket();
+  const authHeaders = {
+    "content-type": "application/pdf",
+    "oai-authenticated-user-id": "admin-synth-001",
+    "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+    "oai-authenticated-user-role": "admin",
+  };
+
+  const empty = await requestWorker(`/api/admin/books/upload?id=book-empty-${Date.now()}`, {
+    method: "POST",
+    headers: authHeaders,
+    body: new Uint8Array(),
+    booksBucket: mockBucket,
+  });
+  assert.equal(empty.status, 400);
+  assert.match((await empty.json()).message, /0 bytes/i);
+
+  const oversizedBytes = new Uint8Array(15 * 1024 * 1024 + 1);
+  oversizedBytes.set(new TextEncoder().encode("%PDF-"));
+  const oversized = await requestWorker(`/api/admin/books/upload?id=book-large-${Date.now()}`, {
+    method: "POST",
+    headers: authHeaders,
+    body: oversizedBytes,
+    booksBucket: mockBucket,
+  });
+  assert.equal(oversized.status, 400);
+  assert.match((await oversized.json()).message, /exceeds allowed limit/i);
+  assert.equal(mockBucket.objects.size, 0);
+});
+
+test("Phase 3D: Multipart and JSON base64 transports require and preserve PDF bytes", async () => {
+  const authHeaders = {
+    "oai-authenticated-user-id": "admin-synth-001",
+    "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+    "oai-authenticated-user-role": "admin",
+  };
+
+  const multipartBucket = new TestMockR2Bucket();
+  const form = new FormData();
+  form.set("id", `book-multipart-${Date.now()}`);
+  form.set("title", "Synthetic multipart PDF");
+  form.set("file", new File([SYNTHETIC_PDF_BYTES], "fixture.pdf", { type: "application/pdf" }));
+  const multipart = await requestWorker("/api/admin/books/upload", {
+    method: "POST",
+    headers: authHeaders,
+    body: form,
+    booksBucket: multipartBucket,
+  });
+  assert.equal(multipart.status, 201);
+  assert.equal((await multipart.json()).book.sha256, await sha256Hex(SYNTHETIC_PDF_BYTES));
+
+  const jsonBucket = new TestMockR2Bucket();
+  const json = await requestWorker("/api/admin/books/upload", {
+    method: "POST",
+    headers: { ...authHeaders, "content-type": "application/json" },
+    body: JSON.stringify({
+      id: `book-json-${Date.now()}`,
+      title: "Synthetic JSON PDF",
+      contentType: "application/pdf",
+      pdfBase64: SYNTHETIC_PDF_BYTES.toString("base64"),
+    }),
+    booksBucket: jsonBucket,
+  });
+  assert.equal(json.status, 201);
+  assert.equal((await json.json()).book.sha256, await sha256Hex(SYNTHETIC_PDF_BYTES));
+});
+
+test("Phase 3D: Client book IDs cannot create traversing object keys", async () => {
+  const mockBucket = new TestMockR2Bucket();
+  const res = await requestWorker("/api/admin/books/upload?id=..%2F..%2F", {
+    method: "POST",
+    headers: {
+      "content-type": "application/pdf",
+      "oai-authenticated-user-id": "admin-synth-001",
+      "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+      "oai-authenticated-user-role": "admin",
+    },
+    body: SYNTHETIC_PDF_BYTES,
+    booksBucket: mockBucket,
+  });
+  assert.equal(res.status, 201);
+  const objectKey = (await res.json()).book.objectKey;
+  assert.match(objectKey, /^textbooks\/unknown\/\d+-[a-f0-9]{32}\.pdf$/);
+  assert.doesNotMatch(objectKey, /\.\.|\/\.\//);
+});
+
 test("Phase 3D: Admin upload rejects a PDF body with a non-PDF media type", async () => {
   const mediaTypeRes = await requestWorker(`/api/admin/books/upload?id=book-bad-media-type`, {
     method: "POST",
@@ -213,6 +303,74 @@ test("Phase 3D: Admin upload rejects a PDF body with a non-PDF media type", asyn
   assert.equal(mediaTypeRes.status, 415);
   const data = await mediaTypeRes.json();
   assert.equal(data.error, "unsupported_media_type");
+});
+
+test("Phase 3D: Upload verifies R2 persistence before creating metadata", async () => {
+  const mockBucket = new TestMockR2Bucket();
+  mockBucket.dropPut = true;
+  const res = await requestWorker(`/api/admin/books/upload?id=book-dropped-put-${Date.now()}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/pdf",
+      "oai-authenticated-user-id": "admin-synth-001",
+      "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+      "oai-authenticated-user-role": "admin",
+    },
+    body: SYNTHETIC_PDF_BYTES,
+    booksBucket: mockBucket,
+  });
+  assert.equal(res.status, 502);
+  assert.equal((await res.json()).error, "r2_put_failed");
+});
+
+test("Phase 3D: Reusing a book ID is rejected without orphaning its original R2 object", async () => {
+  const bookId = `book-duplicate-${Date.now().toString(36)}`;
+  const mockBucket = new TestMockR2Bucket();
+  const options = {
+    method: "POST",
+    headers: {
+      "content-type": "application/pdf",
+      "oai-authenticated-user-id": "admin-synth-001",
+      "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+      "oai-authenticated-user-role": "admin",
+    },
+    body: SYNTHETIC_PDF_BYTES,
+    booksBucket: mockBucket,
+  };
+
+  const first = await requestWorker(`/api/admin/books/upload?id=${bookId}`, options);
+  assert.equal(first.status, 201);
+  const firstBook = (await first.json()).book;
+
+  const second = await requestWorker(`/api/admin/books/upload?id=${bookId}`, options);
+  assert.equal(second.status, 409);
+  assert.equal((await second.json()).error, "book_already_exists");
+  assert.equal(mockBucket.objects.size, 1);
+  assert.ok(await mockBucket.head(firstBook.objectKey));
+});
+
+test("Phase 3D: Concurrent uploads for one book ID leave exactly one active object", async () => {
+  const bookId = `book-concurrent-${Date.now().toString(36)}`;
+  const mockBucket = new TestMockR2Bucket();
+  const upload = () => requestWorker(`/api/admin/books/upload?id=${bookId}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/pdf",
+      "oai-authenticated-user-id": "admin-synth-001",
+      "oai-authenticated-user-email": "admin.tester@synthetic.ai-smartbook.test",
+      "oai-authenticated-user-role": "admin",
+    },
+    body: SYNTHETIC_PDF_BYTES,
+    booksBucket: mockBucket,
+  });
+
+  const responses = await Promise.all([upload(), upload()]);
+  assert.deepEqual(responses.map((res) => res.status).sort(), [201, 409]);
+  const payloads = await Promise.all(responses.map((res) => res.json()));
+  const conflict = payloads.find((payload) => payload.error === "book_already_exists");
+  assert.ok(conflict);
+  if ("r2Compensated" in conflict) assert.equal(conflict.r2Compensated, true);
+  assert.equal(mockBucket.objects.size, 1);
 });
 
 test("Phase 3D: Full textbook lifecycle (Upload -> List -> Detail -> Content Stream -> Delete -> Idempotent Delete -> 404)", async () => {

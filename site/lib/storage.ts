@@ -130,10 +130,11 @@ export async function getStorageBucket(r2Bucket?: any): Promise<any> {
  * Prevents client-controlled path traversal.
  */
 export function generateBookObjectKey(bookId: string, extension: string = "pdf"): string {
-  const safeBookId = (bookId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "");
+  const safeBookId = (bookId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "") || "unknown";
+  const safeExtension = extension.replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "pdf";
   const timestamp = Date.now();
-  const randomHex = Math.random().toString(36).substring(2, 10);
-  return `textbooks/${safeBookId}/${timestamp}-${randomHex}.${extension}`;
+  const randomHex = crypto.randomUUID().replaceAll("-", "");
+  return `textbooks/${safeBookId}/${timestamp}-${randomHex}.${safeExtension}`;
 }
 
 /**
@@ -188,6 +189,30 @@ export type StoredObjectSnapshot = {
   customMetadata?: unknown;
 };
 
+/** Confirms that a newly written or restored object is readable and intact. */
+export async function verifyStoredObject(
+  bucket: Awaited<ReturnType<typeof getStorageBucket>>,
+  objectKey: string,
+  expectedSize: number,
+  expectedSha256?: string
+): Promise<void> {
+  const object =
+    typeof bucket.head === "function"
+      ? await bucket.head(objectKey)
+      : await bucket.get(objectKey);
+  if (!object) {
+    throw new Error(`R2 object '${objectKey}' is missing after write`);
+  }
+  if (object.size !== expectedSize) {
+    throw new Error(
+      `R2 object '${objectKey}' size mismatch after write (expected ${expectedSize}, received ${object.size})`
+    );
+  }
+  if (expectedSha256 && object.customMetadata?.sha256 !== expectedSha256) {
+    throw new Error(`R2 object '${objectKey}' SHA-256 metadata mismatch after write`);
+  }
+}
+
 /**
  * Deletes an existing object and confirms that R2 no longer returns metadata for it.
  * The returned snapshot can be used to compensate if the following D1 update fails.
@@ -227,4 +252,12 @@ export async function restoreStorageObject(
     httpMetadata: snapshot.httpMetadata,
     customMetadata: snapshot.customMetadata,
   });
+  await verifyStoredObject(
+    bucket,
+    objectKey,
+    snapshot.body.length,
+    typeof (snapshot.customMetadata as any)?.sha256 === "string"
+      ? (snapshot.customMetadata as any).sha256
+      : undefined
+  );
 }

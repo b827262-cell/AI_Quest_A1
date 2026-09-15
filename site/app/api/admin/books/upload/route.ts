@@ -1,11 +1,17 @@
 import { D1UnavailableError } from "../../../../../db";
-import { saveBookMetadata } from "../../../../../lib/book-store";
+import {
+  BookAlreadyExistsError,
+  getBookById,
+  saveBookMetadata,
+} from "../../../../../lib/book-store";
 import {
   getStorageBucket,
   generateBookObjectKey,
   validatePdfBytes,
   calculateSha256,
+  deleteObjectWithVerification,
   R2UnavailableError,
+  verifyStoredObject,
 } from "../../../../../lib/storage";
 import { getNormalizedAuth } from "../../../auth-helper";
 import {
@@ -70,8 +76,8 @@ export async function POST(request: Request) {
   if (normalizedContentType === "multipart/form-data") {
     try {
       const formData = await request.formData();
-      const file = formData.get("file") as File | null;
-      if (!file) {
+      const file = formData.get("file");
+      if (!(file instanceof File)) {
         return Response.json(
           { error: "missing_file", message: "Multipart field 'file' is required" },
           { status: 400, headers: cors.corsHeaders }
@@ -169,6 +175,24 @@ export async function POST(request: Request) {
     throw err;
   }
 
+  // Reusing an ID would replace D1 metadata while orphaning the prior object.
+  try {
+    if (await getBookById(bookId)) {
+      return Response.json(
+        { error: "book_already_exists", message: `Textbook '${bookId}' already exists` },
+        { status: 409, headers: cors.corsHeaders }
+      );
+    }
+  } catch (err) {
+    if (err instanceof D1UnavailableError) {
+      return Response.json(
+        { error: "d1_unavailable", message: err.message },
+        { status: 503, headers: cors.corsHeaders }
+      );
+    }
+    throw err;
+  }
+
   // 7. Store object in R2
   const objectKey = generateBookObjectKey(bookId, "pdf");
   try {
@@ -182,7 +206,13 @@ export async function POST(request: Request) {
         uploadedBy: auth.user?.id || "admin",
       },
     });
+    await verifyStoredObject(bucket, objectKey, pdfBytes.length, sha256);
   } catch (err) {
+    try {
+      await deleteObjectWithVerification(bucket, objectKey);
+    } catch {
+      // Preserve the primary write/verification error.
+    }
     return Response.json(
       { error: "r2_put_failed", message: (err as Error)?.message || "Failed to put object into R2" },
       { status: 502, headers: cors.corsHeaders }
@@ -206,20 +236,31 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     // Compensation: delete the orphaned object in R2 if D1 insert fails
+    let r2Compensated = false;
     try {
-      await bucket.delete(objectKey);
+      r2Compensated = Boolean(await deleteObjectWithVerification(bucket, objectKey));
     } catch {
-      // Ignore secondary error during cleanup
+      // The response exposes failed compensation without masking the D1 error.
     }
 
     if (err instanceof D1UnavailableError) {
       return Response.json(
-        { error: "d1_unavailable", message: err.message },
+        { error: "d1_unavailable", message: err.message, r2Compensated },
         { status: 503, headers: cors.corsHeaders }
       );
     }
+    if (err instanceof BookAlreadyExistsError) {
+      return Response.json(
+        { error: "book_already_exists", message: err.message, r2Compensated },
+        { status: 409, headers: cors.corsHeaders }
+      );
+    }
     return Response.json(
-      { error: "d1_insert_failed", message: (err as Error)?.message || "Failed to record metadata in D1" },
+      {
+        error: "d1_insert_failed",
+        message: (err as Error)?.message || "Failed to record metadata in D1",
+        r2Compensated,
+      },
       { status: 500, headers: cors.corsHeaders }
     );
   }
