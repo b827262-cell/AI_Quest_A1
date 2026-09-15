@@ -169,7 +169,17 @@ async function applyProgress(runId: string, item: Record<string, unknown>, sourc
 async function applyBook(runId: string, item: Record<string, unknown>, sourceSystem: string) {
   const meta = await metadata(item, sourceSystem);
   const existing = await findExisting(books, meta);
-  const decision = decideSync(meta, existing ? { sourceSystem: existing.sourceSystem!, sourceRecordId: existing.sourceRecordId!, sourceUpdatedAt: existing.sourceUpdatedAt!, syncVersion: existing.syncVersion!, checksum: existing.checksum! } : null);
+  const legacyContentChecksumOverwrite = Boolean(
+    existing
+    && existing.storageState === "active"
+    && existing.objectKey
+    && existing.sha256
+    && existing.checksum === existing.sha256
+    && existing.syncVersion === meta.syncVersion,
+  );
+  const decision = legacyContentChecksumOverwrite
+    ? "update"
+    : decideSync(meta, existing ? { sourceSystem: existing.sourceSystem!, sourceRecordId: existing.sourceRecordId!, sourceUpdatedAt: existing.sourceUpdatedAt!, syncVersion: existing.syncVersion!, checksum: existing.checksum! } : null);
   const targetId = existing?.id ?? (typeof item.targetRecordId === "string" ? item.targetRecordId : stableTargetId("book", sourceSystem, meta.sourceRecordId));
   if (decision === "conflict") { await itemLog(runId, "book", meta, decision, "conflict", targetId, "same source version with different checksum"); await bumpRun(runId, "conflicts"); return "conflict"; }
   if (decision === "skip") { await itemLog(runId, "book", meta, "skip", "skipped", targetId, null); await bumpRun(runId, "skipped"); return "skipped"; }

@@ -66,7 +66,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return Response.json({ error: "r2_put_failed", message: error instanceof Error ? error.message : "R2 write failed", compensated }, { status: 502 });
     }
     try {
-      await db.update(books).set({ objectKey, contentType: "application/pdf", byteSize: requestBody.bytes.length, sha256, storageState: "active", updatedAt: requestBody.sourceUpdatedAt, sourceUpdatedAt: requestBody.sourceUpdatedAt, syncVersion: requestBody.syncVersion ?? book.syncVersion, checksum: sha256 }).where(eq(books.id, book.id));
+      await db.update(books).set({ objectKey, contentType: "application/pdf", byteSize: requestBody.bytes.length, sha256, storageState: "active", updatedAt: requestBody.sourceUpdatedAt, sourceUpdatedAt: requestBody.sourceUpdatedAt, syncVersion: requestBody.syncVersion ?? book.syncVersion }).where(eq(books.id, book.id));
     } catch {
       let compensated = false;
       try { await targetBucket.delete(objectKey); compensated = !(await targetBucket.head(objectKey)); } catch { /* recorded below */ }

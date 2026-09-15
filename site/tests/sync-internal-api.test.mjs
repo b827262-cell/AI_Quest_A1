@@ -203,13 +203,15 @@ test("book content upload stores verified R2 bytes, skips resends, and rejects b
   const bucket = new InMemoryR2Bucket();
   globalThis.BOOKS_BUCKET = bucket;
   const stamp = "2026-09-04T00:00:00.000Z";
+  const metadataChecksum = hexDigest("meta");
   const run = await openRun();
   await postBooks(signedPost("/api/internal/sync/books", JSON.stringify({
     runId: run, source: "e500",
-    items: [record("bk-c", stamp, hexDigest("meta"), { title: "Synthetic Content Book", description: "", totalChapters: 1, totalPages: 8, createdAt: stamp })],
+    items: [record("bk-c", stamp, metadataChecksum, { title: "Synthetic Content Book", description: "", totalChapters: 1, totalPages: 8, createdAt: stamp })],
   })));
-  const created = sqlite.prepare("SELECT storage_state FROM books WHERE source_record_id = 'bk-c'").get();
+  const created = sqlite.prepare("SELECT storage_state, checksum FROM books WHERE source_record_id = 'bk-c'").get();
   assert.equal(created.storage_state, "pending");
+  assert.equal(created.checksum, metadataChecksum);
 
   const pdf = new TextEncoder().encode("%PDF-1.4 synthetic sync content\n%%EOF\n");
   const sha = hexDigest(pdf);
@@ -223,12 +225,34 @@ test("book content upload stores verified R2 bytes, skips resends, and rejects b
   assert.equal(upload.objectKey, `books/${targetId}/${sha}.pdf`);
   assert.equal(upload.byteSize, pdf.length);
   assert.ok(await bucket.head(upload.objectKey));
-  const active = sqlite.prepare("SELECT storage_state, sha256, sync_version FROM books WHERE id = ?").get(targetId);
+  const active = sqlite.prepare("SELECT storage_state, sha256, checksum, sync_version FROM books WHERE id = ?").get(targetId);
   assert.equal(active.storage_state, "active");
   assert.equal(active.sha256, sha);
+  assert.equal(active.checksum, metadataChecksum);
 
   const resend = await (await POST_CONTENT(signedPost(`/api/internal/sync/books/${targetId}/content`, pdf, extra, "application/pdf"), context)).json();
   assert.equal(resend.skipped, true);
+
+  const identicalRun = await openRun();
+  await postBooks(signedPost("/api/internal/sync/books", JSON.stringify({
+    runId: identicalRun, source: "e500",
+    items: [record("bk-c", stamp, metadataChecksum, { title: "Synthetic Content Book", description: "", totalChapters: 1, totalPages: 8, createdAt: stamp })],
+  })));
+  const identicalCommit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId: identicalRun })))).json();
+  assert.equal(identicalCommit.skipped, 1);
+  assert.equal(identicalCommit.conflicts, 0);
+
+  const conflictRun = await openRun();
+  await postBooks(signedPost("/api/internal/sync/books", JSON.stringify({
+    runId: conflictRun, source: "e500",
+    items: [record("bk-c", stamp, hexDigest("changed metadata"), { title: "Changed Content Book", description: "", totalChapters: 1, totalPages: 8, createdAt: stamp })],
+  })));
+  const conflictCommit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId: conflictRun })))).json();
+  assert.equal(conflictCommit.conflicts, 1);
+  const preserved = sqlite.prepare("SELECT title, checksum, sha256 FROM books WHERE id = ?").get(targetId);
+  assert.equal(preserved.title, "Synthetic Content Book");
+  assert.equal(preserved.checksum, metadataChecksum);
+  assert.equal(preserved.sha256, sha);
 
   const base64Res = await POST_CONTENT(signedPost(`/api/internal/sync/books/${targetId}/content`, JSON.stringify({
     contentType: "application/pdf", contentBase64: Buffer.from(pdf).toString("base64"), sourceSystem: "e500", sourceRecordId: "bk-c", runId: run,
@@ -254,4 +278,42 @@ test("book content upload stores verified R2 bytes, skips resends, and rejects b
   const wrongIdentity = await POST_CONTENT(signedPost(`/api/internal/sync/books/${targetId}/content`, pdf, { ...extra, "x-source-record-id": "bk-other" }, "application/pdf"), context);
   assert.equal(wrongIdentity.status, 409);
   assert.equal((await wrongIdentity.json()).error, "source_identity_mismatch");
+});
+
+test("book metadata sync repairs legacy rows whose checksum was overwritten by content sha256", async () => {
+  const sqlite = freshDb();
+  const bucket = new InMemoryR2Bucket();
+  globalThis.BOOKS_BUCKET = bucket;
+  const stamp = "2026-09-05T00:00:00.000Z";
+  const metadataChecksum = hexDigest("legacy metadata");
+  const book = record("bk-legacy", stamp, metadataChecksum, { title: "Legacy Content Book", description: "", totalChapters: 1, totalPages: 4, createdAt: stamp });
+  const firstRun = await openRun();
+  await postBooks(signedPost("/api/internal/sync/books", JSON.stringify({ runId: firstRun, source: "e500", items: [book] })));
+
+  const pdf = new TextEncoder().encode("%PDF-1.4 legacy checksum repair\n%%EOF\n");
+  const pdfSha256 = hexDigest(pdf);
+  const targetId = "sync-book-e500-bk-legacy";
+  const contentHeaders = { "x-run-id": firstRun, "x-source-system": "e500", "x-source-record-id": "bk-legacy", "x-source-updated-at": stamp, "x-sync-version": String(Date.parse(stamp)) };
+  const upload = await POST_CONTENT(signedPost(`/api/internal/sync/books/${targetId}/content`, pdf, contentHeaders, "application/pdf"), { params: Promise.resolve({ id: targetId }) });
+  assert.equal(upload.status, 201);
+
+  sqlite.prepare("UPDATE books SET checksum = sha256 WHERE id = ?").run(targetId);
+  const corrupted = sqlite.prepare("SELECT checksum, sha256 FROM books WHERE id = ?").get(targetId);
+  assert.equal(corrupted.checksum, pdfSha256);
+
+  const repairRun = await openRun();
+  await postBooks(signedPost("/api/internal/sync/books", JSON.stringify({ runId: repairRun, source: "e500", items: [book] })));
+  const repairedCommit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId: repairRun })))).json();
+  assert.equal(repairedCommit.updated, 1);
+  assert.equal(repairedCommit.conflicts, 0);
+  const repaired = sqlite.prepare("SELECT checksum, sha256, storage_state FROM books WHERE id = ?").get(targetId);
+  assert.equal(repaired.checksum, metadataChecksum);
+  assert.equal(repaired.sha256, pdfSha256);
+  assert.equal(repaired.storage_state, "active");
+
+  const validationRun = await openRun();
+  await postBooks(signedPost("/api/internal/sync/books", JSON.stringify({ runId: validationRun, source: "e500", items: [book] })));
+  const validationCommit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId: validationRun })))).json();
+  assert.equal(validationCommit.skipped, 1);
+  assert.equal(validationCommit.conflicts, 0);
 });
