@@ -15,6 +15,13 @@
       "when": 1789400492866,
       "tag": "0001_cool_microbe",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789455964970,
+      "tag": "0002_funny_ezekiel",
+      "breakpoints": true
     }
   ]
 }

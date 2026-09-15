@@ -7,6 +7,8 @@ interface Env {
   DB: D1Database;
   BOOKS_BUCKET?: any;
   RELEASE_VALIDATION_SECRET?: string;
+  SYNC_IMPORT_SECRET?: string;
+  SYNC_MAX_PDF_BYTES?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -32,6 +34,8 @@ const worker = {
     (globalThis as any).BOOKS_BUCKET = env.BOOKS_BUCKET;
     (globalThis as any).DB = env.DB;
     (globalThis as any).RELEASE_VALIDATION_SECRET = env.RELEASE_VALIDATION_SECRET;
+    (globalThis as unknown as { SYNC_IMPORT_SECRET?: string }).SYNC_IMPORT_SECRET = env.SYNC_IMPORT_SECRET;
+    (globalThis as unknown as { SYNC_MAX_PDF_BYTES?: string }).SYNC_MAX_PDF_BYTES = env.SYNC_MAX_PDF_BYTES;
     const url = new URL(request.url);
 
     if (url.pathname === "/_vinext/image") {

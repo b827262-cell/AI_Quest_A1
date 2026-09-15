@@ -94,6 +94,38 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
+## Controlled E500 import
+
+The E500 importer is one-way: local E500 APIs/filesystem -> this site's
+internal sync API -> D1/R2. E500 never receives D1/R2 credentials, and Sites
+changes are not exported back. Public student/admin requests cannot call the
+internal routes: without a valid HMAC they answer 401 (guest) or 403
+(signed-in visitor). Configure `SYNC_IMPORT_SECRET` only as a runtime secret on
+the shared backend and provide it to the CLI through the process environment;
+it is never stored in the repository or printed.
+
+```bash
+E500_STUDENT_URL=http://127.0.0.1:4310 \
+E500_ADMIN_URL=http://127.0.0.1:4300 \
+E500_ADMIN_AUTHORIZATION="Bearer <local-admin-token>" \
+E500_BOOKS_DIR=/path/to/e500/uploads/books \
+npm run sync:e500:dry-run
+```
+
+For an actual import, additionally set `SYNC_BACKEND_URL` and
+`SYNC_IMPORT_SECRET`, then run the narrowest command needed, or
+`npm run sync:e500:all`. Batches are bounded and retried; every transport
+retry is re-signed with a fresh timestamp+nonce (server replay protection
+never blocks a safe retry), while duplicate business writes are prevented by
+per-item version/checksum idempotency. PDF object keys are server-generated as
+`books/{book_id}/{sha256}.pdf`. Set `SYNC_RUN_ID` to resume an interrupted run
+without creating a second run.
+
+Known limit: the JSON `contentBase64` transport is capped by the 8,000,000
+character body limit, so its effective payload is about 6 MiB. PDFs above that
+must use the raw `application/pdf` request path (limit `SYNC_MAX_PDF_BYTES`,
+default 50 MiB).
+
 ## Learn More
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
