@@ -127,13 +127,31 @@ async function findExisting(table: typeof students | typeof books | typeof readi
   return rows[0] ?? null;
 }
 
-async function applyStudent(runId: string, item: Record<string, unknown>, sourceSystem: string) {
+async function applyStudent(runId: string, item: Record<string, unknown>, sourceSystem: string, isDryRun = false) {
   const meta = await metadata(item, sourceSystem);
-  const existing = await findExisting(students, meta);
-  const decision = decideSync(meta, existing ? { sourceSystem: existing.sourceSystem!, sourceRecordId: existing.sourceRecordId!, sourceUpdatedAt: existing.sourceUpdatedAt!, syncVersion: existing.syncVersion!, checksum: existing.checksum! } : null);
+  let existing = await findExisting(students, meta);
+  if (!existing && typeof item.email === "string" && item.email.trim()) {
+    const db = await getDb();
+    const byEmail = await db.select().from(students).where(eq(students.email, item.email.trim())).limit(1);
+    if (byEmail[0]) existing = byEmail[0];
+  } else if (existing && typeof item.email === "string" && item.email.trim()) {
+    const db = await getDb();
+    const byEmail = await db.select({ id: students.id }).from(students).where(eq(students.email, item.email.trim())).limit(1);
+    if (byEmail[0] && byEmail[0].id !== existing.id) {
+      await itemLog(runId, "student", meta, "conflict", "conflict", existing.id, "source identity and email resolve to different students");
+      await bumpRun(runId, "conflicts");
+      return "conflict";
+    }
+  }
+  const decision = decideSync(meta, existing ? { sourceSystem: existing.sourceSystem ?? sourceSystem, sourceRecordId: existing.sourceRecordId ?? meta.sourceRecordId, sourceUpdatedAt: existing.sourceUpdatedAt ?? existing.createdAt, syncVersion: existing.syncVersion ?? 0, checksum: existing.checksum ?? "" } : null);
   const targetId = existing?.id ?? (typeof item.targetRecordId === "string" ? item.targetRecordId : stableTargetId("student", sourceSystem, meta.sourceRecordId));
   if (decision === "conflict") { await itemLog(runId, "student", meta, decision, "conflict", targetId, "same source version with different checksum"); await bumpRun(runId, "conflicts"); return "conflict"; }
   if (decision === "skip") { await itemLog(runId, "student", meta, "skip", "skipped", targetId, null); await bumpRun(runId, "skipped"); return "skipped"; }
+  if (isDryRun) {
+    await itemLog(runId, "student", meta, decision, "dry_run", targetId, null);
+    await bumpRun(runId, decision === "insert" ? "inserted" : "updated");
+    return decision;
+  }
   const db = await getDb();
   const row = incomingStudent(item, targetId, meta);
   if (decision === "insert") await db.insert(students).values(row);
@@ -141,24 +159,45 @@ async function applyStudent(runId: string, item: Record<string, unknown>, source
   await itemLog(runId, "student", meta, decision, "applied", targetId, null); await bumpRun(runId, decision === "insert" ? "inserted" : "updated"); return decision;
 }
 
-async function targetIdFor(table: typeof students | typeof books, sourceSystem: string, value: string): Promise<string> {
+async function targetIdFor(runId: string, table: typeof students | typeof books, sourceSystem: string, value: string): Promise<string> {
   const db = await getDb();
   const bySource = await db.select({ id: table.id }).from(table).where(and(eq(table.sourceSystem, sourceSystem), eq(table.sourceRecordId, value))).limit(1);
   if (bySource[0]) return bySource[0].id;
   const direct = await db.select({ id: table.id }).from(table).where(eq(table.id, value)).limit(1);
   if (direct[0]) return direct[0].id;
-  throw new Error(`referenced ${table === students ? "student" : "book"} not found: ${value}`);
+  const entityType = table === students ? "student" : "book";
+  const fromSyncItems = await db.select({ targetRecordId: syncItems.targetRecordId }).from(syncItems).where(and(eq(syncItems.runId, runId), eq(syncItems.entityType, entityType), eq(syncItems.sourceRecordId, value))).orderBy(desc(syncItems.id)).limit(1);
+  if (fromSyncItems[0]?.targetRecordId) return fromSyncItems[0].targetRecordId;
+  throw new Error(`referenced ${entityType} not found: ${value}`);
 }
 
-async function applyProgress(runId: string, item: Record<string, unknown>, sourceSystem: string) {
+async function applyProgress(runId: string, item: Record<string, unknown>, sourceSystem: string, isDryRun = false) {
   const meta = await metadata(item, sourceSystem);
-  const existing = await findExisting(readingProgress, meta);
-  const decision = decideSync(meta, existing ? { sourceSystem: existing.sourceSystem!, sourceRecordId: existing.sourceRecordId!, sourceUpdatedAt: existing.sourceUpdatedAt!, syncVersion: existing.syncVersion!, checksum: existing.checksum! } : null);
+  const studentId = await targetIdFor(runId, students, sourceSystem, requiredString(item, "studentId"));
+  const bookId = await targetIdFor(runId, books, sourceSystem, requiredString(item, "bookId"));
+  let existing = await findExisting(readingProgress, meta);
+  if (!existing) {
+    const db = await getDb();
+    const byPair = await db.select().from(readingProgress).where(and(eq(readingProgress.studentId, studentId), eq(readingProgress.bookId, bookId))).limit(1);
+    if (byPair[0]) existing = byPair[0];
+  } else {
+    const db = await getDb();
+    const byPair = await db.select({ id: readingProgress.id }).from(readingProgress).where(and(eq(readingProgress.studentId, studentId), eq(readingProgress.bookId, bookId))).limit(1);
+    if (byPair[0] && byPair[0].id !== existing.id) {
+      await itemLog(runId, "progress", meta, "conflict", "conflict", existing.id, "source identity and student/book resolve to different progress rows");
+      await bumpRun(runId, "conflicts");
+      return "conflict";
+    }
+  }
+  const decision = decideSync(meta, existing ? { sourceSystem: existing.sourceSystem ?? sourceSystem, sourceRecordId: existing.sourceRecordId ?? meta.sourceRecordId, sourceUpdatedAt: existing.sourceUpdatedAt ?? existing.updatedAt, syncVersion: existing.syncVersion ?? 0, checksum: existing.checksum ?? "" } : null);
   const targetId = existing?.id ?? (typeof item.targetRecordId === "string" ? item.targetRecordId : stableTargetId("progress", sourceSystem, meta.sourceRecordId));
   if (decision === "conflict") { await itemLog(runId, "progress", meta, decision, "conflict", targetId, "same source version with different checksum"); await bumpRun(runId, "conflicts"); return "conflict"; }
   if (decision === "skip") { await itemLog(runId, "progress", meta, "skip", "skipped", targetId, null); await bumpRun(runId, "skipped"); return "skipped"; }
-  const studentId = await targetIdFor(students, sourceSystem, requiredString(item, "studentId"));
-  const bookId = await targetIdFor(books, sourceSystem, requiredString(item, "bookId"));
+  if (isDryRun) {
+    await itemLog(runId, "progress", meta, decision, "dry_run", targetId, null);
+    await bumpRun(runId, decision === "insert" ? "inserted" : "updated");
+    return decision;
+  }
   const row = { id: targetId, studentId, bookId, progressPercent: Math.max(0, Math.min(100, Number(item.progressPercent ?? 0))), lastReadChapter: typeof item.lastReadChapter === "string" ? item.lastReadChapter : null, lastReadPage: Math.max(1, Number(item.lastReadPage ?? 1)), updatedAt: meta.sourceUpdatedAt, sourceSystem: meta.sourceSystem, sourceRecordId: meta.sourceRecordId, sourceUpdatedAt: meta.sourceUpdatedAt, syncVersion: meta.syncVersion, checksum: meta.checksum };
   const db = await getDb();
   if (decision === "insert") await db.insert(readingProgress).values(row);
@@ -166,9 +205,14 @@ async function applyProgress(runId: string, item: Record<string, unknown>, sourc
   await itemLog(runId, "progress", meta, decision, "applied", targetId, null); await bumpRun(runId, decision === "insert" ? "inserted" : "updated"); return decision;
 }
 
-async function applyBook(runId: string, item: Record<string, unknown>, sourceSystem: string) {
+async function applyBook(runId: string, item: Record<string, unknown>, sourceSystem: string, isDryRun = false) {
   const meta = await metadata(item, sourceSystem);
-  const existing = await findExisting(books, meta);
+  let existing = await findExisting(books, meta);
+  if (!existing && typeof item.targetRecordId === "string") {
+    const db = await getDb();
+    const byId = await db.select().from(books).where(eq(books.id, item.targetRecordId)).limit(1);
+    if (byId[0]) existing = byId[0];
+  }
   const legacyContentChecksumOverwrite = Boolean(
     existing
     && existing.storageState === "active"
@@ -179,10 +223,15 @@ async function applyBook(runId: string, item: Record<string, unknown>, sourceSys
   );
   const decision = legacyContentChecksumOverwrite
     ? "update"
-    : decideSync(meta, existing ? { sourceSystem: existing.sourceSystem!, sourceRecordId: existing.sourceRecordId!, sourceUpdatedAt: existing.sourceUpdatedAt!, syncVersion: existing.syncVersion!, checksum: existing.checksum! } : null);
+    : decideSync(meta, existing ? { sourceSystem: existing.sourceSystem ?? sourceSystem, sourceRecordId: existing.sourceRecordId ?? meta.sourceRecordId, sourceUpdatedAt: existing.sourceUpdatedAt ?? existing.updatedAt, syncVersion: existing.syncVersion ?? 0, checksum: existing.checksum ?? "" } : null);
   const targetId = existing?.id ?? (typeof item.targetRecordId === "string" ? item.targetRecordId : stableTargetId("book", sourceSystem, meta.sourceRecordId));
   if (decision === "conflict") { await itemLog(runId, "book", meta, decision, "conflict", targetId, "same source version with different checksum"); await bumpRun(runId, "conflicts"); return "conflict"; }
   if (decision === "skip") { await itemLog(runId, "book", meta, "skip", "skipped", targetId, null); await bumpRun(runId, "skipped"); return "skipped"; }
+  if (isDryRun) {
+    await itemLog(runId, "book", meta, decision, "dry_run", targetId, null);
+    await bumpRun(runId, decision === "insert" ? "inserted" : "updated");
+    return decision;
+  }
   const previous = existing as unknown as { objectKey?: string; contentType?: string; byteSize?: number; sha256?: string; storageState?: string };
   const row = { id: targetId, title: requiredString(item, "title"), description: typeof item.description === "string" ? item.description : "", totalChapters: Number(item.totalChapters ?? 1), totalPages: Number(item.totalPages ?? 1), isSynthetic: false, objectKey: previous?.objectKey ?? "", contentType: previous?.contentType ?? "application/pdf", byteSize: previous?.byteSize ?? 0, sha256: previous?.sha256 ?? "", storageState: previous?.storageState ?? "pending", createdAt: typeof item.createdAt === "string" ? item.createdAt : meta.sourceUpdatedAt, updatedAt: meta.sourceUpdatedAt, sourceSystem: meta.sourceSystem, sourceRecordId: meta.sourceRecordId, sourceUpdatedAt: meta.sourceUpdatedAt, syncVersion: meta.syncVersion, checksum: meta.checksum };
   const db = await getDb();
@@ -191,13 +240,13 @@ async function applyBook(runId: string, item: Record<string, unknown>, sourceSys
   await itemLog(runId, "book", meta, decision, "applied", targetId, null); await bumpRun(runId, decision === "insert" ? "inserted" : "updated"); return decision;
 }
 
-export async function applyBatch(runId: string, entityType: "student" | "progress" | "book", items: Record<string, unknown>[], sourceSystem: string): Promise<void> {
+export async function applyBatch(runId: string, entityType: "student" | "progress" | "book", items: Record<string, unknown>[], sourceSystem: string, isDryRun = false): Promise<void> {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(sourceSystem)) throw new Error("invalid source");
   for (const item of items) {
     try {
-      if (entityType === "student") await applyStudent(runId, item, sourceSystem);
-      else if (entityType === "progress") await applyProgress(runId, item, sourceSystem);
-      else await applyBook(runId, item, sourceSystem);
+      if (entityType === "student") await applyStudent(runId, item, sourceSystem, isDryRun);
+      else if (entityType === "progress") await applyProgress(runId, item, sourceSystem, isDryRun);
+      else await applyBook(runId, item, sourceSystem, isDryRun);
     } catch (error) {
       const meta = await metadata(item, sourceSystem);
       await itemLog(runId, entityType, meta, "failed", "failed", null, error instanceof Error ? error.message : "item failed");
@@ -216,7 +265,7 @@ export async function handleRun(request: Request): Promise<Response> {
   const db = await getDb();
   await db.insert(syncRuns).values({ id, source, startedAt: new Date().toISOString(), status: "running", dryRun: value.dryRun === true, total: 0, inserted: 0, updated: 0, skipped: 0, conflicts: 0, failed: 0 });
   await writeAudit("sync_run_start", "sync_run", id, "accepted");
-  return Response.json({ runId: id, status: "running" }, { status: 201 });
+  return Response.json({ runId: id, status: "running", dryRun: value.dryRun === true }, { status: 201 });
 }
 
 export async function handleBatch(request: Request, entityType: "student" | "progress" | "book"): Promise<Response> {
@@ -226,8 +275,8 @@ export async function handleBatch(request: Request, entityType: "student" | "pro
   const db = await getDb();
   const run = await db.select().from(syncRuns).where(eq(syncRuns.id, runId)).limit(1);
   if (!run[0] || run[0].status !== "running") return jsonError(new Error("sync run is not active"), 409);
-  await applyBatch(runId, entityType, getItems(value), sourceSystem || run[0].source);
-  return Response.json({ runId, entityType, accepted: true });
+  await applyBatch(runId, entityType, getItems(value), sourceSystem || run[0].source, Boolean(run[0].dryRun));
+  return Response.json({ runId, entityType, accepted: true, dryRun: Boolean(run[0].dryRun) });
 }
 
 export async function handleCommit(request: Request): Promise<Response> {

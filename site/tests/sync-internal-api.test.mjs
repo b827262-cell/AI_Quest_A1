@@ -80,8 +80,8 @@ function hexDigest(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function openRun() {
-  const res = await postRuns(signedPost("/api/internal/sync/runs", JSON.stringify({ source: "e500" })));
+async function openRun(payload = { source: "e500" }) {
+  const res = await postRuns(signedPost("/api/internal/sync/runs", JSON.stringify(payload)));
   assert.equal(res.status, 201);
   return (await res.json()).runId;
 }
@@ -316,4 +316,174 @@ test("book metadata sync repairs legacy rows whose checksum was overwritten by c
   const validationCommit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId: validationRun })))).json();
   assert.equal(validationCommit.skipped, 1);
   assert.equal(validationCommit.conflicts, 0);
+});
+
+test("dry-run sync run calculates decisions and records items without mutating domain tables or R2", async () => {
+  const sqlite = freshDb();
+  const bucket = new InMemoryR2Bucket();
+  globalThis.BOOKS_BUCKET = bucket;
+  const stamp = "2026-09-06T00:00:00.000Z";
+  const runId = await openRun({ source: "e500", dryRun: true });
+
+  const studentItem = record("stu-dry", stamp, hexDigest("s-dry"), { email: "dry@example.invalid", displayName: "Dry Student", createdAt: stamp });
+  const bookItem = record("bk-dry", stamp, hexDigest("b-dry"), { title: "Dry Book", description: "", totalChapters: 2, totalPages: 20, createdAt: stamp });
+  const progressItem = record("pg-dry", stamp, hexDigest("p-dry"), { studentId: "stu-dry", bookId: "bk-dry", progressPercent: 40, lastReadChapter: "ch-1", lastReadPage: 8 });
+
+  const stuRes = await (await postStudents(signedPost("/api/internal/sync/students", JSON.stringify({ runId, source: "e500", items: [studentItem] })))).json();
+  assert.equal(stuRes.accepted, true);
+  assert.equal(stuRes.dryRun, true);
+
+  const bkRes = await (await postBooks(signedPost("/api/internal/sync/books", JSON.stringify({ runId, source: "e500", items: [bookItem] })))).json();
+  assert.equal(bkRes.accepted, true);
+  assert.equal(bkRes.dryRun, true);
+
+  const pgRes = await (await postProgress(signedPost("/api/internal/sync/progress", JSON.stringify({ runId, source: "e500", items: [progressItem] })))).json();
+  assert.equal(pgRes.accepted, true);
+  assert.equal(pgRes.dryRun, true);
+
+  const commitRes = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId })))).json();
+  assert.equal(commitRes.status, "completed");
+  assert.equal(commitRes.dryRun, true);
+  assert.equal(commitRes.inserted, 3);
+  assert.equal(commitRes.total, 3);
+
+  // Assert domain tables have zero inserted rows
+  const studentCount = sqlite.prepare("SELECT COUNT(*) AS count FROM students WHERE source_system = 'e500'").get().count;
+  const bookCount = sqlite.prepare("SELECT COUNT(*) AS count FROM books WHERE source_system = 'e500'").get().count;
+  const progressCount = sqlite.prepare("SELECT COUNT(*) AS count FROM reading_progress WHERE source_system = 'e500'").get().count;
+  assert.equal(studentCount, 0);
+  assert.equal(bookCount, 0);
+  assert.equal(progressCount, 0);
+
+  // Assert sync_items has dry_run records
+  const itemStatuses = sqlite.prepare("SELECT DISTINCT status FROM sync_items WHERE run_id = ?").all(runId);
+  assert.deepEqual(itemStatuses.map((row) => row.status), ["dry_run"]);
+});
+
+test("book content upload enforces active sync run and dry-run isolation", async () => {
+  const sqlite = freshDb();
+  const bucket = new InMemoryR2Bucket();
+  globalThis.BOOKS_BUCKET = bucket;
+  const stamp = "2026-09-07T00:00:00.000Z";
+  const liveRun = await openRun();
+  const bookItem = record("bk-guard", stamp, hexDigest("b-guard"), { title: "Guard Book", description: "", totalChapters: 1, totalPages: 10, createdAt: stamp });
+  await postBooks(signedPost("/api/internal/sync/books", JSON.stringify({ runId: liveRun, source: "e500", items: [bookItem] })));
+
+  const targetId = "sync-book-e500-bk-guard";
+  const pdf = new TextEncoder().encode("%PDF-1.4 guard test content\n%%EOF\n");
+  const contentHeaders = {
+    "x-source-system": "e500", "x-source-record-id": "bk-guard", "x-source-updated-at": stamp, "x-sync-version": String(Date.parse(stamp)),
+  };
+
+  // Rejects upload with non-existent or inactive runId
+  const badRunRes = await POST_CONTENT(signedPost(`/api/internal/sync/books/${targetId}/content`, pdf, {
+    "x-run-id": "non-existent-run", ...contentHeaders,
+  }, "application/pdf"), { params: Promise.resolve({ id: targetId }) });
+  assert.equal(badRunRes.status, 409);
+
+  // Dry-run content upload does not store to R2 or update D1
+  const dryRun = await openRun({ source: "e500", dryRun: true });
+  const dryUploadRes = await POST_CONTENT(signedPost(`/api/internal/sync/books/${targetId}/content`, pdf, {
+    "x-run-id": dryRun, ...contentHeaders,
+  }, "application/pdf"), { params: Promise.resolve({ id: targetId }) });
+  assert.equal(dryUploadRes.status, 200);
+  const dryData = await dryUploadRes.json();
+  assert.equal(dryData.dryRun, true);
+  assert.equal(dryData.skipped, false);
+
+  const bookInDb = sqlite.prepare("SELECT storage_state, object_key FROM books WHERE id = ?").get(targetId);
+  assert.equal(bookInDb.storage_state, "pending");
+  assert.equal(bookInDb.object_key, "");
+  assert.equal((await bucket.head(`books/${targetId}/${dryData.sha256}.pdf`)), null);
+});
+
+test("reconciliation resolves pre-existing student by email without unique constraint failure", async () => {
+  const sqlite = freshDb();
+  // Pre-existing student on platform (e.g. SIWC user), source_system is NULL
+  sqlite.prepare("INSERT INTO students (id, email, display_name, role, is_synthetic, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+    "user-native-1", "reconcile@example.invalid", "Native Reconcile", "student", 0, "2026-08-01T00:00:00.000Z"
+  );
+
+  const stamp = "2026-09-08T00:00:00.000Z";
+  const runId = await openRun();
+  const studentItem = record("stu-e500-1", stamp, hexDigest("s-rec"), { email: "reconcile@example.invalid", displayName: "Synced Reconcile", createdAt: stamp });
+
+  const res = await postStudents(signedPost("/api/internal/sync/students", JSON.stringify({ runId, source: "e500", items: [studentItem] })));
+  assert.equal(res.status, 200);
+
+  const commit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId })))).json();
+  assert.equal(commit.status, "completed");
+  assert.equal(commit.failed, 0);
+
+  const student = sqlite.prepare("SELECT id, email, display_name, source_system, source_record_id FROM students WHERE email = ?").get("reconcile@example.invalid");
+  assert.equal(student.id, "user-native-1");
+  assert.equal(student.source_system, "e500");
+  assert.equal(student.source_record_id, "stu-e500-1");
+  assert.equal(student.display_name, "Synced Reconcile");
+});
+
+test("reconciliation resolves pre-existing progress by student and book without unique constraint failure", async () => {
+  const sqlite = freshDb();
+  // Pre-existing progress on platform
+  sqlite.prepare("INSERT INTO students (id, email, display_name, role, is_synthetic) VALUES (?, ?, ?, ?, ?)").run(
+    "stu-native-p", "prog-user@example.invalid", "Prog Native", "student", 0
+  );
+  sqlite.prepare("INSERT INTO books (id, title, total_chapters, total_pages, is_synthetic) VALUES (?, ?, ?, ?, ?)").run(
+    "bk-native-p", "Prog Book", 1, 10, 0
+  );
+  sqlite.prepare("INSERT INTO reading_progress (id, student_id, book_id, progress_percent, last_read_page, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+    "prog-native-1", "stu-native-p", "bk-native-p", 25, 3, "2026-08-01T00:00:00.000Z"
+  );
+
+  const stamp = "2026-09-09T00:00:00.000Z";
+  const runId = await openRun();
+  const progressItem = record("pg-e500-1", stamp, hexDigest("p-rec"), { studentId: "stu-native-p", bookId: "bk-native-p", progressPercent: 75, lastReadChapter: "ch-1", lastReadPage: 8 });
+
+  const res = await postProgress(signedPost("/api/internal/sync/progress", JSON.stringify({ runId, source: "e500", items: [progressItem] })));
+  assert.equal(res.status, 200);
+
+  const commit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId })))).json();
+  assert.equal(commit.status, "completed");
+  assert.equal(commit.failed, 0);
+
+  const progress = sqlite.prepare("SELECT id, student_id, book_id, progress_percent, source_system, source_record_id FROM reading_progress WHERE id = ?").get("prog-native-1");
+  assert.equal(progress.progress_percent, 75);
+  assert.equal(progress.source_system, "e500");
+  assert.equal(progress.source_record_id, "pg-e500-1");
+});
+
+test("student reconciliation records a conflict when source identity and email resolve to different rows", async () => {
+  const sqlite = freshDb();
+  sqlite.prepare("INSERT INTO students (id, email, display_name, role, is_synthetic, source_system, source_record_id, source_updated_at, sync_version, checksum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    "student-source", "source@example.invalid", "Source", "student", 0, "e500", "stu-collision", "2026-09-01T00:00:00.000Z", 1, hexDigest("source")
+  );
+  sqlite.prepare("INSERT INTO students (id, email, display_name, role, is_synthetic) VALUES (?, ?, ?, ?, ?)").run(
+    "student-email", "email@example.invalid", "Email", "student", 0
+  );
+
+  const runId = await openRun();
+  const item = record("stu-collision", "2026-09-10T00:00:00.000Z", hexDigest("collision"), { email: "email@example.invalid", displayName: "Incoming", createdAt: "2026-09-10T00:00:00.000Z" });
+  const res = await postStudents(signedPost("/api/internal/sync/students", JSON.stringify({ runId, source: "e500", items: [item] })));
+  assert.equal(res.status, 200);
+  const commit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId })))).json();
+  assert.equal(commit.conflicts, 1);
+  assert.equal(commit.failed, 0);
+});
+
+test("progress reconciliation records a conflict when source identity and natural key resolve to different rows", async () => {
+  const sqlite = freshDb();
+  sqlite.prepare("INSERT INTO students (id, email, display_name, role, is_synthetic) VALUES (?, ?, ?, ?, ?)").run("student-pair", "pair@example.invalid", "Pair", "student", 0);
+  sqlite.prepare("INSERT INTO books (id, title, total_chapters, total_pages, is_synthetic) VALUES (?, ?, ?, ?, ?)").run("book-pair", "Pair Book", 1, 10, 0);
+  sqlite.prepare("INSERT INTO reading_progress (id, student_id, book_id, progress_percent, last_read_page, source_system, source_record_id, source_updated_at, sync_version, checksum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    "progress-source", "student-other", "book-other", 10, 1, "e500", "progress-collision", "2026-09-01T00:00:00.000Z", 1, hexDigest("progress-source")
+  );
+  sqlite.prepare("INSERT INTO reading_progress (id, student_id, book_id, progress_percent, last_read_page) VALUES (?, ?, ?, ?, ?)").run("progress-pair", "student-pair", "book-pair", 20, 2);
+
+  const runId = await openRun();
+  const item = record("progress-collision", "2026-09-10T00:00:00.000Z", hexDigest("progress-collision"), { studentId: "student-pair", bookId: "book-pair", progressPercent: 80, lastReadChapter: "ch-1", lastReadPage: 9 });
+  const res = await postProgress(signedPost("/api/internal/sync/progress", JSON.stringify({ runId, source: "e500", items: [item] })));
+  assert.equal(res.status, 200);
+  const commit = await (await postCommit(signedPost("/api/internal/sync/commit", JSON.stringify({ runId })))).json();
+  assert.equal(commit.conflicts, 1);
+  assert.equal(commit.failed, 0);
 });

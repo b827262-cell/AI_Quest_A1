@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../../../../db";
-import { books, syncItems } from "../../../../../../../db/schema";
+import { books, syncItems, syncRuns } from "../../../../../../../db/schema";
 import { authorizeSyncRequest, jsonError, readBody, writeAudit, type StorageBucket } from "../../../_shared";
 import { sha256Hex } from "../../../../../../../lib/sync-core";
 
@@ -40,6 +40,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const runId = requestBody.runId; if (!runId) throw new Error("runId is required");
     const id = (await context.params).id;
     const db = await getDb();
+    const runRows = await db.select().from(syncRuns).where(eq(syncRuns.id, runId)).limit(1);
+    const run = runRows[0];
+    if (!run || run.status !== "running") return jsonError(new Error("sync run is not active"), 409);
     const bookRows = await db.select().from(books).where(eq(books.id, id)).limit(1);
     const book = bookRows[0]; if (!book) return Response.json({ error: "book_not_found" }, { status: 404 });
     if (!requestBody.sourceRecordId || !requestBody.sourceSystem) throw new Error("sourceSystem and sourceRecordId are required");
@@ -51,6 +54,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (book.sha256 === sha256 && book.storageState === "active" && book.objectKey) {
       await db.insert(syncItems).values({ id: crypto.randomUUID(), runId, entityType: "book_content", sourceRecordId: requestBody.sourceRecordId, targetRecordId: book.id, operation: "skip", checksum: sha256, sourceVersion: incomingVersion, status: "skipped", error: null });
       return Response.json({ runId, bookId: book.id, skipped: true, sha256 });
+    }
+    if (run.dryRun) {
+      await db.insert(syncItems).values({ id: crypto.randomUUID(), runId, entityType: "book_content", sourceRecordId: requestBody.sourceRecordId, targetRecordId: book.id, operation: "upload", checksum: sha256, sourceVersion: incomingVersion, status: "dry_run", error: null });
+      return Response.json({ runId, bookId: book.id, dryRun: true, skipped: false, sha256, byteSize: requestBody.bytes.length });
     }
     const objectKey = `books/${book.id}/${sha256}.pdf`;
     const targetBucket = bucket(); if (!targetBucket) return Response.json({ error: "r2_unavailable" }, { status: 503 });
