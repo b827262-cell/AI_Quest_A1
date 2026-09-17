@@ -1,5 +1,17 @@
 "use client";
 
+// Auto public-answer page — fail-closed to Chrome Built-in AI.
+//
+// This page renders the learner-facing Auto answer flow for the public
+// experience. It deliberately has no network fallback, no server AI endpoint,
+// and no shared-backend answer route. It must NEVER reference cloud-AI
+// endpoints, provider API keys, or the legacy public-answer guest path. The
+// canonical forbidden list (provider keys, cloud-AI hosts, legacy
+// public-answer routes) is enforced by the source/bundle gate in
+// `tests/chrome-built-in-ai.test.mjs`, which scans both this file and the
+// built client bundle. Adding any forbidden token here or shipping one
+// through the build will fail that gate.
+
 import { FormEvent, useRef, useState } from "react";
 import { createAutoSubmitter } from "./chrome-built-in-ai";
 

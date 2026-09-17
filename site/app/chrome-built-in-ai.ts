@@ -1,3 +1,14 @@
+// Auto slice core: browser-native Chrome Built-in AI only.
+//
+// This module powers the public Auto answer flow. It exclusively uses the
+// learner's device — `window.LanguageModel` (Prompt API) for inference and
+// the optional Chrome Translator API as a Traditional-Chinese bridge. It has
+// no network fallback, no server AI endpoint, no provider API key, and no
+// shared-backend answer route. The source/bundle gate in
+// `tests/chrome-built-in-ai.test.mjs` enforces this by scanning both this
+// file and the built client bundle for forbidden cloud-AI tokens; adding any
+// of them here will fail the gate and block the Auto slice from shipping.
+
 type Availability = "available" | "downloadable" | "downloading" | "unavailable" | string;
 type Translator = { translate(input: string): Promise<string>; destroy?: () => void };
 type LanguageModelSession = {
