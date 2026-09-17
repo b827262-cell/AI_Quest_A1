@@ -126,6 +126,14 @@ character body limit, so its effective payload is about 6 MiB. PDFs above that
 must use the raw `application/pdf` request path (limit `SYNC_MAX_PDF_BYTES`,
 default 50 MiB).
 
+## Public student Auto answers
+
+Auto runs exclusively through Chrome Built-in AI on the learner's device:
+`window.LanguageModel` (Prompt API), with the Chrome Translator API as an
+optional Traditional-Chinese bridge. It has no server AI endpoint, credentials,
+or cloud fallback. Browsers without an available local model fail closed with a
+clear support or model-download message.
+
 ## Learn More
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)

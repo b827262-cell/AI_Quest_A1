@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
+import { createAutoSubmitter } from "./chrome-built-in-ai";
 
 const quickModes = ["程式設計", "數學解題", "教材問答", "資通安全"];
 
@@ -12,11 +13,34 @@ export default function Home() {
   const [question, setQuestion] = useState("");
   const [model, setModel] = useState("Auto");
   const [mode, setMode] = useState("自動判斷");
-  const [submitted, setSubmitted] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const autoSubmitter = useRef(createAutoSubmitter());
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (question.trim()) setSubmitted(question.trim());
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion || isLoading) return;
+
+    setAnswer("");
+    setError("");
+    if (model !== "Auto") {
+      setError("公開體驗目前僅支援 Auto（Chrome 內建 AI）回答。");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const finalAnswer = await autoSubmitter.current.submit(trimmedQuestion, (chunk) => {
+        setAnswer((current) => current + chunk);
+      });
+      setAnswer(finalAnswer);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "目前無法取得 AI 回答，請稍後再試。");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -48,17 +72,21 @@ export default function Home() {
               onChange={(event) => setQuestion(event.target.value)}
               placeholder="輸入你的問題……"
               aria-label="輸入你的問題"
+              disabled={isLoading}
             />
           </label>
           <div className="control-row">
-            <select value={model} onChange={(event) => setModel(event.target.value)} aria-label="AI 模型">
+            <select value={model} onChange={(event) => setModel(event.target.value)} aria-label="AI 模型" disabled={isLoading}>
               <option>Auto</option><option>OpenAI</option><option>Gemini</option><option>Kimi</option><option>Qwen</option>
             </select>
-            <select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="解題模式">
+            <select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="解題模式" disabled={isLoading}>
               <option>自動判斷</option><option>程式設計</option><option>數學解題</option><option>文科問答</option><option>資通安全</option><option>教材問答</option>
             </select>
             <span className="loading-dot" aria-hidden="true" />
-            <button type="submit" disabled={!question.trim()} aria-label="送出問題">➤</button>
+            <button type="submit" disabled={!question.trim() || isLoading} aria-label="送出問題">
+              {isLoading ? "…" : "➤"}
+            </button>
+            {isLoading && <button type="button" onClick={() => autoSubmitter.current.cancel()} aria-label="取消 AI 回答">取消</button>}
           </div>
         </form>
 
@@ -69,12 +97,17 @@ export default function Home() {
 
         <div className="quick-modes" aria-label="快速題型">
           {quickModes.map((item) => (
-            <button key={item} type="button" onClick={() => setMode(item)}>{item}</button>
+            <button key={item} type="button" onClick={() => setMode(item)} disabled={isLoading}>{item}</button>
           ))}
         </div>
 
-        {submitted && (
-          <p className="submitted-note" role="status">已準備以 {model} 進行{mode}：{submitted}</p>
+        {isLoading && <p className="submitted-note" role="status">Chrome 內建 AI 正在回答中…</p>}
+        {error && <p className="submitted-note" role="alert">{error}</p>}
+        {answer && (
+          <section className="submitted-note" aria-label="Chrome 內建 AI 回答">
+            <p role="status">Chrome 內建 AI 回答</p>
+            <pre>{answer}</pre>
+          </section>
         )}
       </section>
 

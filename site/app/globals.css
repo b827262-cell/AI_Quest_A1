@@ -37,7 +37,7 @@ h1 { margin: 0; font-size: clamp(44px, 5.8vw, 78px); line-height: 1.12; letter-s
 .usage-row { display: flex; justify-content: space-between; gap: 20px; padding: 18px 22px 0; color: #8091b4; font-size: 14px; text-align: left; }
 .quick-modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 34px; }
 .quick-modes button { padding: 11px 19px; border: 1px solid #dbe0f2; border-radius: 999px; color: #66789e; background: rgba(255,255,255,.45); font-size: 15px; transition: color .18s ease, border-color .18s ease, background .18s ease; }
-.quick-modes button:hover { border-color: #a8b5fc; color: var(--accent); background: white; }.submitted-note { margin: 22px auto -18px; color: #5d70ad; font-size: 14px; }
+.quick-modes button:hover { border-color: #a8b5fc; color: var(--accent); background: white; }.submitted-note { margin: 22px auto -18px; color: #5d70ad; font-size: 14px; }.submitted-note pre { margin: 8px 0; overflow-wrap: anywhere; white-space: pre-wrap; font: inherit; line-height: 1.65; }.submitted-note small { color: #7180a4; }
 .feature-strip { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 99px; border-top: 1px solid var(--line); }
 .feature-strip article { min-height: 142px; padding: 31px 30px; border-right: 1px solid var(--line); text-align: left; }.feature-strip article:first-child { padding-left: 29px; }.feature-strip article:last-child { border-right: 0; }
 .feature-strip span { color: #7d8fff; font-size: 12px; font-weight: 800; }.feature-strip h2 { margin: 15px 0 7px; font-size: 18px; letter-spacing: -.05em; }.feature-strip p { margin: 0; color: #8494b2; font-size: 14px; line-height: 1.55; }
