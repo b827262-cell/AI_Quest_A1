@@ -1,0 +1,38 @@
+{
+  "manifest_version": "phase4a.environment-source-of-truth/v1",
+  "environment": "production",
+  "captured_at": "2026-09-17T00:38:14.667Z",
+  "sites": {
+    "shared_backend": {
+      "project_id": "appgprj_6aa80235182c8191a876361138ecbc36",
+      "url": "https://ai-quest-a1-backend.b827262.chatgpt.site"
+    },
+    "student": {
+      "project_id": "appgprj_6a843b2ece70819191132bd6e99df7a1",
+      "url": "https://ai-quest-a1-student.b827262.chatgpt.site"
+    },
+    "admin": {
+      "project_id": "appgprj_6a843b6432f88191aa4cc090c236f3d3",
+      "url": "https://ai-quest-a1-admin.b827262.chatgpt.site"
+    }
+  },
+  "worker": {
+    "project_id": "appgprj_6aa80235182c8191a876361138ecbc36",
+    "version": "appgver_29168e1fb47481918766d24a5c904b7d",
+    "health_endpoint": "https://ai-quest-a1-backend.b827262.chatgpt.site/api/health",
+    "health_status": 200,
+    "bindings": {
+      "DB": {
+        "type": "d1",
+        "resource_id": "DB",
+        "readable": true
+      },
+      "BOOKS_BUCKET": {
+        "type": "r2",
+        "resource_id": "BOOKS_BUCKET",
+        "list_readable": true,
+        "get_readable": true
+      }
+    }
+  }
+}
