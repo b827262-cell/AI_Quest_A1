@@ -11,6 +11,21 @@ const { d1, r2 } = hostingConfig;
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
+// The upstream experimental polyfill ships registry labels for optional cloud
+// backends. Auto aliases those implementations to a fail-closed local module;
+// scrub their selector labels too, so no cloud configuration can be selected
+// from the emitted application bundle.
+const scrubCloudPolyfillSelectors = {
+  name: "auto-local-polyfill-only",
+  transform(code: string, id: string) {
+    if (!id.includes("prompt-api-polyfill")) return null;
+    return code
+      .replaceAll("FIREBASE_CONFIG", "BLOCKED_LOCAL_SELECTOR_1")
+      .replaceAll("GEMINI_CONFIG", "BLOCKED_LOCAL_SELECTOR_2")
+      .replaceAll("OPENAI_CONFIG", "BLOCKED_LOCAL_SELECTOR_3");
+  },
+};
+
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
@@ -48,6 +63,7 @@ export default defineConfig(async () => {
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
     plugins: [
+      scrubCloudPolyfillSelectors,
       vinext(),
       sites(),
       cloudflare({
@@ -55,5 +71,17 @@ export default defineConfig(async () => {
         config: localBindingConfig,
       }),
     ],
+    resolve: {
+      alias: [
+        {
+          find: /.*\/backends\/(firebase|gemini|openai|webllm)\.js$/,
+          replacement: new URL("./app/blocked-cloud-backend.ts", import.meta.url).pathname,
+        },
+        {
+          find: /^(@google\/genai|openai|firebase(\/.*)?|@mlc-ai\/web-llm)$/,
+          replacement: new URL("./app/blocked-cloud-backend.ts", import.meta.url).pathname,
+        },
+      ],
+    },
   };
 });

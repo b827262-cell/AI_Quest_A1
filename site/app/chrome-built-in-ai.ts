@@ -1,55 +1,100 @@
-// Auto slice core: browser-native Chrome Built-in AI only.
+// Auto slice core: browser-native Chrome Built-in AI with local Transformers.js fallback.
 //
-// This module powers the public Auto answer flow. It exclusively uses the
-// learner's device — `window.LanguageModel` (Prompt API) for inference and
-// the optional Chrome Translator API as a Traditional-Chinese bridge. It has
-// no network fallback, no server AI endpoint, no provider API key, and no
-// shared-backend answer route. The source/bundle gate in
-// `tests/chrome-built-in-ai.test.mjs` enforces this by scanning both this
-// file and the built client bundle for forbidden cloud-AI tokens; adding any
-// of them here will fail the gate and block the Auto slice from shipping.
+// Architecture:
+// AUTO_PRIMARY = native window.LanguageModel
+// AUTO_LOCAL_FALLBACK = Prompt API polyfill + Transformers.js local backend
+// CLOUD_AI_FALLBACK = NO
+// PROVIDER_API_KEYS = NOT USED
+// GOOGLE_REST_API = NOT USED
+// SHARED_BACKEND_AI = NOT USED
+//
+// Enforced by tests/chrome-built-in-ai.test.mjs source and bundle gates.
+
+export type AutoAiStatus =
+  | "native ready"
+  | "native model download"
+  | "local fallback loading"
+  | "local model download"
+  | "unsupported after fallback";
+
+export type StatusCallback = (status: AutoAiStatus, progress?: number | null) => void;
 
 type Availability = "available" | "downloadable" | "downloading" | "unavailable" | string;
-type Translator = { translate(input: string): Promise<string>; destroy?: () => void };
-type LanguageModelSession = {
+
+type Translator = {
+  translate(input: string): Promise<string>;
+  destroy?: () => void;
+};
+
+export type LanguageModelSession = {
   prompt?: (input: string) => Promise<string>;
   promptStreaming?: (input: string) => AsyncIterable<string>;
   destroy?: () => void;
 };
 
 export type ChromeAiEnvironment = {
-  LanguageModel?: { availability(): Promise<Availability>; create(): Promise<LanguageModelSession> };
+  LanguageModel?: {
+    availability(options?: unknown): Promise<Availability>;
+    create(options?: unknown): Promise<LanguageModelSession>;
+    __isPolyfill?: boolean;
+  };
   Translator?: {
     availability(options: { sourceLanguage: string; targetLanguage: string }): Promise<Availability>;
     create(options: { sourceLanguage: string; targetLanguage: string }): Promise<Translator>;
   };
+  navigator?: {
+    gpu?: {
+      requestAdapter?: () => Promise<unknown>;
+    };
+    userAgent?: string;
+  };
+  window?: unknown;
+  WebAssembly?: unknown;
 };
 
 export class ChromeAiError extends Error {
-  constructor(message: string) { super(message); this.name = "ChromeAiError"; }
+  constructor(message: string) {
+    super(message);
+    this.name = "ChromeAiError";
+  }
 }
 
 function environment(): ChromeAiEnvironment {
-  return typeof window === "undefined" ? {} : window as unknown as ChromeAiEnvironment;
+  if (typeof window === "undefined") return {};
+  const win = window as unknown as ChromeAiEnvironment;
+  return {
+    LanguageModel: win.LanguageModel,
+    Translator: win.Translator,
+    navigator: typeof navigator !== "undefined" ? navigator : undefined,
+    window: window,
+    WebAssembly: typeof WebAssembly !== "undefined" ? WebAssembly : undefined,
+  };
 }
 
-function availabilityMessage(status: Availability) {
-  if (status === "downloadable") return "Chrome 內建 AI 模型需要先下載，完成後再試。";
-  if (status === "downloading") return "Chrome 內建 AI 模型正在下載中，請完成後再試。";
-  return "此瀏覽器/裝置目前不支援 Chrome 內建 AI。";
+export function isTraditionalChinese(input: string): boolean {
+  return /[\u3400-\u9fff]/.test(input);
 }
 
-function isTraditionalChinese(input: string) { return /[\u3400-\u9fff]/.test(input); }
-
-async function createTranslator(api: ChromeAiEnvironment["Translator"], sourceLanguage: string, targetLanguage: string) {
+async function createTranslator(
+  api: ChromeAiEnvironment["Translator"],
+  sourceLanguage: string,
+  targetLanguage: string,
+): Promise<Translator | null> {
   if (!api) return null;
   try {
     const status = await api.availability({ sourceLanguage, targetLanguage });
     return status === "available" ? await api.create({ sourceLanguage, targetLanguage }) : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
-async function streamAnswer(session: LanguageModelSession, prompt: string, onChunk: (chunk: string) => void, signal?: AbortSignal) {
+async function streamAnswer(
+  session: LanguageModelSession,
+  prompt: string,
+  onChunk: (chunk: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
   if (session.promptStreaming) {
     let answer = "";
     for await (const chunk of session.promptStreaming(prompt)) {
@@ -59,71 +104,263 @@ async function streamAnswer(session: LanguageModelSession, prompt: string, onChu
     }
     return answer;
   }
-  if (!session.prompt) throw new ChromeAiError("此瀏覽器/裝置目前不支援 Chrome 內建 AI。");
+  if (!session.prompt) {
+    throw new ChromeAiError("此瀏覽器/裝置目前不支援本機 AI 回答。");
+  }
   const answer = await session.prompt(prompt);
   if (signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
   onChunk(answer);
   return answer;
 }
 
-/** Uses only the device's Chrome Prompt API; it deliberately has no network fallback. */
-export async function askWithChromeBuiltInAi(question: string, onChunk: (chunk: string) => void, options: { signal?: AbortSignal; env?: ChromeAiEnvironment } = {}): Promise<string> {
-  const env = options.env ?? environment();
-  if (!env.LanguageModel) throw new ChromeAiError("此瀏覽器/裝置目前不支援 Chrome 內建 AI。");
-  let status: Availability;
-  try { status = await env.LanguageModel.availability(); }
-  catch { throw new ChromeAiError("Chrome 內建 AI 無法完成回答，未使用其他 AI 服務。"); }
-  if (status !== "available") throw new ChromeAiError(availabilityMessage(status));
-  if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
-  let session: LanguageModelSession;
-  try { session = await env.LanguageModel.create(); }
-  catch { throw new ChromeAiError("Chrome 內建 AI 無法完成回答，未使用其他 AI 服務。"); }
-  let toEnglish: Translator | null = null;
-  let toTraditionalChinese: Translator | null = null;
-  try {
-    let input = question;
-    // Chrome has no Prompt API language-capability flag. When both on-device
-    // translators are ready, they provide a reliable Traditional-Chinese bridge.
-    if (isTraditionalChinese(question)) {
-      [toEnglish, toTraditionalChinese] = await Promise.all([
-        createTranslator(env.Translator, "zh-Hant", "en"),
-        createTranslator(env.Translator, "en", "zh-Hant"),
-      ]);
-      if (toEnglish && toTraditionalChinese) input = await toEnglish.translate(question);
+export async function detectLocalDevice(env: ChromeAiEnvironment): Promise<"webgpu" | "wasm" | null> {
+  const nav = "navigator" in env ? env.navigator : (typeof navigator !== "undefined" ? navigator : undefined);
+  if (nav && "gpu" in nav && typeof nav.gpu?.requestAdapter === "function") {
+    try {
+      const adapter = await nav.gpu.requestAdapter();
+      if (adapter) return "webgpu";
+    } catch {
+      // WebGPU not available or rejected
     }
-    const response = await streamAnswer(
-      session,
-      `Answer this learner question clearly and accurately:\n\n${input}`,
-      // Translator translates a completed string, so do not expose temporary
-      // English chunks before the final Traditional-Chinese result is ready.
-      toTraditionalChinese ? () => {} : onChunk,
-      options.signal,
-    );
-    if (!toTraditionalChinese) return response;
-    const translated = await toTraditionalChinese.translate(response);
+  }
+  const wasm = "WebAssembly" in env ? env.WebAssembly : (typeof WebAssembly !== "undefined" ? WebAssembly : undefined);
+  if (wasm && typeof (wasm as { instantiate?: unknown }).instantiate === "function") {
+    return "wasm";
+  }
+  return null;
+}
+
+export type AskOptions = {
+  signal?: AbortSignal;
+  env?: ChromeAiEnvironment;
+  onStatus?: StatusCallback;
+  loadPolyfill?: () => Promise<void>;
+};
+
+interface PolyfillHostWindow {
+  TRANSFORMERS_CONFIG?: unknown;
+  LanguageModel?: ChromeAiEnvironment["LanguageModel"];
+}
+
+interface ProgressLikeEvent extends Event {
+  loaded?: number;
+  total?: number;
+}
+
+export async function askWithChromeBuiltInAi(
+  question: string,
+  onChunk: (chunk: string) => void,
+  options: AskOptions = {},
+): Promise<string> {
+  const env = options.env ?? environment();
+  const win = (env.window ?? (typeof window !== "undefined" ? window : globalThis)) as PolyfillHostWindow;
+
+  // 1. First priority: Native Chrome window.LanguageModel
+  const nativeLM = env.LanguageModel;
+  let nativeAvailable = false;
+  let nativeDownloading = false;
+
+  if (nativeLM && !nativeLM.__isPolyfill) {
+    try {
+      const status = await nativeLM.availability();
+      if (status === "available") {
+        nativeAvailable = true;
+      } else if (status === "downloadable" || status === "downloading") {
+        nativeDownloading = true;
+      }
+    } catch {
+      // Native availability check failed, fall through to local fallback
+    }
+  }
+
+  // Handle native available path
+  if (nativeAvailable && nativeLM) {
+    options.onStatus?.("native ready");
     if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
-    onChunk(translated);
-    return translated;
+
+    let session: LanguageModelSession;
+    try {
+      session = await nativeLM.create({ signal: options.signal });
+    } catch {
+      if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+      throw new ChromeAiError("Chrome 內建 AI 無法完成回答，未使用其他 AI 服務。");
+    }
+
+    let toEnglish: Translator | null = null;
+    let toTraditionalChinese: Translator | null = null;
+    try {
+      let input = question;
+      if (isTraditionalChinese(question)) {
+        [toEnglish, toTraditionalChinese] = await Promise.all([
+          createTranslator(env.Translator, "zh-Hant", "en"),
+          createTranslator(env.Translator, "en", "zh-Hant"),
+        ]);
+        if (toEnglish && toTraditionalChinese) {
+          input = await toEnglish.translate(question);
+        }
+      }
+
+      const promptText = toEnglish && toTraditionalChinese
+        ? `Answer this learner question clearly and accurately:\n\n${input}`
+        : `請用繁體中文清楚準確回答以下學習問題：\n\n${input}`;
+
+      const response = await streamAnswer(
+        session,
+        promptText,
+        toTraditionalChinese ? () => {} : onChunk,
+        options.signal,
+      );
+
+      if (!toTraditionalChinese) return response;
+      const translated = await toTraditionalChinese.translate(response);
+      if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+      onChunk(translated);
+      return translated;
+    } catch (error) {
+      if (error instanceof ChromeAiError) throw error;
+      throw new ChromeAiError("Chrome 內建 AI 無法完成回答，未使用其他 AI 服務。");
+    } finally {
+      session.destroy?.();
+      toEnglish?.destroy?.();
+      toTraditionalChinese?.destroy?.();
+    }
+  }
+
+  // Handle native model download path
+  if (nativeDownloading && nativeLM) {
+    options.onStatus?.("native model download", 0);
+    if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+
+    let session: LanguageModelSession | undefined;
+    try {
+      session = await nativeLM.create({
+        monitor(m: EventTarget) {
+          m.addEventListener("downloadprogress", (e: Event) => {
+            const pe = e as ProgressLikeEvent;
+            const loaded = Number(pe.loaded) || 0;
+            const total = Number(pe.total) || 1;
+            const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
+            options.onStatus?.("native model download", progress);
+          });
+        },
+        signal: options.signal,
+      });
+    } catch {
+      if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+      // Fall through to local fallback
+    }
+
+    if (session) {
+      try {
+        const response = await streamAnswer(
+          session,
+          `請用繁體中文清楚準確回答以下學習問題：\n\n${question}`,
+          onChunk,
+          options.signal,
+        );
+        return response;
+      } finally {
+        session.destroy?.();
+      }
+    }
+  }
+
+  // 2. Second priority: Local Fallback (prompt-api-polyfill + Transformers.js local backend)
+  const localDevice = await detectLocalDevice(env);
+  if (!localDevice) {
+    options.onStatus?.("unsupported after fallback");
+    throw new ChromeAiError("此瀏覽器/裝置目前不支援 Chrome 內建 AI，且硬體環境無法執行本機模型 (WebGPU/WASM 皆不支援)。");
+  }
+
+  options.onStatus?.("local fallback loading");
+  if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+
+  // Configure local Transformers.js backend with constant non-sensitive dummy key
+  win.TRANSFORMERS_CONFIG = {
+    apiKey: "dummy",
+    device: localDevice,
+    dtype: localDevice === "webgpu" ? "q4f16" : "q4",
+    modelName: "onnx-community/Qwen2.5-0.5B-Instruct",
+  };
+
+  try {
+    if (options.loadPolyfill) {
+      await options.loadPolyfill();
+    } else {
+      await import("prompt-api-polyfill");
+    }
+  } catch {
+    options.onStatus?.("unsupported after fallback");
+    throw new ChromeAiError("載入本機 AI 引擎失敗，未使用任何雲端服務。");
+  }
+
+  const polyfillLM = win.LanguageModel ?? env.LanguageModel;
+  if (!polyfillLM) {
+    options.onStatus?.("unsupported after fallback");
+    throw new ChromeAiError("此瀏覽器/裝置目前不支援本機 AI 模型。");
+  }
+
+  options.onStatus?.("local model download", 0);
+  if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+
+  let localSession: LanguageModelSession;
+  try {
+    localSession = await polyfillLM.create({
+      monitor(m: EventTarget) {
+        m.addEventListener("downloadprogress", (e: Event) => {
+          const pe = e as ProgressLikeEvent;
+          const loaded = Number(pe.loaded) || 0;
+          const total = Number(pe.total) || 1;
+          const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
+          options.onStatus?.("local model download", progress);
+        });
+      },
+      signal: options.signal,
+    });
+  } catch {
+    if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+    options.onStatus?.("unsupported after fallback");
+    throw new ChromeAiError("本機 AI 模型下載或初始化失敗，未使用任何雲端服務。");
+  }
+
+  try {
+    const prompt = `請用繁體中文清楚準確回答以下問題：\n\n${question}`;
+    const response = await streamAnswer(localSession, prompt, onChunk, options.signal);
+    return response;
   } catch (error) {
     if (error instanceof ChromeAiError) throw error;
-    throw new ChromeAiError("Chrome 內建 AI 無法完成回答，未使用其他 AI 服務。");
+    throw new ChromeAiError("本機 AI 模型無法完成回答，未使用任何雲端服務。");
   } finally {
-    session.destroy?.();
-    toEnglish?.destroy?.();
-    toTraditionalChinese?.destroy?.();
+    localSession.destroy?.();
   }
 }
 
-export function createAutoSubmitter(env?: ChromeAiEnvironment) {
+export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Promise<void>) {
   let controller: AbortController | null = null;
   return {
-    get inFlight() { return controller !== null; },
-    cancel() { controller?.abort(); },
-    async submit(question: string, onChunk: (chunk: string) => void) {
+    get inFlight() {
+      return controller !== null;
+    },
+    cancel() {
+      controller?.abort();
+    },
+    async submit(
+      question: string,
+      onChunk: (chunk: string) => void,
+      onStatus?: StatusCallback,
+    ) {
       if (controller) throw new ChromeAiError("AI 回答處理中，請稍候。");
       controller = new AbortController();
-      try { return await askWithChromeBuiltInAi(question, onChunk, { env, signal: controller.signal }); }
-      finally { controller = null; }
+      try {
+        return await askWithChromeBuiltInAi(question, onChunk, {
+          env,
+          signal: controller.signal,
+          onStatus,
+          loadPolyfill: loader,
+        });
+      } finally {
+        controller = null;
+      }
     },
   };
 }

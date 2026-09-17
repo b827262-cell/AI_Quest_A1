@@ -1,114 +1,344 @@
-// Auto slice source/bundle gate.
+// Auto slice source/bundle and compatibility gate.
 //
-// This file holds 11 tests (see case list below). The last test scans the Auto
-// slice source files (`page.tsx` + `chrome-built-in-ai.ts`) and the built
-// client bundle for forbidden cloud-AI tokens and paths. Adding any of those
-// tokens to a source file or shipping them through the build will fail the
-// gate. Case list (verified empirically against 97f79e2 + this hardening pass):
-//   1. missing LanguageModel fails closed without a network call
-//   2. availability=downloadable fails closed
-//   3. availability=downloading fails closed
-//   4. availability=unavailable fails closed
-//   5. available Prompt API creates a session and progressively renders promptStreaming
-//   6. uses prompt only when promptStreaming is not exposed
-//   7. Traditional Chinese uses feature-detected on-device translators in both directions
-//   8. Translator absence does not block a native Prompt API answer
-//   9. duplicate submits and cancellation fail closed
-//  10. browser AI errors never fall back to a network service
-//  11. client source and built bundle forbid cloud-AI tokens and guest-ask paths
+// Minimum Gate requirements verified:
+//  1. native LanguageModel available -> uses native, PASS
+//  2. native downloadable/downloading -> model download progress with cancel
+//  3. native absent -> local polyfill path loaded, NETWORK_CLOUD_AI_CALLS = 0
+//  4. native unavailable -> falls through to local fallback instead of early exit
+//  5. WebGPU local inference -> answer rendered
+//  6. WebGPU unavailable -> WASM path has concrete result or truthful unsupported (no false-PASS)
+//  7. Android/iOS UA -> does not terminate solely on LanguageModel absence; evaluates local fallback
+//  8. duplicate submits and cancellation fail closed
+//  9. browser AI errors never fall back to a network service
+// 10. Traditional Chinese questions succeed with or without Translator API
+// 11. client source and built bundle forbid cloud-AI tokens, keys, and endpoints
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { askWithChromeBuiltInAi, ChromeAiError, createAutoSubmitter } from "../app/chrome-built-in-ai.ts";
+import {
+  askWithChromeBuiltInAi,
+  ChromeAiError,
+  createAutoSubmitter,
+} from "../app/chrome-built-in-ai.ts";
 
 function stream(chunks) {
-  return (async function* () { for (const chunk of chunks) yield chunk; })();
+  return (async function* () {
+    for (const chunk of chunks) yield chunk;
+  })();
 }
 
-function availableEnvironment({ chunks = ["本", "機回答"], translator } = {}) {
-  let createCalls = 0;
-  return {
-    env: {
+function mockTargetWindow(overrides = {}) {
+  const win = {
+    ...overrides,
+  };
+  return win;
+}
+
+test("Gate 1: native LanguageModel available uses native without fallback and without network calls", async () => {
+  const originalFetch = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("Network must not be called");
+  };
+
+  try {
+    let nativeCreateCalls = 0;
+    const statuses = [];
+    const chunks = [];
+    const env = {
       LanguageModel: {
         async availability() { return "available"; },
-        async create() { createCalls += 1; return { promptStreaming: () => stream(chunks) }; },
+        async create() {
+          nativeCreateCalls += 1;
+          return { promptStreaming: () => stream(["原", "生答案"]) };
+        },
       },
-      Translator: translator,
-    },
-    createCalls: () => createCalls,
-  };
-}
+    };
 
-test("missing LanguageModel fails closed without a network call", async () => {
-  const originalFetch = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = async () => { calls += 1; throw new Error("network must not be used"); };
-  try {
-    await assert.rejects(() => askWithChromeBuiltInAi("問題", () => {}, { env: {} }), /不支援 Chrome 內建 AI/);
-    assert.equal(calls, 0);
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-for (const [status, expected] of [["downloadable", /需要先下載/], ["downloading", /正在下載中/], ["unavailable", /不支援 Chrome/]]) {
-  test(`LanguageModel availability=${status} fails closed`, async () => {
-    let creates = 0;
-    await assert.rejects(
-      () => askWithChromeBuiltInAi("question", () => {}, { env: { LanguageModel: { async availability() { return status; }, async create() { creates += 1; return {}; } } } }),
-      expected,
+    const answer = await askWithChromeBuiltInAi(
+      "測試問題",
+      (chunk) => chunks.push(chunk),
+      {
+        env,
+        onStatus: (st) => statuses.push(st),
+      },
     );
-    assert.equal(creates, 0);
-  });
-}
 
-test("available Prompt API creates a session and progressively renders promptStreaming", async () => {
-  const { env, createCalls } = availableEnvironment();
-  const chunks = [];
-  const answer = await askWithChromeBuiltInAi("explain this", (chunk) => chunks.push(chunk), { env });
-  assert.equal(answer, "本機回答");
-  assert.deepEqual(chunks, ["本", "機回答"]);
-  assert.equal(createCalls(), 1);
+    assert.equal(answer, "原生答案");
+    assert.deepEqual(chunks, ["原", "生答案"]);
+    assert.equal(nativeCreateCalls, 1);
+    assert.ok(statuses.includes("native ready"));
+    assert.equal(networkCalls, 0, "No network call should be made on native path");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
-test("uses prompt only when promptStreaming is not exposed", async () => {
-  const chunks = [];
-  const answer = await askWithChromeBuiltInAi("question", (chunk) => chunks.push(chunk), { env: {
+test("Gate 2: native LanguageModel downloadable/downloading reports progress and supports cancellation", async () => {
+  const statuses = [];
+  const progresses = [];
+
+  const env = {
     LanguageModel: {
-      async availability() { return "available"; },
-      async create() { return { async prompt() { return "non-stream answer"; } }; },
-    },
-  } });
-  assert.equal(answer, "non-stream answer");
-  assert.deepEqual(chunks, ["non-stream answer"]);
-});
-
-test("Traditional Chinese uses feature-detected on-device translators in both directions", async () => {
-  const translations = [];
-  const translator = {
-    async availability() { return "available"; },
-    async create({ sourceLanguage, targetLanguage }) {
-      return { async translate(value) { translations.push([sourceLanguage, targetLanguage, value]); return sourceLanguage === "zh-Hant" ? "English question" : "繁中答案"; } };
+      async availability() { return "downloadable"; },
+      async create(options) {
+        if (options?.monitor) {
+          const target = new EventTarget();
+          options.monitor(target);
+          target.dispatchEvent(Object.assign(new Event("downloadprogress"), { loaded: 50, total: 100 }));
+        }
+        if (options?.signal?.aborted) throw new Error("aborted");
+        return {
+          promptStreaming: () => stream(["下載完成回答"]),
+        };
+      },
     },
   };
-  const { env } = availableEnvironment({ chunks: ["English answer"], translator });
-  const rendered = [];
-  assert.equal(await askWithChromeBuiltInAi("請解釋這題", (chunk) => rendered.push(chunk), { env }), "繁中答案");
-  assert.deepEqual(translations, [["zh-Hant", "en", "請解釋這題"], ["en", "zh-Hant", "English answer"]]);
-  assert.deepEqual(rendered, ["繁中答案"]);
+
+  const answer = await askWithChromeBuiltInAi(
+    "問題",
+    () => {},
+    {
+      env,
+      onStatus: (st, pr) => {
+        statuses.push(st);
+        if (typeof pr === "number") progresses.push(pr);
+      },
+    },
+  );
+
+  assert.equal(answer, "下載完成回答");
+  assert.ok(statuses.includes("native model download"));
+  assert.ok(progresses.includes(0.5));
 });
 
-test("Translator absence does not block a native Prompt API answer", async () => {
-  const { env } = availableEnvironment({ chunks: ["直接繁中回答"] });
-  assert.equal(await askWithChromeBuiltInAi("繁中問題", () => {}, { env }), "直接繁中回答");
+test("Gate 3: native absent triggers local fallback capability gate and loads polyfill with NETWORK_CLOUD_AI_CALLS=0", async () => {
+  const originalFetch = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("No network AI allowed");
+  };
+
+  try {
+    let polyfillLoaded = false;
+    let polyfillCreateCalls = 0;
+    const statuses = [];
+    const chunks = [];
+
+    const mockWin = mockTargetWindow();
+    const env = {
+      window: mockWin,
+      navigator: {
+        gpu: {
+          requestAdapter: async () => ({ isMockAdapter: true }),
+        },
+      },
+      WebAssembly: { instantiate: async () => ({}) },
+    };
+
+    const answer = await askWithChromeBuiltInAi(
+      "數學問題",
+      (c) => chunks.push(c),
+      {
+        env,
+        loadPolyfill: async () => {
+          polyfillLoaded = true;
+          mockWin.LanguageModel = {
+            __isPolyfill: true,
+            async availability() { return "available"; },
+            async create() {
+              polyfillCreateCalls += 1;
+              return { promptStreaming: () => stream(["本機", "Fallback", "答案"]) };
+            },
+          };
+        },
+        onStatus: (st) => statuses.push(st),
+      },
+    );
+
+    assert.equal(answer, "本機Fallback答案");
+    assert.equal(polyfillLoaded, true, "Polyfill loader must be called when native LanguageModel is absent");
+    assert.equal(polyfillCreateCalls, 1);
+    assert.equal(networkCalls, 0, "NETWORK_CLOUD_AI_CALLS must be 0");
+    assert.ok(statuses.includes("local fallback loading"));
+    assert.ok(statuses.includes("local model download"));
+    assert.equal(mockWin.TRANSFORMERS_CONFIG.apiKey, "dummy");
+    assert.equal(mockWin.TRANSFORMERS_CONFIG.device, "webgpu");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
-test("duplicate submits and cancellation fail closed", async () => {
+test("Gate 4: native unavailable falls through to local fallback instead of early termination", async () => {
+  let polyfillLoaded = false;
+  const statuses = [];
+  const mockWin = mockTargetWindow();
+
+  const env = {
+    window: mockWin,
+    LanguageModel: {
+      async availability() { return "unavailable"; },
+      async create() { throw new Error("Native should not be created if unavailable"); },
+    },
+    navigator: {
+      gpu: { requestAdapter: async () => ({}) },
+    },
+  };
+
+  const answer = await askWithChromeBuiltInAi(
+    "問題",
+    () => {},
+    {
+      env,
+      loadPolyfill: async () => {
+        polyfillLoaded = true;
+        mockWin.LanguageModel = {
+          __isPolyfill: true,
+          async create() {
+            return { promptStreaming: () => stream(["Fallback從unavailable復原"]) };
+          },
+        };
+      },
+      onStatus: (st) => statuses.push(st),
+    },
+  );
+
+  assert.equal(answer, "Fallback從unavailable復原");
+  assert.equal(polyfillLoaded, true);
+  assert.ok(statuses.includes("local fallback loading"));
+});
+
+test("Gate 5: WebGPU local inference renders streamed answer", async () => {
+  const mockWin = mockTargetWindow();
+  const env = {
+    window: mockWin,
+    navigator: {
+      gpu: { requestAdapter: async () => ({}) },
+    },
+  };
+
+  const chunks = [];
+  const answer = await askWithChromeBuiltInAi(
+    "題目",
+    (c) => chunks.push(c),
+    {
+      env,
+      loadPolyfill: async () => {
+        mockWin.LanguageModel = {
+          __isPolyfill: true,
+          async create() {
+            return {
+              promptStreaming: () => stream(["WebGPU", " ", "運算結果"]),
+            };
+          },
+        };
+      },
+    },
+  );
+
+  assert.equal(answer, "WebGPU 運算結果");
+  assert.deepEqual(chunks, ["WebGPU", " ", "運算結果"]);
+  assert.equal(mockWin.TRANSFORMERS_CONFIG.device, "webgpu");
+});
+
+test("Gate 6: WebGPU unavailable falls back to WASM, or truthful unsupported without false-PASS", async () => {
+  // Scenario A: WebGPU unavailable, WASM available -> evaluates WASM
+  const mockWinWasm = mockTargetWindow();
+  const envWasm = {
+    window: mockWinWasm,
+    navigator: { gpu: { requestAdapter: async () => null } },
+    WebAssembly: { instantiate: async () => ({}) },
+  };
+
+  const answerWasm = await askWithChromeBuiltInAi(
+    "題目",
+    () => {},
+    {
+      env: envWasm,
+      loadPolyfill: async () => {
+        mockWinWasm.LanguageModel = {
+          __isPolyfill: true,
+          async create() { return { prompt: async () => "WASM 回答" }; },
+        };
+      },
+    },
+  );
+
+  assert.equal(answerWasm, "WASM 回答");
+  assert.equal(mockWinWasm.TRANSFORMERS_CONFIG.device, "wasm");
+
+  // Scenario B: Neither WebGPU nor WASM available -> truthful unsupported, no false-PASS
+  const statuses = [];
+  const envNone = {
+    window: mockTargetWindow(),
+    navigator: {},
+    WebAssembly: undefined,
+  };
+
+  await assert.rejects(
+    () => askWithChromeBuiltInAi("題目", () => {}, { env: envNone, onStatus: (st) => statuses.push(st) }),
+    (err) => err instanceof ChromeAiError && /不支援/.test(err.message),
+  );
+  assert.ok(statuses.includes("unsupported after fallback"));
+});
+
+test("Gate 7: Android/iOS UA does not terminate solely on LanguageModel absence; evaluates local fallback", async () => {
+  for (const ua of [
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+  ]) {
+    const mockWin = mockTargetWindow();
+    const env = {
+      window: mockWin,
+      navigator: {
+        userAgent: ua,
+        gpu: { requestAdapter: async () => ({}) },
+      },
+    };
+
+    let polyfillCalled = false;
+    const answer = await askWithChromeBuiltInAi(
+      "手機問答測試",
+      () => {},
+      {
+        env,
+        loadPolyfill: async () => {
+          polyfillCalled = true;
+          mockWin.LanguageModel = {
+            __isPolyfill: true,
+            async create() { return { promptStreaming: () => stream(["行動端Fallback成功"]) }; },
+          };
+        },
+      },
+    );
+
+    assert.equal(answer, "行動端Fallback成功");
+    assert.equal(polyfillCalled, true, `Should have evaluated fallback on UA: ${ua}`);
+  }
+});
+
+test("Gate 8: duplicate submits and cancellation fail closed", async () => {
   let release;
-  const submitter = createAutoSubmitter({ LanguageModel: {
-    async availability() { return "available"; },
-    async create() { return { promptStreaming: async function* () { await new Promise((resolve) => { release = resolve; }); yield "late"; } }; },
-  } });
+  const submitter = createAutoSubmitter(
+    {
+      LanguageModel: {
+        async availability() { return "available"; },
+        async create() {
+          return {
+            promptStreaming: async function* () {
+              await new Promise((resolve) => { release = resolve; });
+              yield "late";
+            },
+          };
+        },
+      },
+    },
+  );
+
   const first = submitter.submit("first", () => {});
   await assert.rejects(() => submitter.submit("second", () => {}), /處理中/);
   submitter.cancel();
@@ -116,29 +346,85 @@ test("duplicate submits and cancellation fail closed", async () => {
   await assert.rejects(first, ChromeAiError);
 });
 
-test("browser AI errors never fall back to a network service", async () => {
+test("Gate 9: browser AI errors never fall back to a network service", async () => {
   const originalFetch = globalThis.fetch;
   let networkCalls = 0;
-  globalThis.fetch = async () => { networkCalls += 1; return Response.json({ answer: "not allowed" }); };
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    return Response.json({ answer: "Forbidden cloud fallback" });
+  };
+
   try {
-    await assert.rejects(() => askWithChromeBuiltInAi("question", () => {}, { env: { LanguageModel: { async availability() { return "available"; }, async create() { throw new Error("device error"); } } } }), /未使用其他 AI 服務/);
-    assert.equal(networkCalls, 0);
-  } finally { globalThis.fetch = originalFetch; }
+    const env = {
+      LanguageModel: {
+        async availability() { return "available"; },
+        async create() { throw new Error("Hardware acceleration failure"); },
+      },
+      navigator: { gpu: { requestAdapter: async () => null } },
+      WebAssembly: undefined,
+    };
+
+    await assert.rejects(
+      () => askWithChromeBuiltInAi("question", () => {}, { env }),
+      /未使用.*服務|不支援/,
+    );
+    assert.equal(networkCalls, 0, "No cloud network call allowed when local device fails");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Gate 10: Traditional Chinese questions succeed with or without Translator API", async () => {
+  // Case A: Translator present
+  const translations = [];
+  const envWithTrans = {
+    LanguageModel: {
+      async availability() { return "available"; },
+      async create() { return { promptStreaming: () => stream(["English translated answer"]) }; },
+    },
+    Translator: {
+      async availability() { return "available"; },
+      async create({ sourceLanguage, targetLanguage }) {
+        return {
+          async translate(text) {
+            translations.push([sourceLanguage, targetLanguage, text]);
+            return sourceLanguage === "zh-Hant" ? "English question" : "繁體中文最終答案";
+          },
+        };
+      },
+    },
+  };
+
+  const rendered = [];
+  const answerA = await askWithChromeBuiltInAi("什麼是二元搜尋樹？", (c) => rendered.push(c), { env: envWithTrans });
+  assert.equal(answerA, "繁體中文最終答案");
+  assert.equal(translations.length, 2);
+
+  // Case B: Translator absent (e.g. mobile browser)
+  const envNoTrans = {
+    LanguageModel: {
+      async availability() { return "available"; },
+      async create() { return { promptStreaming: () => stream(["繁體中文直接回答"]) }; },
+    },
+  };
+
+  const answerB = await askWithChromeBuiltInAi("什麼是二元搜尋樹？", () => {}, { env: envNoTrans });
+  assert.equal(answerB, "繁體中文直接回答");
 });
 
 function files(directory) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? files(join(directory, entry.name)) : [join(directory, entry.name)]);
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? files(join(directory, entry.name)) : [join(directory, entry.name)],
+  );
 }
 
-// Single source of truth for the Auto slice's fail-closed list. Mirrors the
-// forbidden tokens that case 11 below scans for. Any new cloud-AI path or key
-// that must be excluded from the public Auto answer pipeline belongs here so
-// reviewers can audit the gate from one place.
 const FORBIDDEN_CLOUD_AI_PATTERNS = [
   "GEMINI_API_KEY",
   "generativelanguage\\.googleapis\\.com",
   "guest-ask",
   "/api/public/",
+  "FIREBASE_CONFIG",
+  "OPENAI_CONFIG",
 ];
 
 function assertNoForbiddenTokens(label, payload) {
@@ -147,10 +433,11 @@ function assertNoForbiddenTokens(label, payload) {
   }
 }
 
-test("client source and built bundle forbid cloud-AI tokens and guest-ask paths", () => {
+test("Gate 11: client source and built bundle forbid cloud-AI tokens and guest-ask paths", () => {
   const sources = [
     new URL("../app/chrome-built-in-ai.ts", import.meta.url),
     new URL("../app/page.tsx", import.meta.url),
+    new URL("../app/blocked-cloud-backend.ts", import.meta.url),
   ];
   for (const url of sources) {
     const source = readFileSync(url, "utf8");
