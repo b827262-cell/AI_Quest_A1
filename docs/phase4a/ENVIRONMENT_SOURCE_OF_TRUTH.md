@@ -53,8 +53,12 @@
 |---|---|---|---|---|
 | **Worker Identity** | Live Health JSON | `GET /api/health` on backend | `2026-09-17T00:38:14.667Z` | `role: "shared-backend"`, `edge: "cloudflare-worker"` |
 | **Worker Saved Version** | Saved Deployment Ref | Deployment Record / Metadata | `2026-09-17T00:38:14.667Z` | `appgver_29168e1fb47481918766d24a5c904b7d` (Sites Version 8) |
+| **Worker Deployed Git SHA** | Deployment Mapping | Phase 3E-LIVE Deployment Closure | `2026-09-17T00:38:14.667Z` | `f0085202150c67760040644f1db3d6c479dc2074` (注意：落後於當前 RC base `d5f0619`，見說明) |
 | **Health Endpoint** | Live HTTPS | `curl -sS https://ai-quest-a1-backend.b827262.chatgpt.site/api/health` | `2026-09-17T00:38:14.667Z` | `{"status":"ok","edge":"cloudflare-worker","d1":"bound","r2":"bound","storage":"r2","phase":2,"role":"shared-backend","backendTarget":"https://ai-quest-a1-backend.b827262.chatgpt.site","sharedD1Project":"appgprj_6aa80235182c8191a876361138ecbc36","sharedR2Project":"appgprj_6aa80235182c8191a876361138ecbc36","sharedR2Bucket":"BOOKS_BUCKET","time":"2026-09-17T00:38:14.667Z"}` |
 | **Health HTTP Status** | HTTP Header | `curl -sI https://ai-quest-a1-backend.b827262.chatgpt.site/api/health` | `2026-09-17T00:38:14.667Z` | `HTTP/2 200 OK` |
+
+> [!NOTE] **Live Worker 程式碼版本落後警示 (Deployed Code Lag Notice - F2)**  
+> 線上 Version 8 係依據 commit `f008520` 發布。隨後之 `d5f0619 feat(sync): add dry-run reconciliation safeguards` 雖已進入 RC 基礎，但尚未部署至線上 Worker。此落後狀態已明確記錄於 manifest 之 `worker.deployed_git_sha` 欄位中，Phase 4B 之 Staging 部署必須包含 `d5f0619` 以上之程式碼並重新驗證門禁。
 
 ---
 
@@ -64,6 +68,7 @@
 |---|---|---|---|---|
 | **D1 Database Identity** | Live Health Payload | `GET /api/health` (`sharedD1Project`) | `2026-09-17T00:38:14.667Z` | `appgprj_6aa80235182c8191a876361138ecbc36` |
 | **D1 Binding Name** | Repo & Health | `site/.openai/hosting.json` & `GET /api/health` | `2026-09-17T00:38:14.667Z` | `DB` (`d1: "bound"`) |
+| **D1 Identity Source** | Control-Plane Limitation | Runtime introspection | `2026-09-17T00:38:14.667Z` | `identity_source: "unavailable"` (Sites Worker 不提供底層 D1 opaque UUID) |
 | **Schema Version** | Migration Source | `site/drizzle/0002_funny_ezekiel.sql` | `2026-09-17T00:35:24.000Z` | `0002_funny_ezekiel.sql` (Phase 3E sync tables & columns active) |
 | **D1 Read Status** | Live API Data Read | `GET /api/student/books` | `2026-09-17T00:38:21.000Z` | `readable: true` (HTTP 200, 8 本書籍資料讀取成功) |
 
@@ -75,6 +80,7 @@
 |---|---|---|---|---|
 | **R2 Bucket Identity** | Live Health Payload | `GET /api/health` (`sharedR2Bucket`) | `2026-09-17T00:38:14.667Z` | `BOOKS_BUCKET` (位於 `appgprj_6aa80235182c8191a876361138ecbc36`) |
 | **R2 Binding Name** | Repo & Health | `site/.openai/hosting.json` & `GET /api/health` | `2026-09-17T00:38:14.667Z` | `BOOKS_BUCKET` (`r2: "bound"`, `storage: "r2"`) |
+| **R2 Identity Source** | Control-Plane Limitation | Runtime introspection | `2026-09-17T00:38:14.667Z` | `identity_source: "unavailable"` (Sites Worker 不提供底層 R2 opaque UUID) |
 | **R2 List Readable** | Live API Books Meta | `GET /api/student/books` | `2026-09-17T00:38:21.000Z` | `list_readable: true` (回傳 8 本已上架教材之儲存中繼資料) |
 | **R2 Get Readable (Synth)** | Live Content Stream | `HEAD /api/student/books/content?id=book-synth-001` | `2026-09-17T00:36:39.000Z` | `get_readable: true` (HTTP 200, `content-length: 476`, etag: `"a531dfdb77377e16005816ae9d2c1954"`, sha256: `170e2df4e4f324c124cb9d12c1de469277498647116fb7c3fd98a73af47bc736`) |
 | **R2 Get Readable (E500)** | Live Content Stream | `HEAD /api/student/books/content?id=sync-book-e500-book_db9ba358-658f-4c07-823c-872b115747e7` | `2026-09-17T00:36:41.000Z` | `get_readable: true` (HTTP 200, `content-length: 2392044`, etag: `"01ea64c302fc87c022ad64de549f1153"`, sha256: `52193563359ee9b4da019a4486120bbc964baa90566bb7e81669e49e90a1c035`) |
@@ -101,14 +107,14 @@
 | `r2` | `"BOOKS_BUCKET"` | `"BOOKS_BUCKET"` (bound) | **MATCH (PASS)** | R2 儲存桶綁定名稱完全一致 |
 | **綜合判定** | - | - | **CONFIG_DRIFT = NO** | 宣告與線上執行狀態 100% 吻合 |
 
-> [!WARNING] **架構隔離警示 (Remote Naming Guard)**  
-> 查核發現本地 Git Remote `sites` 仍指向 `https://git.chatgpt-team.site/d860e286-b7dd-4d69-812f-06474d6198bc/appgprj_6a8415716c448191a7a8b8cb3597ca08.git`（舊獨立站點），而非 Shared Backend 專案。  
-> 任何自動化發布或推送嚴格禁止直接推至 `sites` remote，必須使用專屬部署通道。
+> [!WARNING] **架構隔離警示 (Remote Naming Guard & Repo Root Hosting Cleanup - F3)**  
+> 1. 本地 Git Remote `sites` 仍指向 `https://git.chatgpt-team.site/d860e286-b7dd-4d69-812f-06474d6198bc/appgprj_6a8415716c448191a7a8b8cb3597ca08.git`（舊獨立站點），而非 Shared Backend 專案。任何自動化發布或推送嚴格禁止直接推至 `sites` remote。  
+> 2. 原 repo-root `.openai/hosting.json` 殘留歷史專案宣告（`appgprj_6a8415716c448191a7a8b8cb3597ca08`），已於本次審查中徹底移除（`git rm .openai/hosting.json`），且門禁腳本已加入防護，避免根目錄設定衝突。
 
 ---
 
 ## 3. 來源真實性驗證記錄 (Verification Audit Trail)
 
-本次盤點採集歷程記錄於 `docs/phase4a/environment-source-of-truth.json`，並由 `site/scripts/verify-environment-alignment.mjs` 自動化 Gate 驗證通過（19/19 checks passed）。
+本次盤點採集歷程記錄於 `docs/phase4a/environment-source-of-truth.json`，並由 `site/scripts/verify-environment-alignment.mjs` 自動化 Gate 驗證通過（21/21 checks passed）。
 
 所有 live control-plane 數據皆於 `2026-09-17T00:38:14Z` 直接透過 HTTPS 驗證，未執行任何修改、未執行 production D1/R2 寫入、未執行 full sync。

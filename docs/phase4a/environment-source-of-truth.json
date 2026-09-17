@@ -19,17 +19,20 @@
   "worker": {
     "project_id": "appgprj_6aa80235182c8191a876361138ecbc36",
     "version": "appgver_29168e1fb47481918766d24a5c904b7d",
+    "deployed_git_sha": "f0085202150c67760040644f1db3d6c479dc2074",
     "health_endpoint": "https://ai-quest-a1-backend.b827262.chatgpt.site/api/health",
     "health_status": 200,
     "bindings": {
       "DB": {
         "type": "d1",
         "resource_id": "DB",
+        "identity_source": "unavailable",
         "readable": true
       },
       "BOOKS_BUCKET": {
         "type": "r2",
         "resource_id": "BOOKS_BUCKET",
+        "identity_source": "unavailable",
         "list_readable": true,
         "get_readable": true
       }
