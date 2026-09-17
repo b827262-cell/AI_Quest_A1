@@ -30,10 +30,11 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [aiStatus, setAiStatus] = useState<AutoAiStatus | "">("");
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [needsLocalModelGesture, setNeedsLocalModelGesture] = useState(false);
   const autoSubmitter = useRef(createAutoSubmitter());
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function submit(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion || isLoading) return;
 
@@ -41,6 +42,7 @@ export default function Home() {
     setError("");
     setAiStatus("");
     setDownloadProgress(null);
+    setNeedsLocalModelGesture(false);
     if (model !== "Auto") {
       setError("公開體驗目前僅支援 Auto（Chrome 內建 AI）回答。");
       return;
@@ -51,7 +53,11 @@ export default function Home() {
       const finalAnswer = await autoSubmitter.current.submit(
         trimmedQuestion,
         (chunk) => setAnswer((current) => current + chunk),
-        (status, progress) => { setAiStatus(status); setDownloadProgress(typeof progress === "number" ? progress : null); },
+        (status, progress) => {
+          setAiStatus(status);
+          setDownloadProgress(typeof progress === "number" ? progress : null);
+          if (status === "local model requires user activation") setNeedsLocalModelGesture(true);
+        },
       );
       setAnswer(finalAnswer);
     } catch (reason) {
@@ -127,6 +133,11 @@ export default function Home() {
         )}
         {isLoading && <p className="submitted-note" role="status">{statusText(aiStatus, downloadProgress)}</p>}
         {error && <p className="submitted-note" role="alert">{aiStatus ? `[${aiStatus}] ` : ""}{error}</p>}
+        {needsLocalModelGesture && !isLoading && (
+          <button type="button" onClick={() => { void submit(); }} aria-label="開始下載本機模型">
+            開始下載本機模型
+          </button>
+        )}
         {answer && (
           <section className="submitted-note" aria-label="本機 AI 回答">
             <p role="status">本機 AI 回答</p>
@@ -150,7 +161,9 @@ function statusText(status: AutoAiStatus | "", progress: number | null) {
   const percent = progress === null ? "" : ` (${Math.round(progress * 100)}%)`;
   if (status === "native ready") return "狀態：native ready（Chrome 內建 AI 已就緒）";
   if (status === "native model download") return `狀態：native model download（下載 Chrome 內建模型中${percent}）`;
+  if (status === "native translation buffering") return "狀態：native translation buffering（原生回答完成後轉為繁體中文）";
   if (status === "local fallback loading") return "狀態：local fallback loading（正在載入本機 AI 引擎）";
+  if (status === "local model requires user activation") return "狀態：local model requires user activation（請按開始下載本機模型）";
   if (status === "local model download") return `狀態：local model download（下載本機模型中${percent}）`;
   if (status === "unsupported after fallback") return "狀態：unsupported after fallback（此裝置不支援 Chrome 內建 AI 且無法執行本機模型）";
   return "正在準備本機 AI…";

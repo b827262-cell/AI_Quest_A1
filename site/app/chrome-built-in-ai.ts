@@ -13,7 +13,9 @@
 export type AutoAiStatus =
   | "native ready"
   | "native model download"
+  | "native translation buffering"
   | "local fallback loading"
+  | "local model requires user activation"
   | "local model download"
   | "unsupported after fallback";
 
@@ -47,6 +49,9 @@ export type ChromeAiEnvironment = {
       requestAdapter?: () => Promise<unknown>;
     };
     userAgent?: string;
+    userActivation?: {
+      isActive?: boolean;
+    };
   };
   window?: unknown;
   WebAssembly?: unknown;
@@ -72,7 +77,13 @@ function environment(): ChromeAiEnvironment {
 }
 
 export function isTraditionalChinese(input: string): boolean {
-  return /[\u3400-\u9fff]/.test(input);
+  // Han ideographs are shared by Traditional Chinese, Simplified Chinese and
+  // Japanese. Only opt into the zh-Hant Translator route when there is a
+  // Traditional-only marker, and reject Japanese kana / Simplified markers.
+  const hasTraditionalMarker = /[體臺灣學習問題為與這個麼裡應說請對於經網軟體資料]/.test(input);
+  const hasSimplifiedMarker = /[体台湾学习问题为与这个么里应说请对于经网软体资料]/.test(input);
+  const hasJapaneseKana = /[\u3040-\u30ff]/.test(input);
+  return hasTraditionalMarker && !hasSimplifiedMarker && !hasJapaneseKana;
 }
 
 async function createTranslator(
@@ -134,7 +145,12 @@ export type AskOptions = {
   signal?: AbortSignal;
   env?: ChromeAiEnvironment;
   onStatus?: StatusCallback;
+  /** Test seam only. Production always imports the real local backend. */
   loadPolyfill?: () => Promise<void>;
+  /** Test seam only; keeps fallback tests independent from a native API mock. */
+  loadLocalLanguageModel?: () => Promise<ChromeAiEnvironment["LanguageModel"]>;
+  /** Captured synchronously from the initiating UI gesture. */
+  userActivation?: boolean;
 };
 
 interface PolyfillHostWindow {
@@ -147,6 +163,17 @@ interface ProgressLikeEvent extends Event {
   total?: number;
 }
 
+/**
+ * The package does not overwrite an existing native LanguageModel by design.
+ * Use its exported class rather than reading window.LanguageModel after import:
+ * when native availability/create fails, that global can still be the unusable
+ * native API. The exported class is the isolated Transformers.js backend.
+ */
+export async function loadRealLocalLanguageModel(): Promise<NonNullable<ChromeAiEnvironment["LanguageModel"]>> {
+  const polyfill = await import("prompt-api-polyfill");
+  return polyfill.LanguageModel as NonNullable<ChromeAiEnvironment["LanguageModel"]>;
+}
+
 export async function askWithChromeBuiltInAi(
   question: string,
   onChunk: (chunk: string) => void,
@@ -154,6 +181,13 @@ export async function askWithChromeBuiltInAi(
 ): Promise<string> {
   const env = options.env ?? environment();
   const win = (env.window ?? (typeof window !== "undefined" ? window : globalThis)) as PolyfillHostWindow;
+  // Capture this before the native availability awaits. The polyfill requires
+  // a gesture for a cold model download; a later async continuation may no
+  // longer expose navigator.userActivation even though the submit click was
+  // genuine.
+  const hasFreshUserActivation = options.userActivation
+    ?? env.navigator?.userActivation?.isActive
+    ?? true;
 
   // 1. First priority: Native Chrome window.LanguageModel
   const nativeLM = env.LanguageModel;
@@ -178,17 +212,20 @@ export async function askWithChromeBuiltInAi(
     options.onStatus?.("native ready");
     if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
 
-    let session: LanguageModelSession;
+    let session: LanguageModelSession | undefined;
     try {
       session = await nativeLM.create({ signal: options.signal });
     } catch {
       if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
-      throw new ChromeAiError("Chrome 內建 AI 無法完成回答，未使用其他 AI 服務。");
+      // A native API can be advertised as available yet fail session creation
+      // (for example, its on-device model or accelerator is unavailable).
+      // Continue to the explicitly isolated local Transformers.js backend.
     }
 
-    let toEnglish: Translator | null = null;
-    let toTraditionalChinese: Translator | null = null;
-    try {
+    if (session) {
+      let toEnglish: Translator | null = null;
+      let toTraditionalChinese: Translator | null = null;
+      try {
       let input = question;
       if (isTraditionalChinese(question)) {
         [toEnglish, toTraditionalChinese] = await Promise.all([
@@ -204,25 +241,33 @@ export async function askWithChromeBuiltInAi(
         ? `Answer this learner question clearly and accurately:\n\n${input}`
         : `請用繁體中文清楚準確回答以下學習問題：\n\n${input}`;
 
+      const bufferedChunks: string[] = [];
       const response = await streamAnswer(
         session,
         promptText,
-        toTraditionalChinese ? () => {} : onChunk,
+        toTraditionalChinese
+          ? (chunk) => { bufferedChunks.push(chunk); }
+          : onChunk,
         options.signal,
       );
 
       if (!toTraditionalChinese) return response;
+      // Translation is whole-response only in the current Translator API.
+      // Make the buffering state explicit and retain all source chunks rather
+      // than silently replacing the stream callback with a no-op.
+      options.onStatus?.("native translation buffering");
       const translated = await toTraditionalChinese.translate(response);
       if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
       onChunk(translated);
       return translated;
-    } catch (error) {
-      if (error instanceof ChromeAiError) throw error;
-      throw new ChromeAiError("Chrome 內建 AI 無法完成回答，未使用其他 AI 服務。");
-    } finally {
-      session.destroy?.();
-      toEnglish?.destroy?.();
-      toTraditionalChinese?.destroy?.();
+      } catch (error) {
+        if (error instanceof ChromeAiError) throw error;
+        throw new ChromeAiError("Chrome 內建 AI 無法完成回答，未使用其他 AI 服務。");
+      } finally {
+        session.destroy?.();
+        toEnglish?.destroy?.();
+        toTraditionalChinese?.destroy?.();
+      }
     }
   }
 
@@ -275,26 +320,37 @@ export async function askWithChromeBuiltInAi(
   options.onStatus?.("local fallback loading");
   if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
 
+  if (!hasFreshUserActivation) {
+    options.onStatus?.("local model requires user activation");
+    throw new ChromeAiError("需要新的使用者操作才能開始下載本機模型。請按「開始下載本機模型」。");
+  }
+
   // Configure local Transformers.js backend with constant non-sensitive dummy key
   win.TRANSFORMERS_CONFIG = {
     apiKey: "dummy",
     device: localDevice,
-    dtype: localDevice === "webgpu" ? "q4f16" : "q4",
+    // q8 is the conservative WASM path supported by Transformers.js. Do not
+    // attempt q4 WASM just to discover an unsupported kernel after a large
+    // artifact download. WebGPU retains the upstream q4f16 default.
+    dtype: localDevice === "webgpu" ? "q4f16" : "q8",
     modelName: "onnx-community/Qwen2.5-0.5B-Instruct",
   };
 
+  let polyfillLM: ChromeAiEnvironment["LanguageModel"];
   try {
-    if (options.loadPolyfill) {
+    if (options.loadLocalLanguageModel) {
+      polyfillLM = await options.loadLocalLanguageModel();
+    } else if (options.loadPolyfill) {
       await options.loadPolyfill();
+      polyfillLM = win.LanguageModel;
     } else {
-      await import("prompt-api-polyfill");
+      polyfillLM = await loadRealLocalLanguageModel();
     }
   } catch {
     options.onStatus?.("unsupported after fallback");
     throw new ChromeAiError("載入本機 AI 引擎失敗，未使用任何雲端服務。");
   }
 
-  const polyfillLM = win.LanguageModel ?? env.LanguageModel;
   if (!polyfillLM) {
     options.onStatus?.("unsupported after fallback");
     throw new ChromeAiError("此瀏覽器/裝置目前不支援本機 AI 模型。");
@@ -351,12 +407,15 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
     ) {
       if (controller) throw new ChromeAiError("AI 回答處理中，請稍候。");
       controller = new AbortController();
+      const userActivation = env?.navigator?.userActivation?.isActive
+        ?? (typeof navigator !== "undefined" ? navigator.userActivation?.isActive : true);
       try {
         return await askWithChromeBuiltInAi(question, onChunk, {
           env,
           signal: controller.signal,
           onStatus,
           loadPolyfill: loader,
+          userActivation,
         });
       } finally {
         controller = null;

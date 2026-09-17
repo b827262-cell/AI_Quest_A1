@@ -39,3 +39,9 @@ logs/dev/
 .env
 .env.*
 !.env.example
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Local programming backup archives (never commit)
+Programming-Backup/

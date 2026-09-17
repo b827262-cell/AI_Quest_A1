@@ -22,7 +22,8 @@ const scrubCloudPolyfillSelectors = {
     return code
       .replaceAll("FIREBASE_CONFIG", "BLOCKED_LOCAL_SELECTOR_1")
       .replaceAll("GEMINI_CONFIG", "BLOCKED_LOCAL_SELECTOR_2")
-      .replaceAll("OPENAI_CONFIG", "BLOCKED_LOCAL_SELECTOR_3");
+      .replaceAll("OPENAI_CONFIG", "BLOCKED_LOCAL_SELECTOR_3")
+      .replaceAll("WEBLLM_CONFIG", "BLOCKED_LOCAL_SELECTOR_4");
   },
 };
 

@@ -14,13 +14,14 @@
 // 11. client source and built bundle forbid cloud-AI tokens, keys, and endpoints
 
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
   askWithChromeBuiltInAi,
   ChromeAiError,
   createAutoSubmitter,
+  isTraditionalChinese,
 } from "../app/chrome-built-in-ai.ts";
 
 function stream(chunks) {
@@ -212,6 +213,80 @@ test("Gate 4: native unavailable falls through to local fallback instead of earl
   assert.ok(statuses.includes("local fallback loading"));
 });
 
+test("Integration: unusable native API reaches the real isolated fallback artifact lifecycle without cloud inference", async () => {
+  // This deliberately does not use loadPolyfill/__setPolyfillLoader or a UA mock.
+  // It imports prompt-api-polyfill through the production loader. Network is
+  // intercepted so the test proves the first real backend request is a model
+  // artifact download, never an AI inference service request.
+  const original = {
+    fetch: globalThis.fetch,
+    document: globalThis.document,
+    navigator: globalThis.navigator,
+    MutationObserver: globalThis.MutationObserver,
+    ProgressEvent: globalThis.ProgressEvent,
+    LanguageModel: globalThis.LanguageModel,
+    transformers: globalThis.TRANSFORMERS_CONFIG,
+  };
+  const requests = [];
+  let nativeCreates = 0;
+  let localDownloadLifecycle = false;
+
+  try {
+    globalThis.MutationObserver = class { observe() {} };
+    globalThis.ProgressEvent = class extends Event {
+      constructor(type, init = {}) { super(type); Object.assign(this, init); }
+    };
+    globalThis.document = { defaultView: globalThis };
+    Object.defineProperty(globalThis, "navigator", {
+      value: { userActivation: { isActive: true } }, configurable: true,
+    });
+    globalThis.fetch = async (input) => {
+      const url = String(input);
+      requests.push(url);
+      throw new Error("Test intercept: model artifact not installed");
+    };
+    globalThis.LanguageModel = {
+      async availability() { return "available"; },
+      async create() { nativeCreates += 1; throw new Error("native accelerator unavailable"); },
+    };
+
+    await assert.rejects(
+      () => askWithChromeBuiltInAi("local backend integration", () => {}, {
+        env: {
+          window: globalThis,
+          LanguageModel: globalThis.LanguageModel,
+          navigator: globalThis.navigator,
+          WebAssembly: { instantiate: async () => ({}) },
+        },
+        onStatus: (status, progress) => {
+          if (status === "local model download" && typeof progress === "number") localDownloadLifecycle = true;
+        },
+      }),
+      ChromeAiError,
+    );
+
+    assert.equal(nativeCreates, 1, "native create failure must continue to the isolated local backend");
+    assert.ok(localDownloadLifecycle, "local download lifecycle must begin before any artifact failure");
+    const MODEL_ARTIFACT_DOWNLOAD_REQUESTS = requests.filter((url) =>
+      /huggingface\.co\/onnx-community\/Qwen2\.5-0\.5B-Instruct/i.test(url),
+    ).length;
+    assert.equal(MODEL_ARTIFACT_DOWNLOAD_REQUESTS, 1,
+      "the deterministic interceptor must observe exactly one initial model artifact request");
+    const CLOUD_AI_INFERENCE_REQUESTS = requests.filter((url) =>
+      /generativelanguage\.googleapis\.com|api\.openai\.com|firebase|\/v1\/chat\/completions/i.test(url),
+    ).length;
+    assert.equal(CLOUD_AI_INFERENCE_REQUESTS, 0);
+  } finally {
+    globalThis.fetch = original.fetch;
+    globalThis.document = original.document;
+    Object.defineProperty(globalThis, "navigator", { value: original.navigator, configurable: true });
+    globalThis.MutationObserver = original.MutationObserver;
+    globalThis.ProgressEvent = original.ProgressEvent;
+    globalThis.LanguageModel = original.LanguageModel;
+    globalThis.TRANSFORMERS_CONFIG = original.transformers;
+  }
+});
+
 test("Gate 5: WebGPU local inference renders streamed answer", async () => {
   const mockWin = mockTargetWindow();
   const env = {
@@ -270,6 +345,7 @@ test("Gate 6: WebGPU unavailable falls back to WASM, or truthful unsupported wit
 
   assert.equal(answerWasm, "WASM 回答");
   assert.equal(mockWinWasm.TRANSFORMERS_CONFIG.device, "wasm");
+  assert.equal(mockWinWasm.TRANSFORMERS_CONFIG.dtype, "q8", "WASM must use the conservative supported q8 mapping");
 
   // Scenario B: Neither WebGPU nor WASM available -> truthful unsupported, no false-PASS
   const statuses = [];
@@ -284,6 +360,38 @@ test("Gate 6: WebGPU unavailable falls back to WASM, or truthful unsupported wit
     (err) => err instanceof ChromeAiError && /不支援/.test(err.message),
   );
   assert.ok(statuses.includes("unsupported after fallback"));
+});
+
+test("Gate 7a: no user activation is truthful and a fresh click can initialize the local model", async () => {
+  const mockWin = mockTargetWindow();
+  let active = false;
+  let creates = 0;
+  const statuses = [];
+  const env = {
+    window: mockWin,
+    navigator: {
+      userActivation: { get isActive() { return active; } },
+      gpu: { requestAdapter: async () => ({}) },
+    },
+  };
+  const loader = async () => {
+    mockWin.LanguageModel = {
+      __isPolyfill: true,
+      async create() { creates += 1; return { prompt: async () => "本機模型已啟動" }; },
+    };
+  };
+
+  await assert.rejects(
+    () => askWithChromeBuiltInAi("題目", () => {}, { env, loadPolyfill: loader, onStatus: (status) => statuses.push(status) }),
+    /新的使用者操作.*開始下載本機模型/,
+  );
+  assert.equal(creates, 0, "cold-cache initialization must not retry without a user gesture");
+  assert.ok(statuses.includes("local model requires user activation"));
+
+  active = true; // Represents the explicit learner click on 「開始下載本機模型」.
+  const answer = await askWithChromeBuiltInAi("題目", () => {}, { env, loadPolyfill: loader });
+  assert.equal(answer, "本機模型已啟動");
+  assert.equal(creates, 1);
 });
 
 test("Gate 7: Android/iOS UA does not terminate solely on LanguageModel absence; evaluates local fallback", async () => {
@@ -374,7 +482,7 @@ test("Gate 9: browser AI errors never fall back to a network service", async () 
   }
 });
 
-test("Gate 10: Traditional Chinese questions succeed with or without Translator API", async () => {
+test("Gate 10: Traditional Chinese questions succeed with streaming preserved or explicitly buffered", async () => {
   // Case A: Translator present
   const translations = [];
   const envWithTrans = {
@@ -396,9 +504,12 @@ test("Gate 10: Traditional Chinese questions succeed with or without Translator 
   };
 
   const rendered = [];
-  const answerA = await askWithChromeBuiltInAi("什麼是二元搜尋樹？", (c) => rendered.push(c), { env: envWithTrans });
+  const statuses = [];
+  const answerA = await askWithChromeBuiltInAi("什麼是二元搜尋樹？", (c) => rendered.push(c), { env: envWithTrans, onStatus: (status) => statuses.push(status) });
   assert.equal(answerA, "繁體中文最終答案");
   assert.equal(translations.length, 2);
+  assert.deepEqual(rendered, ["繁體中文最終答案"], "translated mode must emit its final rendered answer");
+  assert.ok(statuses.includes("native translation buffering"), "whole-answer translation must not silently swallow streaming");
 
   // Case B: Translator absent (e.g. mobile browser)
   const envNoTrans = {
@@ -410,6 +521,13 @@ test("Gate 10: Traditional Chinese questions succeed with or without Translator 
 
   const answerB = await askWithChromeBuiltInAi("什麼是二元搜尋樹？", () => {}, { env: envNoTrans });
   assert.equal(answerB, "繁體中文直接回答");
+});
+
+test("Gate 10a: zh-Hant detection rejects Simplified Chinese and Japanese Han text", () => {
+  assert.equal(isTraditionalChinese("什麼是二元搜尋樹？"), true);
+  assert.equal(isTraditionalChinese("什么是二叉树？"), false);
+  assert.equal(isTraditionalChinese("これは二分木です"), false);
+  assert.equal(isTraditionalChinese("漢字だけ"), false, "shared Han ideographs alone are ambiguous");
 });
 
 function files(directory) {
@@ -425,6 +543,11 @@ const FORBIDDEN_CLOUD_AI_PATTERNS = [
   "/api/public/",
   "FIREBASE_CONFIG",
   "OPENAI_CONFIG",
+  "GEMINI_CONFIG",
+  "WEBLLM_CONFIG",
+  "https?://api\\.openai\\.com",
+  "api\\.openai\\.com",
+  "generativelanguage",
 ];
 
 function assertNoForbiddenTokens(label, payload) {
@@ -445,6 +568,9 @@ test("Gate 11: client source and built bundle forbid cloud-AI tokens and guest-a
   }
   const dist = join(process.cwd(), "dist");
   assert.ok(existsSync(dist), "build must run before this test");
+  const sourceMtime = Math.max(...sources.map((url) => Number(statSync(url).mtimeMs)));
+  const bundleMtime = Math.max(...files(dist).map((file) => Number(statSync(file).mtimeMs)));
+  assert.ok(bundleMtime >= sourceMtime, "dist is stale: build the current source snapshot before Gate 11");
   const bundle = files(dist).map((file) => readFileSync(file, "utf8")).join("\n");
   assertNoForbiddenTokens("built client bundle", bundle);
 });
