@@ -23,6 +23,12 @@ export type StatusCallback = (status: AutoAiStatus, progress?: number | null) =>
 
 type Availability = "available" | "downloadable" | "downloading" | "unavailable" | string;
 
+type GpuAdapter = {
+  features?: {
+    has(feature: string): boolean;
+  };
+};
+
 type Translator = {
   translate(input: string): Promise<string>;
   destroy?: () => void;
@@ -46,7 +52,7 @@ export type ChromeAiEnvironment = {
   };
   navigator?: {
     gpu?: {
-      requestAdapter?: () => Promise<unknown>;
+      requestAdapter?: () => Promise<GpuAdapter | null>;
     };
     userAgent?: string;
     userActivation?: {
@@ -129,7 +135,10 @@ export async function detectLocalDevice(env: ChromeAiEnvironment): Promise<"webg
   if (nav && "gpu" in nav && typeof nav.gpu?.requestAdapter === "function") {
     try {
       const adapter = await nav.gpu.requestAdapter();
-      if (adapter) return "webgpu";
+      // q4f16 requires this optional WebGPU capability. Do the check before
+      // configuring/loading the polyfill: otherwise Linux/Vulkan adapters
+      // without it download the large q4f16 artifact before failing.
+      if (adapter?.features?.has("shader-f16")) return "webgpu";
     } catch {
       // WebGPU not available or rejected
     }
