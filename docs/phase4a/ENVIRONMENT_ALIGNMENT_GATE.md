@@ -60,7 +60,8 @@ Key contract and validation requirements:
 - **Health Endpoint Anchoring (FPT-4)**: `worker.health_endpoint` origin must match `SHARED_BACKEND_ORIGIN` (`https://ai-quest-a1-backend.b827262.chatgpt.site`).
 - **Resource ID Echo Guard (F1)**: If `resource_id` echoes the binding name (`"DB"` or `"BOOKS_BUCKET"`), `identity_source: "unavailable"` is strictly required.
 - **Distinct Binding Resource IDs (FPT-5)**: D1 and R2 bindings must not have identical resource IDs.
-- **Deployed Git SHA (F2)**: `worker.deployed_git_sha` records live commit; any lag against repo branch base is explicitly flagged.
+- **Deployed Git SHA (F2 / FS-1)**: `worker.deployed_git_sha` must be at least 40 hexadecimal characters, resolve to a commit in the local repository, and be an ancestor of `HEAD`. This prevents an arbitrary value (for example, `banana`) from being accepted as deployment evidence; any lag against repo branch base is explicitly flagged.
+- **Environment Label Binding (FPT-3)**: `environment` is currently syntax-validated only. It is **not** cryptographically or control-plane bound to a distinct staging/production deployment target, so FPT-3 is not closed. Phase 4B must add a safe, read-only target-identity attestation (or equivalent provider evidence) before the label can be used as proof of environment.
 - **Repo Root Hygiene (F3)**: The legacy `.openai/hosting.json` at repo root is removed; if present, its `project_id` must match `shared_backend`.
 
 ## Run
@@ -98,6 +99,6 @@ The test suite covers:
 - Untrusted health endpoint origin (FPT-4)
 - Binding-name echoing without `identity_source: "unavailable"` (F1)
 - Identical D1/R2 resource IDs (FPT-5)
+- SHA format, repository commit existence, and `HEAD` lineage (F2 / FS-1)
 - Unconditional real-file verification (F6)
 - CLI subprocess exit codes: 0 (PASS), 1 (FAIL), 2 (Usage error) (F7)
-

@@ -2,7 +2,7 @@
 
 - **Plan ID**: `AQA1-P4A-20260917-01`
 - **Execution Date**: `2026-09-17`
-- **Captured Timestamp**: `2026-09-17T00:38:14.667Z` (Taipei: `2026-09-17T08:38:14+08:00`)
+- **Captured Timestamp**: `2026-09-17T07:22:56.465Z` (Taipei: `2026-09-17T15:22:56+08:00`)
 - **Agent Role**: AGY-E500 (Environment Source-of-Truth Collector)
 - **Repository Target**: `/home/b827262/project/AI-Quest-A1`
 - **Safety Mode**: Read-Only Live Control-Plane Audit (Zero Mutation, Zero Production Deploy, Zero Sync Run)
@@ -37,12 +37,12 @@
 
 | 項目名稱 | Source | Command / Endpoint | Timestamp (UTC) | Current Value |
 |---|---|---|---|---|
-| **Shared Backend Project ID** | Control-Plane Health | `GET https://ai-quest-a1-backend.b827262.chatgpt.site/api/health` | `2026-09-17T00:38:14.667Z` | `appgprj_6aa80235182c8191a876361138ecbc36` |
-| **Shared Backend URL** | Live HTTPS | `https://ai-quest-a1-backend.b827262.chatgpt.site` | `2026-09-17T00:38:14.667Z` | `https://ai-quest-a1-backend.b827262.chatgpt.site` (HTTP 200) |
-| **Student Site Project ID** | Control-Plane Health | `GET https://ai-quest-a1-student.b827262.chatgpt.site/api/health` | `2026-09-17T00:38:17.038Z` | `appgprj_6a843b2ece70819191132bd6e99df7a1` |
-| **Student Site URL** | Live HTTPS | `https://ai-quest-a1-student.b827262.chatgpt.site` | `2026-09-17T00:38:17.038Z` | `https://ai-quest-a1-student.b827262.chatgpt.site` (HTTP 200) |
-| **Admin Site Project ID** | Control-Plane Health | `GET https://ai-quest-a1-admin.b827262.chatgpt.site/api/health` | `2026-09-17T00:38:19.225Z` | `appgprj_6a843b6432f88191aa4cc090c236f3d3` |
-| **Admin Site URL** | Live HTTPS | `https://ai-quest-a1-admin.b827262.chatgpt.site/admin` | `2026-09-17T00:38:19.225Z` | `https://ai-quest-a1-admin.b827262.chatgpt.site/admin` (HTTP 200) |
+| **Shared Backend Project ID** | Control-Plane Health | `GET https://ai-quest-a1-backend.b827262.chatgpt.site/api/health` | `2026-09-17T07:22:56.465Z` | `appgprj_6aa80235182c8191a876361138ecbc36` |
+| **Shared Backend URL** | Live HTTPS | `https://ai-quest-a1-backend.b827262.chatgpt.site` | `2026-09-17T07:22:56.465Z` | `https://ai-quest-a1-backend.b827262.chatgpt.site` (HTTP 200) |
+| **Student Site Project ID** | Control-Plane Health | `GET https://ai-quest-a1-student.b827262.chatgpt.site/api/health` | `2026-09-17T07:23:02.595Z` | `appgprj_6a843b2ece70819191132bd6e99df7a1` |
+| **Student Site URL** | Live HTTPS | `https://ai-quest-a1-student.b827262.chatgpt.site` | `2026-09-17T07:23:02.595Z` | `https://ai-quest-a1-student.b827262.chatgpt.site` (HTTP 200) |
+| **Admin Site Project ID** | Control-Plane Health | `GET https://ai-quest-a1-admin.b827262.chatgpt.site/api/health` | `2026-09-17T07:23:05.391Z` | `appgprj_6a843b6432f88191aa4cc090c236f3d3` |
+| **Admin Site URL** | Live HTTPS | `https://ai-quest-a1-admin.b827262.chatgpt.site/admin` | `2026-09-17T07:23:05.391Z` | `https://ai-quest-a1-admin.b827262.chatgpt.site/admin` (HTTP 200) |
 | **Legacy Integration Site** | Repo Git Remote | `git remote get-url sites` | `2026-09-17T00:35:43.000Z` | `appgprj_6a8415716c448191a7a8b8cb3597ca08` (隔離不使用) |
 
 ---
@@ -51,14 +51,20 @@
 
 | 項目名稱 | Source | Command / Endpoint | Timestamp (UTC) | Current Value |
 |---|---|---|---|---|
-| **Worker Identity** | Live Health JSON | `GET /api/health` on backend | `2026-09-17T00:38:14.667Z` | `role: "shared-backend"`, `edge: "cloudflare-worker"` |
-| **Worker Saved Version** | Saved Deployment Ref | Deployment Record / Metadata | `2026-09-17T00:38:14.667Z` | `appgver_29168e1fb47481918766d24a5c904b7d` (Sites Version 8) |
-| **Worker Deployed Git SHA** | Deployment Mapping | Phase 3E-LIVE Deployment Closure | `2026-09-17T00:38:14.667Z` | `f0085202150c67760040644f1db3d6c479dc2074` (注意：落後於當前 RC base `d5f0619`，見說明) |
-| **Health Endpoint** | Live HTTPS | `curl -sS https://ai-quest-a1-backend.b827262.chatgpt.site/api/health` | `2026-09-17T00:38:14.667Z` | `{"status":"ok","edge":"cloudflare-worker","d1":"bound","r2":"bound","storage":"r2","phase":2,"role":"shared-backend","backendTarget":"https://ai-quest-a1-backend.b827262.chatgpt.site","sharedD1Project":"appgprj_6aa80235182c8191a876361138ecbc36","sharedR2Project":"appgprj_6aa80235182c8191a876361138ecbc36","sharedR2Bucket":"BOOKS_BUCKET","time":"2026-09-17T00:38:14.667Z"}` |
-| **Health HTTP Status** | HTTP Header | `curl -sI https://ai-quest-a1-backend.b827262.chatgpt.site/api/health` | `2026-09-17T00:38:14.667Z` | `HTTP/2 200 OK` |
+| **Worker Identity** | Live Health JSON | `GET /api/health` on backend | `2026-09-17T07:22:56.465Z` | `role: "shared-backend"`, `edge: "cloudflare-worker"` |
+| **Worker Saved Version** | Control-Plane Limitation | Runtime introspection (`GET /api/health`) | `2026-09-17T07:22:56.465Z` | `unavailable` (Sites Worker runtime 不在 HTTP 標頭或 `/api/health` 回傳內部 `appgver_*` ID；先前記錄之 `appgver_29168e1fb47481918766d24a5c904b7d` 經查證為 Phase 3D Version 4 之歷史值，無法作為 Version 8 之即時 control-plane 證明，已更正並明確標記 limitation；`WORKER_VERSION_PROVENANCE = BLOCKED`) |
+| **Worker Deployed Git SHA** | Deployment Mapping | Phase 3E-LIVE Deployment Closure | `2026-09-17T07:22:56.465Z` | `f0085202150c67760040644f1db3d6c479dc2074` (注意：落後於當前 RC base `d5f0619`，見說明；已驗證 commit 存在且為 HEAD ancestor) |
+| **Health Endpoint** | Live HTTPS | `curl -sS https://ai-quest-a1-backend.b827262.chatgpt.site/api/health` | `2026-09-17T07:22:56.465Z` | `{"status":"ok","edge":"cloudflare-worker","d1":"bound","r2":"bound","storage":"r2","phase":2,"role":"shared-backend","backendTarget":"https://ai-quest-a1-backend.b827262.chatgpt.site","sharedD1Project":"appgprj_6aa80235182c8191a876361138ecbc36","sharedR2Project":"appgprj_6aa80235182c8191a876361138ecbc36","sharedR2Bucket":"BOOKS_BUCKET","time":"2026-09-17T07:22:56.465Z"}` |
+| **Health HTTP Status** | HTTP Header | `curl -sI https://ai-quest-a1-backend.b827262.chatgpt.site/api/health` | `2026-09-17T07:22:56.465Z` | `HTTP/2 200 OK` |
 
 > [!NOTE] **Live Worker 程式碼版本落後警示 (Deployed Code Lag Notice - F2)**  
 > 線上 Version 8 係依據 commit `f008520` 發布。隨後之 `d5f0619 feat(sync): add dry-run reconciliation safeguards` 雖已進入 RC 基礎，但尚未部署至線上 Worker。此落後狀態已明確記錄於 manifest 之 `worker.deployed_git_sha` 欄位中，Phase 4B 之 Staging 部署必須包含 `d5f0619` 以上之程式碼並重新驗證門禁。
+
+> [!WARNING] **Worker Version 限制與修訂說明 (Worker Version Provenance Limitation - R3-1)**  
+> 原 manifest 所載之 `worker.version: "appgver_29168e1fb47481918766d24a5c904b7d"` 係沿用自 Phase 3D (Version 4, commit `dbdf0ee4`) 之歷史報告，非 Phase 3E Version 8 (commit `f008520`) 之即時 control-plane 產出。經實測線上端點（`GET /api/health` 及回應標頭），Sites Worker 執行環境並未暴露底層 `appgver` 識別碼。因此本輪更正該欄位為 `"unavailable"` 並標記 control-plane limitation，判定 `WORKER_VERSION_PROVENANCE = BLOCKED`。
+
+> [!WARNING] **FPT-3 disposition — NOT CLOSED; Phase 4B must-fix**
+> `environment: "production"` is an unbound manifest label in this round: the offline gate only restricts its spelling to `staging|production` and has no safe control-plane attestation that proves which environment the label denotes. This must not be represented as CLOSED or as proof of a production target. Phase 4B must add read-only target-identity provenance before closing FPT-3; no deployment, production mutation, or full sync is authorized by this disposition.
 
 ---
 
@@ -66,11 +72,11 @@
 
 | 項目名稱 | Source | Command / Endpoint | Timestamp (UTC) | Current Value |
 |---|---|---|---|---|
-| **D1 Database Identity** | Live Health Payload | `GET /api/health` (`sharedD1Project`) | `2026-09-17T00:38:14.667Z` | `appgprj_6aa80235182c8191a876361138ecbc36` |
-| **D1 Binding Name** | Repo & Health | `site/.openai/hosting.json` & `GET /api/health` | `2026-09-17T00:38:14.667Z` | `DB` (`d1: "bound"`) |
-| **D1 Identity Source** | Control-Plane Limitation | Runtime introspection | `2026-09-17T00:38:14.667Z` | `identity_source: "unavailable"` (Sites Worker 不提供底層 D1 opaque UUID) |
+| **D1 Database Identity** | Live Health Payload | `GET /api/health` (`sharedD1Project`) | `2026-09-17T07:22:56.465Z` | `appgprj_6aa80235182c8191a876361138ecbc36` |
+| **D1 Binding Name** | Repo & Health | `site/.openai/hosting.json` & `GET /api/health` | `2026-09-17T07:22:56.465Z` | `DB` (`d1: "bound"`) |
+| **D1 Identity Source** | Control-Plane Limitation | Runtime introspection | `2026-09-17T07:22:56.465Z` | `identity_source: "unavailable"` (Sites Worker 不提供底層 D1 opaque UUID) |
 | **Schema Version** | Migration Source | `site/drizzle/0002_funny_ezekiel.sql` | `2026-09-17T00:35:24.000Z` | `0002_funny_ezekiel.sql` (Phase 3E sync tables & columns active) |
-| **D1 Read Status** | Live API Data Read | `GET /api/student/books` | `2026-09-17T00:38:21.000Z` | `readable: true` (HTTP 200, 8 本書籍資料讀取成功) |
+| **D1 Read Status** | Live API Data Read | `GET /api/student/books` | `2026-09-17T07:23:14.000Z` | `readable: true` (HTTP 200, 8 本書籍資料讀取成功) |
 
 ---
 
@@ -78,11 +84,11 @@
 
 | 項目名稱 | Source | Command / Endpoint | Timestamp (UTC) | Current Value |
 |---|---|---|---|---|
-| **R2 Bucket Identity** | Live Health Payload | `GET /api/health` (`sharedR2Bucket`) | `2026-09-17T00:38:14.667Z` | `BOOKS_BUCKET` (位於 `appgprj_6aa80235182c8191a876361138ecbc36`) |
-| **R2 Binding Name** | Repo & Health | `site/.openai/hosting.json` & `GET /api/health` | `2026-09-17T00:38:14.667Z` | `BOOKS_BUCKET` (`r2: "bound"`, `storage: "r2"`) |
-| **R2 Identity Source** | Control-Plane Limitation | Runtime introspection | `2026-09-17T00:38:14.667Z` | `identity_source: "unavailable"` (Sites Worker 不提供底層 R2 opaque UUID) |
-| **R2 List Readable** | Live API Books Meta | `GET /api/student/books` | `2026-09-17T00:38:21.000Z` | `list_readable: true` (回傳 8 本已上架教材之儲存中繼資料) |
-| **R2 Get Readable (Synth)** | Live Content Stream | `HEAD /api/student/books/content?id=book-synth-001` | `2026-09-17T00:36:39.000Z` | `get_readable: true` (HTTP 200, `content-length: 476`, etag: `"a531dfdb77377e16005816ae9d2c1954"`, sha256: `170e2df4e4f324c124cb9d12c1de469277498647116fb7c3fd98a73af47bc736`) |
+| **R2 Bucket Identity** | Live Health Payload | `GET /api/health` (`sharedR2Bucket`) | `2026-09-17T07:22:56.465Z` | `BOOKS_BUCKET` (位於 `appgprj_6aa80235182c8191a876361138ecbc36`) |
+| **R2 Binding Name** | Repo & Health | `site/.openai/hosting.json` & `GET /api/health` | `2026-09-17T07:22:56.465Z` | `BOOKS_BUCKET` (`r2: "bound"`, `storage: "r2"`) |
+| **R2 Identity Source** | Control-Plane Limitation | Runtime introspection | `2026-09-17T07:22:56.465Z` | `identity_source: "unavailable"` (Sites Worker 不提供底層 R2 opaque UUID) |
+| **R2 List Readable** | Live API Books Meta | `GET /api/student/books` | `2026-09-17T07:23:14.000Z` | `list_readable: true` (回傳 8 本已上架教材之儲存中繼資料) |
+| **R2 Get Readable (Synth)** | Live Content Stream | `HEAD /api/student/books/content?id=book-synth-001` | `2026-09-17T07:23:14.000Z` | `get_readable: true` (HTTP 200, `content-length: 476`, etag: `"a531dfdb77377e16005816ae9d2c1954"`, sha256: `170e2df4e4f324c124cb9d12c1de469277498647116fb7c3fd98a73af47bc736`) |
 | **R2 Get Readable (E500)** | Live Content Stream | `HEAD /api/student/books/content?id=sync-book-e500-book_db9ba358-658f-4c07-823c-872b115747e7` | `2026-09-17T00:36:41.000Z` | `get_readable: true` (HTTP 200, `content-length: 2392044`, etag: `"01ea64c302fc87c022ad64de549f1153"`, sha256: `52193563359ee9b4da019a4486120bbc964baa90566bb7e81669e49e90a1c035`) |
 
 ---
@@ -115,6 +121,6 @@
 
 ## 3. 來源真實性驗證記錄 (Verification Audit Trail)
 
-本次盤點採集歷程記錄於 `docs/phase4a/environment-source-of-truth.json`，並由 `site/scripts/verify-environment-alignment.mjs` 自動化 Gate 驗證通過（21/21 checks passed）。
+本次盤點採集歷程記錄於 `docs/phase4a/environment-source-of-truth.json`，並由 `site/scripts/verify-environment-alignment.mjs` 自動化 Gate 驗證通過（24/24 checks passed；修正先前 42d1443 筆誤之 21/21 → 實際 24/24）。
 
-所有 live control-plane 數據皆於 `2026-09-17T00:38:14Z` 直接透過 HTTPS 驗證，未執行任何修改、未執行 production D1/R2 寫入、未執行 full sync。
+所有 live control-plane 數據皆於 `2026-09-17T07:22:56Z` 直接透過 HTTPS 驗證，未執行任何修改、未執行 production D1/R2 寫入、未執行 full sync。

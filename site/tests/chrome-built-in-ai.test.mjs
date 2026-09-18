@@ -37,6 +37,10 @@ function mockTargetWindow(overrides = {}) {
   return win;
 }
 
+function f16Adapter() {
+  return { features: { has: (feature) => feature === "shader-f16" } };
+}
+
 test("Gate 1: native LanguageModel available uses native without fallback and without network calls", async () => {
   const originalFetch = globalThis.fetch;
   let networkCalls = 0;
@@ -135,7 +139,7 @@ test("Gate 3: native absent triggers local fallback capability gate and loads po
       window: mockWin,
       navigator: {
         gpu: {
-          requestAdapter: async () => ({ isMockAdapter: true }),
+          requestAdapter: async () => f16Adapter(),
         },
       },
       WebAssembly: { instantiate: async () => ({}) },
@@ -186,7 +190,7 @@ test("Gate 4: native unavailable falls through to local fallback instead of earl
       async create() { throw new Error("Native should not be created if unavailable"); },
     },
     navigator: {
-      gpu: { requestAdapter: async () => ({}) },
+      gpu: { requestAdapter: async () => f16Adapter() },
     },
   };
 
@@ -292,7 +296,7 @@ test("Gate 5: WebGPU local inference renders streamed answer", async () => {
   const env = {
     window: mockWin,
     navigator: {
-      gpu: { requestAdapter: async () => ({}) },
+      gpu: { requestAdapter: async () => f16Adapter() },
     },
   };
 
@@ -362,6 +366,49 @@ test("Gate 6: WebGPU unavailable falls back to WASM, or truthful unsupported wit
   assert.ok(statuses.includes("unsupported after fallback"));
 });
 
+test("Gate 6a: adapter without shader-f16 skips q4f16 artifact and uses WASM q8 with CLOUD_AI_INFERENCE_REQUESTS=0", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const mockWin = mockTargetWindow();
+  globalThis.fetch = async (input) => {
+    requests.push(String(input));
+    return new Response("local artifact");
+  };
+
+  try {
+    const answer = await askWithChromeBuiltInAi("題目", () => {}, {
+      env: {
+        window: mockWin,
+        navigator: {
+          gpu: { requestAdapter: async () => ({ features: { has: () => false } }) },
+        },
+        WebAssembly: { instantiate: async () => ({}) },
+      },
+      loadLocalLanguageModel: async () => ({
+        __isPolyfill: true,
+        async create() {
+          // The backend's first artifact selection is driven only by this
+          // pre-download configuration, which makes the regression observable.
+          await fetch(`https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct/resolve/main/${mockWin.TRANSFORMERS_CONFIG.dtype}/model.onnx`);
+          return { prompt: async () => "WASM q8 回答" };
+        },
+      }),
+    });
+
+    assert.equal(answer, "WASM q8 回答");
+    assert.equal(mockWin.TRANSFORMERS_CONFIG.device, "wasm");
+    assert.equal(mockWin.TRANSFORMERS_CONFIG.dtype, "q8");
+    assert.equal(requests.filter((url) => /q4f16/i.test(url)).length, 0,
+      "no-shader-f16 must not request a q4f16 artifact");
+    const CLOUD_AI_INFERENCE_REQUESTS = requests.filter((url) =>
+      /generativelanguage\.googleapis\.com|api\.openai\.com|firebase|\/v1\/chat\/completions/i.test(url),
+    ).length;
+    assert.equal(CLOUD_AI_INFERENCE_REQUESTS, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Gate 7a: no user activation is truthful and a fresh click can initialize the local model", async () => {
   const mockWin = mockTargetWindow();
   let active = false;
@@ -371,7 +418,7 @@ test("Gate 7a: no user activation is truthful and a fresh click can initialize t
     window: mockWin,
     navigator: {
       userActivation: { get isActive() { return active; } },
-      gpu: { requestAdapter: async () => ({}) },
+      gpu: { requestAdapter: async () => f16Adapter() },
     },
   };
   const loader = async () => {
@@ -404,7 +451,7 @@ test("Gate 7: Android/iOS UA does not terminate solely on LanguageModel absence;
       window: mockWin,
       navigator: {
         userAgent: ua,
-        gpu: { requestAdapter: async () => ({}) },
+        gpu: { requestAdapter: async () => f16Adapter() },
       },
     };
 

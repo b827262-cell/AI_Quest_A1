@@ -1,7 +1,7 @@
 {
   "manifest_version": "phase4a.environment-source-of-truth/v1",
   "environment": "production",
-  "captured_at": "2026-09-17T00:38:14.667Z",
+  "captured_at": "2026-09-17T07:22:56.465Z",
   "sites": {
     "shared_backend": {
       "project_id": "appgprj_6aa80235182c8191a876361138ecbc36",
@@ -18,7 +18,9 @@
   },
   "worker": {
     "project_id": "appgprj_6aa80235182c8191a876361138ecbc36",
-    "version": "appgver_29168e1fb47481918766d24a5c904b7d",
+    "version": "unavailable",
+    "version_identity_source": "unavailable",
+    "version_limitation": "Sites runtime does not expose internal appgver ID via read-only HTTP health or response headers; Phase 3E Version 8 deployed from f008520",
     "deployed_git_sha": "f0085202150c67760040644f1db3d6c479dc2074",
     "health_endpoint": "https://ai-quest-a1-backend.b827262.chatgpt.site/api/health",
     "health_status": 200,

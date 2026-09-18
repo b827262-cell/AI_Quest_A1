@@ -82,6 +82,43 @@ test("environment alignment fails closed for invalid environment target", () => 
   assert.ok(result.checks.some((check) => check.name === "environment" && check.status === "FAIL"));
 });
 
+test("FS-1: environment alignment fails closed for a garbage deployed Git SHA", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cli-test-garbage-sha-"));
+  try {
+    // 1. Non-hex format ('banana')
+    const manifestBanana = validManifest();
+    manifestBanana.worker.deployed_git_sha = "banana";
+    const manifestPathBanana = writeFixture(dir, "manifest-banana.json", manifestBanana);
+    const hostingPath = writeFixture(dir, "hosting.json", { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+    const resultBanana = verifyEnvironment({ manifest: manifestPathBanana, hosting: hostingPath, maxAgeHours: 24, json: true });
+    assert.equal(resultBanana.status, "FAIL");
+    assert.ok(resultBanana.checks.some((check) => check.name === "worker.deployed_git_sha.provenance" && check.status === "FAIL"));
+
+    const resBanana = spawnSync(process.execPath, [validator, "--manifest", manifestPathBanana, "--hosting", hostingPath, "--json"], { encoding: "utf8" });
+    if (resBanana.error?.code === "EPERM") return t.skip("subprocess execution is unavailable in this sandbox");
+    assert.equal(resBanana.status, 1);
+    const parsedBanana = JSON.parse(resBanana.stdout);
+    assert.equal(parsedBanana.status, "FAIL");
+    assert.ok(parsedBanana.checks.some((check) => check.name === "worker.deployed_git_sha.provenance" && check.status === "FAIL"));
+
+    // 2. Valid 40-hex format but non-existent commit in repo
+    const manifestHexNonExistent = validManifest();
+    manifestHexNonExistent.worker.deployed_git_sha = "0000000000000000000000000000000000000000";
+    const manifestPathHex = writeFixture(dir, "manifest-hex.json", manifestHexNonExistent);
+    const resultHex = verifyEnvironment({ manifest: manifestPathHex, hosting: hostingPath, maxAgeHours: 24, json: true });
+    assert.equal(resultHex.status, "FAIL");
+    assert.ok(resultHex.checks.some((check) => check.name === "worker.deployed_git_sha.provenance" && check.status === "FAIL"));
+
+    const resHex = spawnSync(process.execPath, [validator, "--manifest", manifestPathHex, "--hosting", hostingPath, "--json"], { encoding: "utf8" });
+    assert.equal(resHex.status, 1);
+    const parsedHex = JSON.parse(resHex.stdout);
+    assert.equal(parsedHex.status, "FAIL");
+    assert.ok(parsedHex.checks.some((check) => check.name === "worker.deployed_git_sha.provenance" && check.status === "FAIL"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("environment alignment fails closed for non-https or non-200 health status", () => {
   const manifest = validManifest();
   manifest.worker.health_endpoint = "http://ai-quest-a1-backend.b827262.chatgpt.site/api/health";
@@ -145,20 +182,22 @@ test("F6 / FPT-6: environment alignment verifies committed repo hosting against 
   assert.equal(result.errors.length, 0);
 });
 
-test("F7: CLI subprocess exits 0 on real repo files", () => {
+test("F7: CLI subprocess exits 0 on real repo files", (t) => {
   const res = spawnSync(process.execPath, [validator, "--json"], { encoding: "utf8" });
+  if (res.error?.code === "EPERM") return t.skip("subprocess execution is unavailable in this sandbox");
   assert.equal(res.status, 0);
   const parsed = JSON.parse(res.stdout);
   assert.equal(parsed.status, "PASS");
   assert.equal(parsed.config_drift, "NO");
 });
 
-test("F7: CLI subprocess exits 1 on config drift / mismatch", () => {
+test("F7: CLI subprocess exits 1 on config drift / mismatch", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cli-test-drift-"));
   try {
     const manifestPath = writeFixture(dir, "manifest.json", validManifest());
     const hostingPath = writeFixture(dir, "hosting.json", { project_id: "appgprj_wrong", d1: "DB", r2: "BOOKS_BUCKET" });
     const res = spawnSync(process.execPath, [validator, "--manifest", manifestPath, "--hosting", hostingPath], { encoding: "utf8" });
+    if (res.error?.code === "EPERM") return t.skip("subprocess execution is unavailable in this sandbox");
     assert.equal(res.status, 1);
     assert.ok(res.stdout.includes("ENV_ALIGNMENT=FAIL"));
   } finally {
@@ -166,8 +205,9 @@ test("F7: CLI subprocess exits 1 on config drift / mismatch", () => {
   }
 });
 
-test("F7: CLI subprocess exits 2 on usage / unknown argument error", () => {
+test("F7: CLI subprocess exits 2 on usage / unknown argument error", (t) => {
   const res = spawnSync(process.execPath, [validator, "--unknown-flag"], { encoding: "utf8" });
+  if (res.error?.code === "EPERM") return t.skip("subprocess execution is unavailable in this sandbox");
   assert.equal(res.status, 2);
   assert.ok(res.stderr.includes("ENV_ALIGNMENT=FAIL"));
 });

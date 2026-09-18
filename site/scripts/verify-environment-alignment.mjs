@@ -7,6 +7,7 @@
  * of scope.
  */
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,6 +60,21 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function fullGitSha(value) {
+  // Git's SHA-1 object IDs are 40 hex characters; allow longer IDs so this
+  // gate remains compatible with SHA-256 repositories.
+  return typeof value === "string" && /^[0-9a-f]{40,}$/i.test(value);
+}
+
+function gitCheck(args) {
+  const result = spawnSync("git", args, {
+    cwd: repoDir,
+    encoding: "utf8",
+    stdio: "ignore",
+  });
+  return result.status === 0;
+}
+
 function captureAgeMs(capturedAt) {
   const parsed = Date.parse(capturedAt);
   if (Number.isNaN(parsed)) return null;
@@ -100,7 +116,20 @@ export function verifyEnvironment(options) {
     check("sites.project_ids.distinct", distinctProjectIds.size, 3, distinctProjectIds.size === 3 && projectIds.length === 3);
 
     check("worker.version.present", worker?.version, "non-empty", nonEmptyString(worker?.version));
-    check("worker.deployed_git_sha.present", worker?.deployed_git_sha, "non-empty", nonEmptyString(worker?.deployed_git_sha));
+    const deployedGitSha = worker?.deployed_git_sha;
+    // F2 / FS-1: a deployment SHA is evidence only when it names a local
+    // commit and that commit belongs to the checked-out repository lineage.
+    // Do not pass a plausible-looking, arbitrary object ID such as `banana`.
+    const deployedCommitExists = fullGitSha(deployedGitSha)
+      && gitCheck(["rev-parse", "--verify", "--quiet", `${deployedGitSha}^{commit}`]);
+    const deployedCommitInLineage = deployedCommitExists
+      && gitCheck(["merge-base", "--is-ancestor", deployedGitSha, "HEAD"]);
+    check(
+      "worker.deployed_git_sha.provenance",
+      deployedGitSha,
+      "40+ hexadecimal commit that exists in the repository and is an ancestor of HEAD",
+      fullGitSha(deployedGitSha) && deployedCommitExists && deployedCommitInLineage,
+    );
 
     // FPT-4: health endpoint origin anchored to SHARED_BACKEND_ORIGIN
     let healthUrl = null;
