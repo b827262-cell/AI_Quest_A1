@@ -3,6 +3,7 @@
 // Architecture:
 // AUTO_PRIMARY = native window.LanguageModel
 // AUTO_LOCAL_FALLBACK = Prompt API polyfill + Transformers.js local backend
+//   (model: onnx-community/Qwen3.5-0.8B-ONNX, see LOCAL_FALLBACK_MODEL_ID)
 // CLOUD_AI_FALLBACK = NO
 // PROVIDER_API_KEYS = NOT USED
 // GOOGLE_REST_API = NOT USED
@@ -34,9 +35,11 @@ type Translator = {
   destroy?: () => void;
 };
 
+export type PromptOptions = { signal?: AbortSignal };
+
 export type LanguageModelSession = {
-  prompt?: (input: string) => Promise<string>;
-  promptStreaming?: (input: string) => AsyncIterable<string>;
+  prompt?: (input: string, options?: PromptOptions) => Promise<string>;
+  promptStreaming?: (input: string, options?: PromptOptions) => AsyncIterable<string>;
   destroy?: () => void;
 };
 
@@ -68,6 +71,121 @@ export class ChromeAiError extends Error {
     super(message);
     this.name = "ChromeAiError";
   }
+}
+
+// Local fallback model contract (AUTO_LOCAL_FALLBACK).
+//
+// Qwen3.5-0.8B-ONNX replaces onnx-community/Qwen2.5-0.5B-Instruct. Load
+// support is provided by the pinned dependency chain prompt-api-polyfill
+// @1.22.0 -> @huggingface/transformers@4.3.0, whose causal-LM registry maps
+// model types "qwen3_5" and "qwen3_5_text" to Qwen3_5ForCausalLM (verified in
+// the installed package's registry and browser dist bundle, so no remote code
+// loading is required). The model repository declares its own per-device dtype
+// variants in its transformers.js config, so quantization availability is a
+// hub-side fact this bundle cannot enumerate offline: LOCAL_FALLBACK_DTYPE_
+// CANDIDATES drives an ordered retry that only reacts to real load failures,
+// and an absent quantization never widens the request surface or falls back to
+// any cloud inference service.
+export const LOCAL_FALLBACK_MODEL_ID = "onnx-community/Qwen3.5-0.8B-ONNX";
+
+// q4f16 stays WebGPU-only and is additionally gated on shader-f16 support in
+// detectLocalDevice. WASM keeps the conservative q8 kernel path that
+// Transformers.js supports for onnx-community LLM exports.
+export const LOCAL_FALLBACK_DTYPE_CANDIDATES: Record<"webgpu" | "wasm", readonly string[]> = {
+  webgpu: ["q4f16", "q8"],
+  wasm: ["q8"],
+};
+
+// Traditional-Chinese short-answer contract for the 0.8B fallback. The
+// polyfill backend fixes max_new_tokens=512 and greedy decoding, so length
+// and anti-repetition control must come from the prompt plus the stream-level
+// repetition guard below.
+export const LOCAL_FALLBACK_PROMPT_INSTRUCTION =
+  "請用繁體中文清楚、準確且簡短地回答以下學習問題（約 150 字以內，直接回答，切勿重複相同句子）：";
+
+const REPETITION_MAX_UNIT = 32;
+const REPETITION_KEEP_TAIL = 0;
+
+/**
+ * Deterministic tail loop detector: returns the start index of a repeated
+ * tail (one copy kept, later copies are the loop body) when the text ends
+ * with enough consecutive identical units, or null. Copy thresholds shrink as
+ * units grow so short spam units need many copies while 3 copies of a
+ * sentence-length unit already proves a degeneration loop.
+ */
+export function detectRepetitionLoop(
+  text: string,
+  maxUnit: number = REPETITION_MAX_UNIT,
+): { unit: string; start: number } | null {
+  const len = text.length;
+  for (let unit = 1; unit <= maxUnit; unit += 1) {
+    const requiredCopies = unit === 1 ? 8 : unit < 8 ? 4 : 3;
+    if (len < unit * requiredCopies) continue;
+    const tail = text.slice(len - unit);
+    let copies = 1;
+    let pos = len - unit;
+    while (pos - unit >= 0 && text.slice(pos - unit, pos) === tail) {
+      copies += 1;
+      pos -= unit;
+    }
+    if (copies >= requiredCopies) return { unit: tail, start: pos + unit };
+  }
+  return null;
+}
+
+export type RepetitionGuard = {
+  /** Consume one streamed chunk; returns the slice that is safe to emit now. */
+  feed(chunk: string): string;
+  /** Flush the retained tail once generation ends normally. */
+  finish(): string;
+  /** True once a repetition loop was caught and generation should stop. */
+  readonly stopped: boolean;
+  /** The decided (possibly truncated) answer so far. */
+  readonly text: string;
+};
+
+/**
+ * Stream-level anti-repetition for the small local model. Text is emitted
+ * with a 128-character retention window; because any detectable loop ends
+ * within at most 96 trailing characters, the repeated tail is always still
+ * held back and can be cut before it reaches the learner.
+ */
+export function createRepetitionGuard(): RepetitionGuard {
+  let all = "";
+  let emitted = 0;
+  let stopped = false;
+  return {
+    get stopped() {
+      return stopped;
+    },
+    get text() {
+      return all;
+    },
+    feed(chunk: string): string {
+      if (stopped) return "";
+      all += chunk;
+      const loop = detectRepetitionLoop(all);
+      if (loop) {
+        stopped = true;
+        // Keep exactly one copy of the loop unit; drop the rest. Emitted text
+        // can never precede the loop start, so the clamp is defensive.
+        all = all.slice(0, Math.max(loop.start, emitted));
+      }
+      const target = stopped
+        ? all.length
+        : Math.max(emitted, all.length - REPETITION_KEEP_TAIL);
+      if (target <= emitted) return "";
+      const out = all.slice(emitted, target);
+      emitted = target;
+      return out;
+    },
+    finish(): string {
+      if (stopped) return "";
+      const out = all.slice(emitted);
+      emitted = all.length;
+      return out;
+    },
+  };
 }
 
 function environment(): ChromeAiEnvironment {
@@ -111,21 +229,51 @@ async function streamAnswer(
   prompt: string,
   onChunk: (chunk: string) => void,
   signal?: AbortSignal,
+  guard?: RepetitionGuard,
 ): Promise<string> {
+  // prompt-api-polyfill aborts an in-flight prompt/stream through the
+  // options signal; a native implementation WebIDL-ignores unknown members,
+  // so the same handoff is safe on both session kinds.
+  const options = signal ? { signal } : undefined;
+  const emit = (chunk: string) => {
+    const safe = guard ? guard.feed(chunk) : chunk;
+    if (safe) onChunk(safe);
+  };
   if (session.promptStreaming) {
     let answer = "";
-    for await (const chunk of session.promptStreaming(prompt)) {
+    try {
+      for await (const chunk of session.promptStreaming(prompt, options)) {
+        if (signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+        answer += chunk;
+        emit(chunk);
+        if (guard?.stopped) {
+          // Repetition loop caught: stop consuming and report the truncated
+          // answer. The caller's finally still destroys the session.
+          return guard.text;
+        }
+      }
+    } catch (error) {
       if (signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
-      answer += chunk;
-      onChunk(chunk);
+      throw error;
+    }
+    if (guard) {
+      const tail = guard.finish();
+      if (tail) onChunk(tail);
+      return guard.text;
     }
     return answer;
   }
   if (!session.prompt) {
     throw new ChromeAiError("此瀏覽器/裝置目前不支援本機 AI 回答。");
   }
-  const answer = await session.prompt(prompt);
+  const answer = await session.prompt(prompt, options);
   if (signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+  if (guard) {
+    emit(answer);
+    const tail = guard.finish();
+    if (tail) onChunk(tail);
+    return guard.text;
+  }
   onChunk(answer);
   return answer;
 }
@@ -334,16 +482,19 @@ export async function askWithChromeBuiltInAi(
     throw new ChromeAiError("需要新的使用者操作才能開始下載本機模型。請按「開始下載本機模型」。");
   }
 
-  // Configure local Transformers.js backend with constant non-sensitive dummy key
-  win.TRANSFORMERS_CONFIG = {
-    apiKey: "dummy",
-    device: localDevice,
-    // q8 is the conservative WASM path supported by Transformers.js. Do not
-    // attempt q4 WASM just to discover an unsupported kernel after a large
-    // artifact download. WebGPU retains the upstream q4f16 default.
-    dtype: localDevice === "webgpu" ? "q4f16" : "q8",
-    modelName: "onnx-community/Qwen2.5-0.5B-Instruct",
+  // Configure the local Transformers.js backend with the constant
+  // non-sensitive dummy key before the polyfill module is imported, keeping
+  // the first dtype candidate in place for the initial session attempt.
+  const dtypeCandidates = LOCAL_FALLBACK_DTYPE_CANDIDATES[localDevice];
+  const configureFallback = (dtype: string) => {
+    win.TRANSFORMERS_CONFIG = {
+      apiKey: "dummy",
+      device: localDevice,
+      dtype,
+      modelName: LOCAL_FALLBACK_MODEL_ID,
+    };
   };
+  configureFallback(dtypeCandidates[0]);
 
   let polyfillLM: ChromeAiEnvironment["LanguageModel"];
   try {
@@ -365,32 +516,57 @@ export async function askWithChromeBuiltInAi(
     throw new ChromeAiError("此瀏覽器/裝置目前不支援本機 AI 模型。");
   }
 
-  options.onStatus?.("local model download", 0);
-  if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
-
-  let localSession: LanguageModelSession;
-  try {
-    localSession = await polyfillLM.create({
-      monitor(m: EventTarget) {
-        m.addEventListener("downloadprogress", (e: Event) => {
-          const pe = e as ProgressLikeEvent;
-          const loaded = Number(pe.loaded) || 0;
-          const total = Number(pe.total) || 1;
-          const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
-          options.onStatus?.("local model download", progress);
-        });
-      },
-      signal: options.signal,
+  const monitorDownload = (m: EventTarget) => {
+    m.addEventListener("downloadprogress", (e: Event) => {
+      const pe = e as ProgressLikeEvent;
+      const loaded = Number(pe.loaded) || 0;
+      const total = Number(pe.total) || 1;
+      const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
+      options.onStatus?.("local model download", progress);
     });
-  } catch {
+  };
+
+  // Quantized artifacts resolve from the model repository's own
+  // transformers.js config, so an unsupported dtype fails at load with no
+  // side effects. Retry the conservative candidate in order; never request a
+  // cloud service for a missing local quantization.
+  let localSession: LanguageModelSession | undefined;
+  for (const dtype of dtypeCandidates) {
+    configureFallback(dtype);
+    options.onStatus?.("local model download", 0);
     if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+    try {
+      localSession = await polyfillLM.create({
+        monitor: monitorDownload,
+        signal: options.signal,
+      });
+      break;
+    } catch (error) {
+      if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+      // Transient user activation can expire during a long failed download
+      // attempt. The polyfill raises NotAllowedError for a cold re-download;
+      // surface the gesture route instead of burning the next candidate.
+      if ((error as { name?: string } | null)?.name === "NotAllowedError") {
+        options.onStatus?.("local model requires user activation");
+        throw new ChromeAiError("需要新的使用者操作才能開始下載本機模型。請按「開始下載本機模型」。");
+      }
+    }
+  }
+
+  if (!localSession) {
     options.onStatus?.("unsupported after fallback");
     throw new ChromeAiError("本機 AI 模型下載或初始化失敗，未使用任何雲端服務。");
   }
 
   try {
-    const prompt = `請用繁體中文清楚準確回答以下問題：\n\n${question}`;
-    const response = await streamAnswer(localSession, prompt, onChunk, options.signal);
+    const prompt = `${LOCAL_FALLBACK_PROMPT_INSTRUCTION}\n\n${question}`;
+    const response = await streamAnswer(
+      localSession,
+      prompt,
+      onChunk,
+      options.signal,
+      createRepetitionGuard(),
+    );
     return response;
   } catch (error) {
     if (error instanceof ChromeAiError) throw error;

@@ -12,6 +12,11 @@
 //  9. browser AI errors never fall back to a network service
 // 10. Traditional Chinese questions succeed with or without Translator API
 // 11. client source and built bundle forbid cloud-AI tokens, keys, and endpoints
+// 12. local fallback pins Qwen3.5-0.8B-ONNX in source, config, and built bundle
+// 13. WebGPU q4f16 artifact load failure retries the same local model at q8
+// 14. streamed local answers stop and truncate on repetition loops
+// 15. cancellation hands the AbortSignal to the live prompt/stream and fails closed
+// 16. local fallback prompt requires a short Traditional Chinese answer
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -21,7 +26,12 @@ import {
   askWithChromeBuiltInAi,
   ChromeAiError,
   createAutoSubmitter,
+  createRepetitionGuard,
+  detectRepetitionLoop,
   isTraditionalChinese,
+  LOCAL_FALLBACK_DTYPE_CANDIDATES,
+  LOCAL_FALLBACK_MODEL_ID,
+  LOCAL_FALLBACK_PROMPT_INSTRUCTION,
 } from "../app/chrome-built-in-ai.ts";
 
 function stream(chunks) {
@@ -173,6 +183,8 @@ test("Gate 3: native absent triggers local fallback capability gate and loads po
     assert.ok(statuses.includes("local model download"));
     assert.equal(mockWin.TRANSFORMERS_CONFIG.apiKey, "dummy");
     assert.equal(mockWin.TRANSFORMERS_CONFIG.device, "webgpu");
+    assert.equal(mockWin.TRANSFORMERS_CONFIG.modelName, "onnx-community/Qwen3.5-0.8B-ONNX");
+    assert.equal(mockWin.TRANSFORMERS_CONFIG.dtype, "q4f16");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -272,7 +284,7 @@ test("Integration: unusable native API reaches the real isolated fallback artifa
     assert.equal(nativeCreates, 1, "native create failure must continue to the isolated local backend");
     assert.ok(localDownloadLifecycle, "local download lifecycle must begin before any artifact failure");
     const MODEL_ARTIFACT_DOWNLOAD_REQUESTS = requests.filter((url) =>
-      /huggingface\.co\/onnx-community\/Qwen2\.5-0\.5B-Instruct/i.test(url),
+      /huggingface\.co\/onnx-community\/Qwen3\.5-0\.8B-ONNX/i.test(url),
     ).length;
     assert.equal(MODEL_ARTIFACT_DOWNLOAD_REQUESTS, 1,
       "the deterministic interceptor must observe exactly one initial model artifact request");
@@ -389,7 +401,7 @@ test("Gate 6a: adapter without shader-f16 skips q4f16 artifact and uses WASM q8 
         async create() {
           // The backend's first artifact selection is driven only by this
           // pre-download configuration, which makes the regression observable.
-          await fetch(`https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct/resolve/main/${mockWin.TRANSFORMERS_CONFIG.dtype}/model.onnx`);
+          await fetch(`https://huggingface.co/onnx-community/Qwen3.5-0.8B-ONNX/resolve/main/${mockWin.TRANSFORMERS_CONFIG.dtype}/model.onnx`);
           return { prompt: async () => "WASM q8 回答" };
         },
       }),
@@ -620,4 +632,112 @@ test("Gate 11: client source and built bundle forbid cloud-AI tokens and guest-a
   assert.ok(bundleMtime >= sourceMtime, "dist is stale: build the current source snapshot before Gate 11");
   const bundle = files(dist).map((file) => readFileSync(file, "utf8")).join("\n");
   assertNoForbiddenTokens("built client bundle", bundle);
+});
+
+test("Gate 12: local fallback pins Qwen3.5-0.8B-ONNX in source, config, and built bundle", () => {
+  assert.equal(LOCAL_FALLBACK_MODEL_ID, "onnx-community/Qwen3.5-0.8B-ONNX");
+  const source = readFileSync(new URL("../app/chrome-built-in-ai.ts", import.meta.url), "utf8");
+  assert.match(source, /onnx-community\/Qwen3\.5-0\.8B-ONNX/);
+  const dist = join(process.cwd(), "dist");
+  const bundle = files(dist).map((file) => readFileSync(file, "utf8")).join("\n");
+  assert.match(bundle, /onnx-community\/Qwen3\.5-0\.8B-ONNX/);
+  assert.doesNotMatch(bundle, /Qwen2\.5-0\.5B/);
+});
+
+test("Gate 13: WebGPU q4f16 artifact load failure retries the same local model at q8", async () => {
+  assert.deepEqual(LOCAL_FALLBACK_DTYPE_CANDIDATES.webgpu, ["q4f16", "q8"]);
+  assert.deepEqual(LOCAL_FALLBACK_DTYPE_CANDIDATES.wasm, ["q8"]);
+  const mockWin = mockTargetWindow();
+  const env = {
+    window: mockWin,
+    navigator: {
+      gpu: { requestAdapter: async () => f16Adapter() },
+    },
+  };
+
+  const triedDtypes = [];
+  const answer = await askWithChromeBuiltInAi(
+    "測試重試",
+    () => {},
+    {
+      env,
+      loadPolyfill: async () => {
+        mockWin.LanguageModel = {
+          __isPolyfill: true,
+          async create() {
+            triedDtypes.push(mockWin.TRANSFORMERS_CONFIG.dtype);
+            if (mockWin.TRANSFORMERS_CONFIG.dtype === "q4f16") {
+              throw new Error("Simulated q4f16 load error");
+            }
+            return {
+              promptStreaming: () => stream(["q8 重試成功"]),
+            };
+          },
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(triedDtypes, ["q4f16", "q8"]);
+  assert.equal(answer, "q8 重試成功");
+  assert.equal(mockWin.TRANSFORMERS_CONFIG.dtype, "q8");
+});
+
+test("Gate 14: streamed local answers stop and truncate on repetition loops", async () => {
+  const loop = detectRepetitionLoop("你好！你好！你好！你好！");
+  assert.ok(loop, "detectRepetitionLoop must identify repetition");
+  const guard = createRepetitionGuard();
+  const chunks = ["你好！", "你好！", "你好！", "你好！", "你好！"];
+  const emitted = [];
+  for (const c of chunks) {
+    const safe = guard.feed(c);
+    if (safe) emitted.push(safe);
+    if (guard.stopped) break;
+  }
+  assert.equal(guard.stopped, true, "repetition guard must detect loop and stop");
+  assert.ok(emitted.length < chunks.length, "loop iterations must be truncated");
+});
+
+test("Gate 15: cancellation hands the AbortSignal to the live prompt/stream and fails closed", async () => {
+  const mockWin = mockTargetWindow();
+  const env = {
+    window: mockWin,
+    navigator: {
+      gpu: { requestAdapter: async () => f16Adapter() },
+    },
+  };
+
+  const ac = new AbortController();
+  const promise = askWithChromeBuiltInAi(
+    "取消測試",
+    () => { ac.abort(); },
+    {
+      env,
+      signal: ac.signal,
+      loadPolyfill: async () => {
+        mockWin.LanguageModel = {
+          __isPolyfill: true,
+          async create() {
+            return {
+              async *promptStreaming(prompt, options) {
+                yield "第一部分";
+                if (options?.signal?.aborted) throw new Error("aborted");
+                yield "第二部分";
+              },
+            };
+          },
+        };
+      },
+    },
+  );
+
+  await assert.rejects(promise, (err) => {
+    return err instanceof ChromeAiError && /取消/.test(err.message);
+  });
+});
+
+test("Gate 16: local fallback prompt requires a short Traditional Chinese answer", async () => {
+  assert.match(LOCAL_FALLBACK_PROMPT_INSTRUCTION, /繁體中文/);
+  assert.match(LOCAL_FALLBACK_PROMPT_INSTRUCTION, /150 字以內/);
+  assert.match(LOCAL_FALLBACK_PROMPT_INSTRUCTION, /切勿重複相同句子/);
 });
