@@ -12,6 +12,13 @@
 //  9. browser AI errors never fall back to a network service
 // 10. Traditional Chinese questions succeed with or without Translator API
 // 11. client source and built bundle forbid cloud-AI tokens, keys, and endpoints
+// 12. local fallback pins the Qwen2.5 baseline and exposes the Qwen3 test option
+// 13. WebGPU q4f16 artifact load failure retries the same local model at q8
+// 14. streamed local answers stop and truncate on repetition loops
+// 15. cancellation hands the AbortSignal to the live prompt/stream and fails closed
+// 16. local fallback prompt requires a short Traditional Chinese answer
+// 17. dynamic import rejection retains safe engine-module diagnostics
+// 18. every local create rejection retains safe dtype/session diagnostics
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -21,7 +28,18 @@ import {
   askWithChromeBuiltInAi,
   ChromeAiError,
   createAutoSubmitter,
+  createRepetitionGuard,
+  createThinkingGuard,
+  detectRepetitionLoop,
   isTraditionalChinese,
+  LOCAL_FALLBACK_DTYPE_CANDIDATES,
+  LOCAL_FALLBACK_MODEL_ID,
+  LOCAL_FALLBACK_PROMPT_INSTRUCTION,
+  ORT_WASM_URL,
+  QWEN25_BASELINE_MODEL_ID,
+  QWEN3_TEST_MODEL_ID,
+  stripThinkingTags,
+  SUPPORTED_LOCAL_MODELS,
 } from "../app/chrome-built-in-ai.ts";
 
 function stream(chunks) {
@@ -173,6 +191,8 @@ test("Gate 3: native absent triggers local fallback capability gate and loads po
     assert.ok(statuses.includes("local model download"));
     assert.equal(mockWin.TRANSFORMERS_CONFIG.apiKey, "dummy");
     assert.equal(mockWin.TRANSFORMERS_CONFIG.device, "webgpu");
+    assert.equal(mockWin.TRANSFORMERS_CONFIG.modelName, QWEN25_BASELINE_MODEL_ID);
+    assert.equal(mockWin.TRANSFORMERS_CONFIG.dtype, "q4f16");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -620,4 +640,213 @@ test("Gate 11: client source and built bundle forbid cloud-AI tokens and guest-a
   assert.ok(bundleMtime >= sourceMtime, "dist is stale: build the current source snapshot before Gate 11");
   const bundle = files(dist).map((file) => readFileSync(file, "utf8")).join("\n");
   assertNoForbiddenTokens("built client bundle", bundle);
+});
+
+test("Gate 12: local fallback baseline pins Qwen2.5-0.5B and provides Qwen3-0.6B test option", () => {
+  assert.equal(LOCAL_FALLBACK_MODEL_ID, "onnx-community/Qwen2.5-0.5B-Instruct");
+  assert.equal(QWEN25_BASELINE_MODEL_ID, "onnx-community/Qwen2.5-0.5B-Instruct");
+  assert.equal(QWEN3_TEST_MODEL_ID, "onnx-community/Qwen3-0.6B-ONNX");
+  assert.deepEqual(SUPPORTED_LOCAL_MODELS, [
+    "onnx-community/Qwen2.5-0.5B-Instruct",
+    "onnx-community/Qwen3-0.6B-ONNX",
+  ]);
+
+  const source = readFileSync(new URL("../app/chrome-built-in-ai.ts", import.meta.url), "utf8");
+  assert.match(source, /onnx-community\/Qwen2\.5-0\.5B-Instruct/);
+  assert.match(source, /onnx-community\/Qwen3-0\.6B-ONNX/);
+
+  const dist = join(process.cwd(), "dist");
+  const bundle = files(dist).map((file) => readFileSync(file, "utf8")).join("\n");
+  assert.match(bundle, /onnx-community\/Qwen2\.5-0\.5B-Instruct/);
+  assert.match(bundle, /onnx-community\/Qwen3-0\.6B-ONNX/);
+});
+
+test("Gate 13: WebGPU q4f16 artifact load failure retries the same local model at q8", async () => {
+  assert.deepEqual(LOCAL_FALLBACK_DTYPE_CANDIDATES.webgpu, ["q4f16", "q8"]);
+  assert.deepEqual(LOCAL_FALLBACK_DTYPE_CANDIDATES.wasm, ["q8"]);
+  const mockWin = mockTargetWindow();
+  const env = {
+    window: mockWin,
+    navigator: {
+      gpu: { requestAdapter: async () => f16Adapter() },
+    },
+  };
+
+  const triedDtypes = [];
+  const answer = await askWithChromeBuiltInAi(
+    "測試重試",
+    () => {},
+    {
+      env,
+      loadPolyfill: async () => {
+        mockWin.LanguageModel = {
+          __isPolyfill: true,
+          async create() {
+            triedDtypes.push(mockWin.TRANSFORMERS_CONFIG.dtype);
+            if (mockWin.TRANSFORMERS_CONFIG.dtype === "q4f16") {
+              throw new Error("Simulated q4f16 load error");
+            }
+            return {
+              promptStreaming: () => stream(["q8 重試成功"]),
+            };
+          },
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(triedDtypes, ["q4f16", "q8"]);
+  assert.equal(answer, "q8 重試成功");
+  assert.equal(mockWin.TRANSFORMERS_CONFIG.dtype, "q8");
+});
+
+test("Gate 14: streamed local answers stop and truncate on repetition loops", async () => {
+  const loop = detectRepetitionLoop("你好！你好！你好！你好！");
+  assert.ok(loop, "detectRepetitionLoop must identify repetition");
+  const guard = createRepetitionGuard();
+  const chunks = ["你好！", "你好！", "你好！", "你好！", "你好！"];
+  const emitted = [];
+  for (const c of chunks) {
+    const safe = guard.feed(c);
+    if (safe) emitted.push(safe);
+    if (guard.stopped) break;
+  }
+  assert.equal(guard.stopped, true, "repetition guard must detect loop and stop");
+  assert.ok(emitted.length < chunks.length, "loop iterations must be truncated");
+});
+
+test("Gate 15: cancellation hands the AbortSignal to the live prompt/stream and fails closed", async () => {
+  const mockWin = mockTargetWindow();
+  const env = {
+    window: mockWin,
+    navigator: {
+      gpu: { requestAdapter: async () => f16Adapter() },
+    },
+  };
+
+  const ac = new AbortController();
+  const promise = askWithChromeBuiltInAi(
+    "取消測試",
+    () => { ac.abort(); },
+    {
+      env,
+      signal: ac.signal,
+      loadPolyfill: async () => {
+        mockWin.LanguageModel = {
+          __isPolyfill: true,
+          async create() {
+            return {
+              async *promptStreaming(prompt, options) {
+                yield "第一部分";
+                if (options?.signal?.aborted) throw new Error("aborted");
+                yield "第二部分";
+              },
+            };
+          },
+        };
+      },
+    },
+  );
+
+  await assert.rejects(promise, (err) => {
+    return err instanceof ChromeAiError && /取消/.test(err.message);
+  });
+});
+
+test("Gate 16: local fallback prompt requires a short Traditional Chinese answer", async () => {
+  assert.match(LOCAL_FALLBACK_PROMPT_INSTRUCTION, /繁體中文/);
+  assert.match(LOCAL_FALLBACK_PROMPT_INSTRUCTION, /150 字以內/);
+  assert.match(LOCAL_FALLBACK_PROMPT_INSTRUCTION, /切勿重複相同句子/);
+});
+
+test("Gate 17: dynamic import rejection keeps engine-module evidence without learner content", async () => {
+  const diagnostics = [];
+  const env = {
+    window: mockTargetWindow(),
+    WebAssembly: { instantiate: async () => ({}) },
+  };
+
+  await assert.rejects(
+    askWithChromeBuiltInAi("不可記錄的學生題目", () => {}, {
+      env,
+      onLocalFallbackDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      loadLocalLanguageModel: async () => {
+        const error = new Error("Loading chunk https://site.example/assets/polyfill-abc.js?token=secret rejected");
+        error.name = "ChunkLoadError";
+        throw error;
+      },
+    }),
+    (error) => error instanceof ChromeAiError && /載入本機 AI 引擎失敗/.test(error.message),
+  );
+
+  assert.equal(diagnostics.length, 1);
+  assert.deepEqual(
+    { stage: diagnostics[0].stage, name: diagnostics[0].error?.name, dtype: diagnostics[0].dtype },
+    { stage: "engine-module-import", name: "ChunkLoadError", dtype: "q8" },
+  );
+  assert.match(diagnostics[0].chunkUrl, /polyfill-abc\.js\?token=\[redacted\]/);
+  assert.doesNotMatch(JSON.stringify(diagnostics[0]), /學生題目|secret/);
+});
+
+test("Gate 18: create rejection records every attempted dtype with safe session evidence", async () => {
+  const diagnostics = [];
+  const mockWin = mockTargetWindow();
+  const env = {
+    window: mockWin,
+    navigator: { gpu: { requestAdapter: async () => f16Adapter() } },
+  };
+
+  await assert.rejects(
+    askWithChromeBuiltInAi("不可記錄的學生題目", () => {}, {
+      env,
+      onLocalFallbackDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      loadLocalLanguageModel: async () => ({
+        __isPolyfill: true,
+        async create() {
+          const error = new Error("ORT session init rejected");
+          error.name = "OrtSessionError";
+          throw error;
+        },
+      }),
+    }),
+    (error) => error instanceof ChromeAiError && /下載或初始化失敗/.test(error.message),
+  );
+
+  const creates = diagnostics.filter((item) => item.stage === "model-create");
+  assert.deepEqual(creates.map((item) => item.dtype), ["q4f16", "q8"]);
+  assert.ok(creates.every((item) => item.error?.name === "OrtSessionError"));
+  assert.ok(creates.every((item) => item.modelId === "onnx-community/Qwen2.5-0.5B-Instruct"));
+  assert.doesNotMatch(JSON.stringify(creates), /學生題目/);
+});
+
+test("Gate 19: reasoning model <think> tags are stripped and do not leak into output", () => {
+  const sampleWithThink = "<think>\n好的，這是一個數學問題。\n我們先推導公式。\n</think>\n\n解答是 42。";
+  assert.equal(stripThinkingTags(sampleWithThink), "解答是 42。");
+
+  // Streaming thinking guard test
+  const emittedChunks = [];
+  const guard = createThinkingGuard((chunk) => emittedChunks.push(chunk));
+  guard.feed("<think>\n內部推理 1\n");
+  guard.feed("內部推理 2\n</think>\n\n這是答案。");
+  guard.feed("補充說明。");
+  guard.finish();
+
+  assert.deepEqual(emittedChunks, ["這是答案。", "補充說明。"]);
+  assert.doesNotMatch(emittedChunks.join(""), /<think>|內部推理/);
+});
+
+test("Gate 20: build output single file size is bounded under 25MB Sites limit", () => {
+  const dist = join(process.cwd(), "dist");
+  assert.ok(existsSync(dist), "dist must exist");
+  const allFiles = files(dist);
+  const maxBytes = 25 * 1024 * 1024; // 25MB platform limit
+  for (const f of allFiles) {
+    const sz = statSync(f).size;
+    assert.ok(
+      sz <= maxBytes,
+      `File ${f} (${(sz / 1024 / 1024).toFixed(2)}MB) exceeds 25MB Sites platform limit`,
+    );
+  }
+  assert.match(ORT_WASM_URL, /https:\/\/cdn\.jsdelivr\.net\/npm\/onnxruntime-web@/);
+  assert.match(ORT_WASM_URL, /ort-wasm-simd-threaded\.asyncify\.wasm/);
 });

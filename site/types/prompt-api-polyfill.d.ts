@@ -1,7 +1,9 @@
 declare module "prompt-api-polyfill" {
+  export type PromptApiOptions = { signal?: AbortSignal };
+
   export type PromptApiSession = {
-    prompt?: (input: string) => Promise<string>;
-    promptStreaming?: (input: string) => AsyncIterable<string>;
+    prompt?: (input: string, options?: PromptApiOptions) => Promise<string>;
+    promptStreaming?: (input: string, options?: PromptApiOptions) => AsyncIterable<string>;
     destroy?: () => void;
   };
 

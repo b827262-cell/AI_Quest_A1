@@ -7,7 +7,8 @@
   },
   "scripts": {
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
-    "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
+    "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build && npm run package:size-gate",
+    "package:size-gate": "node scripts/verify-upload-package-size.mjs dist",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "npm run build && NODE_ENV=test node --import tsx --test --test-concurrency=1 tests/rendered-html.test.mjs tests/api-runtime.test.mjs tests/chrome-built-in-ai.test.mjs tests/fixture-safety.test.mjs tests/d1-persistence.test.mjs tests/auth-hardening.test.mjs tests/phase3c-shared-backend.test.mjs tests/phase3d-r2-storage.test.mjs tests/storage-compensation.test.mjs tests/sync-core.test.mjs tests/sync-internal-api.test.mjs tests/environment-alignment.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

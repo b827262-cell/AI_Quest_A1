@@ -11,6 +11,78 @@ const { d1, r2 } = hostingConfig;
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
+const cdnBase =
+  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.0-dev.20260914-8d85527a0/dist/";
+
+// Exact basenames of ORT wasm assets that resolveId/transform actually
+// rewrote to the CDN. Only these are ever allowed to be removed from the
+// bundle; anything else is a build error, never a silent purge.
+const externalizedOrtWasmFiles = new Set<string>();
+
+const externalizeOrtWasm = {
+  name: "externalize-ort-wasm",
+  enforce: "pre" as const,
+  resolveId(source: string) {
+    if (source.includes("ort-wasm") && source.endsWith(".wasm")) {
+      const filename = source.split("/").pop();
+      if (filename) externalizedOrtWasmFiles.add(filename);
+      return { id: `${cdnBase}${filename}`, external: true };
+    }
+    return null;
+  },
+  transform(code: string, id: string) {
+    if (
+      !id.includes("onnxruntime-web") &&
+      !id.includes("transformers") &&
+      !id.includes("prompt-api-polyfill")
+    ) {
+      return null;
+    }
+    if (code.includes("ort-wasm")) {
+      return code.replace(
+        /\(?\s*new\s+URL\(\s*["']([^"']*ort-wasm[^"']*\.wasm)["']\s*,\s*import\.meta\.url\s*\)\s*\)?(\.href)?/g,
+        (_match, fullFilename, hasHref) => {
+          const filename = fullFilename.split("/").pop();
+          if (filename) externalizedOrtWasmFiles.add(filename);
+          const target = `${cdnBase}${filename}`;
+          return hasHref ? JSON.stringify(target) : `new URL(${JSON.stringify(target)})`;
+        }
+      );
+    }
+    return null;
+  },
+  // Owner mandate: this hook may only exclude ORT assets that were precisely
+  // identified AND externalized to the CDN (exact-basename match against
+  // `externalizedOrtWasmFiles`). Any other asset over the size limit must fail
+  // the build with its path:bytes — silent purging here would hide files from
+  // the downstream package:size-gate forever.
+  generateBundle(
+    this: { error: (message: string) => void },
+    _options: unknown,
+    bundle: Record<string, { type: string; source?: string | Uint8Array }>
+  ) {
+    const OVERSIZE_LIMIT_BYTES = 25_000_000;
+    for (const [fileName, chunk] of Object.entries(bundle)) {
+      if (chunk.type !== "asset" || chunk.source == null) continue;
+      const basename = fileName.split("/").pop() ?? fileName;
+      if (externalizedOrtWasmFiles.has(basename)) {
+        // Externalized ORT wasm must come from the CDN, never from the bundle.
+        delete bundle[fileName];
+        continue;
+      }
+      const bytes =
+        typeof chunk.source === "string"
+          ? Buffer.byteLength(chunk.source)
+          : chunk.source.byteLength;
+      if (bytes > OVERSIZE_LIMIT_BYTES) {
+        this.error(
+          `OVERSIZE_ASSET_NOT_EXTERNALIZED ${fileName}:${bytes} exceeds ${OVERSIZE_LIMIT_BYTES} bytes; failing build instead of silently purging.`
+        );
+      }
+    }
+  },
+};
+
 // The upstream experimental polyfill ships registry labels for optional cloud
 // backends. Auto aliases those implementations to a fail-closed local module;
 // scrub their selector labels too, so no cloud configuration can be selected
@@ -64,6 +136,7 @@ export default defineConfig(async () => {
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
     plugins: [
+      externalizeOrtWasm,
       scrubCloudPolyfillSelectors,
       vinext(),
       sites(),
@@ -73,7 +146,24 @@ export default defineConfig(async () => {
       }),
     ],
     resolve: {
+      conditions: ["onnxruntime-web-use-extern-wasm"],
       alias: [
+        {
+          find: /^onnxruntime-web\/webgpu$/,
+          replacement: new URL("./node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs", import.meta.url).pathname,
+        },
+        {
+          find: /^onnxruntime-web\/wasm$/,
+          replacement: new URL("./node_modules/onnxruntime-web/dist/ort.wasm.min.mjs", import.meta.url).pathname,
+        },
+        {
+          find: /^onnxruntime-web\/all$/,
+          replacement: new URL("./node_modules/onnxruntime-web/dist/ort.all.min.mjs", import.meta.url).pathname,
+        },
+        {
+          find: /^onnxruntime-web$/,
+          replacement: new URL("./node_modules/onnxruntime-web/dist/ort.min.mjs", import.meta.url).pathname,
+        },
         {
           find: /.*\/backends\/(firebase|gemini|openai|webllm)\.js$/,
           replacement: new URL("./app/blocked-cloud-backend.ts", import.meta.url).pathname,
