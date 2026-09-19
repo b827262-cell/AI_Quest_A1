@@ -3,7 +3,7 @@ export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "base-uri 'self'",
   "object-src 'none'",
-  "script-src 'self' 'wasm-unsafe-eval'",
+  "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://huggingface.co https://*.hf.co",
   "connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.hf.co",

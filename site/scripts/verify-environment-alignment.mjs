@@ -14,14 +14,9 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const siteDir = path.resolve(scriptDir, "..");
 const repoDir = path.resolve(siteDir, "..");
-const defaultManifest = path.join(repoDir, "docs/phase4a/environment-source-of-truth.staging.json");
+const productionManifest = path.join(repoDir, "docs/phase4a/environment-source-of-truth.json");
+const defaultManifest = productionManifest;
 const defaultHosting = path.join(siteDir, ".openai/hosting.json");
-// These are production deployment identities, never valid staging evidence.
-const productionProjectIds = new Set([
-  "appgprj_6aa80235182c8191a876361138ecbc36",
-  "appgprj_6a843b2ece70819191132bd6e99df7a1",
-  "appgprj_6a843b6432f88191aa4cc090c236f3d3",
-]);
 
 function usage() {
   console.error("Usage: node site/scripts/verify-environment-alignment.mjs [--manifest <path>] [--hosting <path>] [--max-age-hours <hours>] [--json]");
@@ -94,20 +89,23 @@ function containsProductionBinding(value) {
   return false;
 }
 
-function containsProductionProjectId(value) {
+function containsProductionProjectId(value, productionProjectIds) {
   if (typeof value === "string") return productionProjectIds.has(value);
-  if (Array.isArray(value)) return value.some(containsProductionProjectId);
-  if (value && typeof value === "object") return Object.values(value).some(containsProductionProjectId);
+  if (Array.isArray(value)) return value.some((item) => containsProductionProjectId(item, productionProjectIds));
+  if (value && typeof value === "object") return Object.values(value).some((item) => containsProductionProjectId(item, productionProjectIds));
   return false;
 }
 
-function verifyProduction(manifest, hosting, check) {
+function verifyProduction(manifest, hosting, production, check) {
   const backend = manifest.sites?.shared_backend;
   const student = manifest.sites?.student;
   const admin = manifest.sites?.admin;
   const worker = manifest.worker;
-  check("shared_backend.project_id", hosting.project_id, backend?.project_id, nonEmptyString(backend?.project_id) && hosting.project_id === backend.project_id);
-  check("worker.project_id", worker?.project_id, backend?.project_id, nonEmptyString(worker?.project_id) && worker.project_id === backend?.project_id);
+  const productionProjectId = production?.sites?.shared_backend?.project_id;
+  let productionHealthOrigin = null;
+  try { productionHealthOrigin = new URL(production?.worker?.health_endpoint).origin; } catch { /* checked below */ }
+  check("shared_backend.project_id", hosting.project_id, productionProjectId, nonEmptyString(productionProjectId) && hosting.project_id === productionProjectId && backend?.project_id === productionProjectId);
+  check("worker.project_id", worker?.project_id, productionProjectId, nonEmptyString(productionProjectId) && worker?.project_id === productionProjectId);
   check("student.project_id.present", student?.project_id, "non-empty", nonEmptyString(student?.project_id));
   check("admin.project_id.present", admin?.project_id, "non-empty", nonEmptyString(admin?.project_id));
   const projectIds = [backend?.project_id, student?.project_id, admin?.project_id].filter(nonEmptyString);
@@ -118,7 +116,7 @@ function verifyProduction(manifest, hosting, check) {
   check("worker.deployed_git_sha.provenance", deployedGitSha, "40+ hexadecimal commit that exists in the repository and is an ancestor of HEAD", fullGitSha(deployedGitSha) && deployedCommitExists && gitCheck(["merge-base", "--is-ancestor", deployedGitSha, "HEAD"]));
   let healthUrl = null;
   try { healthUrl = new URL(worker?.health_endpoint); } catch { /* checked below */ }
-  check("worker.health_endpoint.origin", healthUrl ? healthUrl.origin : null, "https://ai-quest-a1-backend.b827262.chatgpt.site", healthUrl?.origin === "https://ai-quest-a1-backend.b827262.chatgpt.site");
+  check("worker.health_endpoint.origin", healthUrl ? healthUrl.origin : null, productionHealthOrigin, nonEmptyString(productionHealthOrigin) && healthUrl?.origin === productionHealthOrigin);
   check("worker.health_status", worker?.health_status, 200, worker?.health_status === 200);
   const db = worker?.bindings?.DB;
   const bucket = worker?.bindings?.BOOKS_BUCKET;
@@ -136,14 +134,14 @@ function verifyProduction(manifest, hosting, check) {
   check("worker.BOOKS_BUCKET.get_readable", bucket?.get_readable, true, bucket?.get_readable === true);
 }
 
-function verifyStaging(manifest, hosting, check) {
+function verifyStaging(manifest, hosting, productionProjectIds, check) {
   const testSite = manifest.sites?.test_site;
   check("test_site.project_id", hosting.project_id, testSite?.project_id, nonEmptyString(testSite?.project_id) && hosting.project_id === testSite.project_id);
   check("test_site.project_id.format", testSite?.project_id, "appgprj_<opaque id>", /^appgprj_[a-z0-9]+$/i.test(testSite?.project_id ?? ""));
   check("hosting.d1_binding.absent", hosting.d1 ?? null, null, !("d1" in hosting) || hosting.d1 == null);
   check("hosting.r2_binding.absent", hosting.r2 ?? null, null, !("r2" in hosting) || hosting.r2 == null);
   check("staging.production_bindings.absent", containsProductionBinding(manifest), false, !containsProductionBinding(manifest));
-  check("staging.production_project_literals.absent", containsProductionProjectId(manifest), false, !containsProductionProjectId(manifest));
+  check("staging.production_project_literals.absent", containsProductionProjectId(manifest, productionProjectIds), false, !containsProductionProjectId(manifest, productionProjectIds));
   check("staging.worker.absent", manifest.worker ?? null, null, !("worker" in manifest));
   check("staging.postdeploy_live", manifest.postdeploy_live, "PENDING", manifest.postdeploy_live === "PENDING");
   check("staging.backend_mode", manifest.backend_mode, "isolated-fail-closed", manifest.backend_mode === "isolated-fail-closed");
@@ -154,6 +152,8 @@ export function verifyEnvironment(options) {
   const checks = [];
   const manifest = readJson(options.manifest, "manifest", errors);
   const hosting = readJson(options.hosting, "hosting config", errors);
+  const production = readJson(productionManifest, "production source of truth", errors);
+  const productionProjectIds = new Set(Object.values(production?.sites ?? {}).map((site) => site?.project_id).filter(nonEmptyString));
   const capturedAtMs = manifest ? captureAgeMs(manifest.captured_at) : null;
 
   const check = (name, actual, expected, valid) => {
@@ -169,8 +169,8 @@ export function verifyEnvironment(options) {
     check("manifest_version", manifest.manifest_version, "phase4a.environment-source-of-truth/v1", manifest.manifest_version === "phase4a.environment-source-of-truth/v1");
     check("environment", manifest.environment, "staging|production", manifest.environment === "staging" || manifest.environment === "production");
 
-    if (manifest.environment === "production") verifyProduction(manifest, hosting, check);
-    if (manifest.environment === "staging") verifyStaging(manifest, hosting, check);
+    if (manifest.environment === "production") verifyProduction(manifest, hosting, production, check);
+    if (manifest.environment === "staging") verifyStaging(manifest, hosting, productionProjectIds, check);
 
     // F3 safeguard: check repo-root hosting if present
     const rootHostingPath = path.join(repoDir, ".openai/hosting.json");

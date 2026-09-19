@@ -9,6 +9,11 @@ import { fileURLToPath } from "node:url";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const siteDir = path.resolve(testDir, "..");
 const validator = path.join(siteDir, "scripts/verify-environment-alignment.mjs");
+const productionSource = JSON.parse(fs.readFileSync(path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json"), "utf8"));
+const productionProjectId = productionSource.sites.shared_backend.project_id;
+const productionHealthEndpoint = productionSource.worker.health_endpoint;
+const stagingSource = JSON.parse(fs.readFileSync(path.join(siteDir, "../docs/phase4a/environment-source-of-truth.staging.json"), "utf8"));
+const stagingProjectId = stagingSource.sites.test_site.project_id;
 const { verifyEnvironment } = await import(validator);
 
 function writeFixture(dir, name, value) {
@@ -23,15 +28,15 @@ function validManifest() {
     environment: "production",
     captured_at: new Date().toISOString(),
     sites: {
-      shared_backend: { project_id: "appgprj_backend" },
+      shared_backend: { project_id: productionProjectId },
       student: { project_id: "appgprj_student" },
       admin: { project_id: "appgprj_admin" },
     },
     worker: {
-      project_id: "appgprj_backend",
+      project_id: productionProjectId,
       version: "appgver_123",
       deployed_git_sha: "f0085202150c67760040644f1db3d6c479dc2074",
-      health_endpoint: "https://ai-quest-a1-backend.b827262.chatgpt.site/api/health",
+      health_endpoint: productionHealthEndpoint,
       health_status: 200,
       bindings: {
         DB: { type: "d1", resource_id: "d1_opaque_123", readable: true },
@@ -52,14 +57,18 @@ function run(manifest, hosting, extraOpts = {}) {
   }
 }
 
+function productionHosting(overrides = {}) {
+  return { project_id: productionProjectId, d1: "DB", r2: "BOOKS_BUCKET", ...overrides };
+}
+
 test("environment alignment passes only for matching identities and readable bindings", () => {
-  const result = run(validManifest(), { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+  const result = run(validManifest(), productionHosting());
   assert.equal(result.status, "PASS");
   assert.equal(result.config_drift, "NO");
 });
 
 test("environment alignment fails closed for a project mismatch", () => {
-  const result = run(validManifest(), { project_id: "appgprj_wrong", d1: "DB", r2: "BOOKS_BUCKET" });
+  const result = run(validManifest(), productionHosting({ project_id: "appgprj_wrong" }));
   assert.equal(result.status, "FAIL");
   assert.equal(result.config_drift, "YES");
   assert.ok(result.checks.some((check) => check.name === "shared_backend.project_id" && check.status === "FAIL"));
@@ -69,7 +78,7 @@ test("environment alignment fails closed for missing or unreadable bindings", ()
   const manifest = validManifest();
   manifest.worker.bindings.DB.readable = false;
   delete manifest.worker.bindings.BOOKS_BUCKET.get_readable;
-  const result = run(manifest, { project_id: "appgprj_backend", d1: "OTHER_DB", r2: null });
+  const result = run(manifest, productionHosting({ d1: "OTHER_DB", r2: null }));
   assert.equal(result.status, "FAIL");
   assert.ok(result.errors.length >= 3);
 });
@@ -77,7 +86,7 @@ test("environment alignment fails closed for missing or unreadable bindings", ()
 test("environment alignment fails closed for invalid environment target", () => {
   const manifest = validManifest();
   manifest.environment = "unknown_env";
-  const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+  const result = run(manifest, productionHosting());
   assert.equal(result.status, "FAIL");
   assert.ok(result.checks.some((check) => check.name === "environment" && check.status === "FAIL"));
 });
@@ -89,7 +98,7 @@ test("FS-1: environment alignment fails closed for a garbage deployed Git SHA", 
     const manifestBanana = validManifest();
     manifestBanana.worker.deployed_git_sha = "banana";
     const manifestPathBanana = writeFixture(dir, "manifest-banana.json", manifestBanana);
-    const hostingPath = writeFixture(dir, "hosting.json", { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+    const hostingPath = writeFixture(dir, "hosting.json", productionHosting());
     const resultBanana = verifyEnvironment({ manifest: manifestPathBanana, hosting: hostingPath, maxAgeHours: 24, json: true });
     assert.equal(resultBanana.status, "FAIL");
     assert.ok(resultBanana.checks.some((check) => check.name === "worker.deployed_git_sha.provenance" && check.status === "FAIL"));
@@ -121,9 +130,9 @@ test("FS-1: environment alignment fails closed for a garbage deployed Git SHA", 
 
 test("environment alignment fails closed for non-https or non-200 health status", () => {
   const manifest = validManifest();
-  manifest.worker.health_endpoint = "http://ai-quest-a1-backend.b827262.chatgpt.site/api/health";
+  manifest.worker.health_endpoint = productionHealthEndpoint.replace("https:", "http:");
   manifest.worker.health_status = 500;
-  const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+  const result = run(manifest, productionHosting());
   assert.equal(result.status, "FAIL");
   assert.ok(result.checks.some((check) => check.name === "worker.health_endpoint.origin" && check.status === "FAIL"));
   assert.ok(result.checks.some((check) => check.name === "worker.health_status" && check.status === "FAIL"));
@@ -132,7 +141,7 @@ test("environment alignment fails closed for non-https or non-200 health status"
 test("FPT-1 / F5: environment alignment fails closed when captured_at exceeds maxAgeHours", () => {
   const manifest = validManifest();
   manifest.captured_at = "2025-01-01T00:00:00.000Z";
-  const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" }, { maxAgeHours: 24 });
+  const result = run(manifest, productionHosting(), { maxAgeHours: 24 });
   assert.equal(result.status, "FAIL");
   assert.ok(result.checks.some((check) => check.name === "captured_at" && check.status === "FAIL"));
 });
@@ -140,7 +149,7 @@ test("FPT-1 / F5: environment alignment fails closed when captured_at exceeds ma
 test("FPT-2: environment alignment fails closed when site project_ids are not distinct", () => {
   const manifest = validManifest();
   manifest.sites.student.project_id = manifest.sites.shared_backend.project_id;
-  const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+  const result = run(manifest, productionHosting());
   assert.equal(result.status, "FAIL");
   assert.ok(result.checks.some((check) => check.name === "sites.project_ids.distinct" && check.status === "FAIL"));
 });
@@ -148,7 +157,7 @@ test("FPT-2: environment alignment fails closed when site project_ids are not di
 test("FPT-4: environment alignment fails closed when health endpoint origin is not shared backend", () => {
   const manifest = validManifest();
   manifest.worker.health_endpoint = "https://evil.example.com/api/health";
-  const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+  const result = run(manifest, productionHosting());
   assert.equal(result.status, "FAIL");
   assert.ok(result.checks.some((check) => check.name === "worker.health_endpoint.origin" && check.status === "FAIL"));
 });
@@ -157,7 +166,7 @@ test("F1: environment alignment fails closed when resource_id echoes binding nam
   const manifest = validManifest();
   manifest.worker.bindings.DB.resource_id = "DB";
   delete manifest.worker.bindings.DB.identity_source;
-  const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+  const result = run(manifest, productionHosting());
   assert.equal(result.status, "FAIL");
   assert.ok(result.checks.some((check) => check.name === "worker.DB.resource_id_not_binding_echo" && check.status === "FAIL"));
 });
@@ -166,7 +175,7 @@ test("FPT-5: environment alignment fails closed when DB and BOOKS_BUCKET share t
   const manifest = validManifest();
   manifest.worker.bindings.DB.resource_id = "same_resource_id";
   manifest.worker.bindings.BOOKS_BUCKET.resource_id = "same_resource_id";
-  const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
+  const result = run(manifest, productionHosting());
   assert.equal(result.status, "FAIL");
   assert.ok(result.checks.some((check) => check.name === "bindings.resource_ids.distinct" && check.status === "FAIL"));
 });
@@ -182,8 +191,19 @@ test("F6: committed staging source of truth validates the isolated hosting decla
   assert.equal(result.checks.find((check) => check.name === "staging.postdeploy_live")?.actual, "PENDING");
 });
 
-test("F7: CLI subprocess exits 0 on staging predeploy configuration", (t) => {
+test("F7: CLI defaults to production source of truth and fails closed against staging hosting", (t) => {
   const res = spawnSync(process.execPath, [validator, "--json"], { encoding: "utf8" });
+  if (res.error?.code === "EPERM") return t.skip("subprocess execution is unavailable in this sandbox");
+  assert.equal(res.status, 1);
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.status, "FAIL");
+  assert.equal(parsed.config_drift, "YES");
+  assert.equal(parsed.manifest, path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json"));
+});
+
+test("F7: CLI subprocess exits 0 when staging is selected explicitly", (t) => {
+  const stagingPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.staging.json");
+  const res = spawnSync(process.execPath, [validator, "--manifest", stagingPath, "--json"], { encoding: "utf8" });
   if (res.error?.code === "EPERM") return t.skip("subprocess execution is unavailable in this sandbox");
   assert.equal(res.status, 0);
   const parsed = JSON.parse(res.stdout);
@@ -197,7 +217,7 @@ test("staging fails closed when a production binding is introduced", () => {
     manifest_version: "phase4a.environment-source-of-truth/v1",
     environment: "staging",
     captured_at: new Date().toISOString(),
-    sites: { test_site: { project_id: "appgprj_6aaeb13a9930819186a64f6420ff65a4" } },
+    sites: { test_site: { project_id: stagingProjectId } },
     backend_mode: "isolated-fail-closed",
     postdeploy_live: "PENDING",
   };
@@ -211,7 +231,7 @@ test("staging fails closed when a production project literal is introduced", () 
     manifest_version: "phase4a.environment-source-of-truth/v1",
     environment: "staging",
     captured_at: new Date().toISOString(),
-    sites: { test_site: { project_id: "appgprj_6aa80235182c8191a876361138ecbc36" } },
+    sites: { test_site: { project_id: productionProjectId } },
     backend_mode: "isolated-fail-closed",
     postdeploy_live: "PENDING",
   };

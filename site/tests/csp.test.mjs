@@ -4,7 +4,12 @@ import test from "node:test";
 const { CONTENT_SECURITY_POLICY, withSecurityHeaders } = await import("../app/security/csp.ts");
 
 test("CSP permits the exact CDN, Hugging Face, and WASM execution paths used by local fallback", () => {
-  assert.match(CONTENT_SECURITY_POLICY, /connect-src[^;]*https:\/\/cdn\.jsdelivr\.net/);
+  const ortLoader = new URL("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.0-dev.20260914-8d85527a0/dist/ort.min.mjs");
+  const ortWasm = new URL("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.0-dev.20260914-8d85527a0/dist/ort-wasm-simd-threaded.asyncify.wasm");
+  const scriptSrc = CONTENT_SECURITY_POLICY.match(/script-src([^;]*)/)?.[1] ?? "";
+  const connectSrc = CONTENT_SECURITY_POLICY.match(/connect-src([^;]*)/)?.[1] ?? "";
+  assert.ok(scriptSrc.includes(ortLoader.origin), "script-src must permit the ORT .mjs dynamic import");
+  assert.ok(connectSrc.includes(ortWasm.origin), "connect-src must permit the ORT .wasm fetch");
   assert.match(CONTENT_SECURITY_POLICY, /connect-src[^;]*https:\/\/huggingface\.co/);
   assert.match(CONTENT_SECURITY_POLICY, /connect-src[^;]*https:\/\/\*\.hf\.co/);
   assert.match(CONTENT_SECURITY_POLICY, /script-src[^;]*'wasm-unsafe-eval'/);
