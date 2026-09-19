@@ -1,19 +1,46 @@
-import { isProductionEnvironment } from "../../db/index.ts";
+import { isProductionEnvironment } from "../../db";
 
-export const SHARED_BACKEND_ORIGIN = "https://ai-quest-a1-backend.b827262.chatgpt.site";
+type RuntimeEnvironment = { STAGING_BACKEND_ORIGIN?: string };
 
-export const ALLOWED_CORS_ORIGINS = [
-  "https://ai-quest-a1-student.b827262.chatgpt.site",
-  "https://ai-quest-a1-admin.b827262.chatgpt.site",
-];
+/**
+ * This staging build has no data-plane binding by default.  A backend may only
+ * be enabled through an explicit, HTTPS staging origin injected at runtime.
+ * There is deliberately no committed fallback target.
+ */
+export function getStagingBackendOrigin(): string | null {
+  const runtime = globalThis as typeof globalThis & {
+    __env__?: RuntimeEnvironment;
+    process?: { env?: RuntimeEnvironment };
+  };
+  const configured = runtime.__env__?.STAGING_BACKEND_ORIGIN ?? runtime.process?.env?.STAGING_BACKEND_ORIGIN;
+  if (!configured) return null;
+
+  try {
+    const url = new URL(configured);
+    return url.protocol === "https:" && url.hostname.includes("staging") ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function isStagingOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return url.protocol === "https:" && url.hostname.includes("staging");
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Determines whether the current request is running on the Shared Backend site.
  */
 export function isBackendSite(request: Request): boolean {
+  const backendOrigin = getStagingBackendOrigin();
+  if (!backendOrigin) return false;
   try {
     const url = new URL(request.url);
-    return url.hostname.includes("ai-quest-a1-backend");
+    return url.origin === backendOrigin;
   } catch {
     return false;
   }
@@ -25,19 +52,14 @@ export function isBackendSite(request: Request): boolean {
  */
 export function shouldDelegateToBackend(request: Request): boolean {
   if (!isProductionEnvironment()) return false;
+  const backendOrigin = getStagingBackendOrigin();
+  if (!backendOrigin) return false;
   try {
     const url = new URL(request.url);
-    if (url.hostname.includes("ai-quest-a1-backend")) {
+    if (url.origin === backendOrigin) {
       return false;
     }
-    if (
-      url.hostname.includes("ai-quest-a1-student") ||
-      url.hostname.includes("ai-quest-a1-admin") ||
-      (url.hostname.endsWith(".chatgpt.site") && !url.hostname.includes("ai-quest-a1-backend"))
-    ) {
-      return true;
-    }
-    return false;
+    return isStagingOrigin(url.origin);
   } catch {
     return false;
   }
@@ -47,8 +69,18 @@ export function shouldDelegateToBackend(request: Request): boolean {
  * Forward/proxy a request to the shared backend worker.
  */
 export async function delegateToBackend(request: Request, path: string): Promise<Response> {
+  const backendOrigin = getStagingBackendOrigin();
+  if (!backendOrigin) {
+    return Response.json(
+      {
+        error: "backend_disabled",
+        message: "Staging backend delegation is disabled because no staging backend is configured.",
+      },
+      { status: 503, headers: { "x-data-plane": "disabled" } }
+    );
+  }
   const reqUrl = new URL(request.url);
-  const backendTarget = new URL(path, SHARED_BACKEND_ORIGIN);
+  const backendTarget = new URL(path, backendOrigin);
   backendTarget.search = reqUrl.search;
 
   const forwardHeaders = new Headers();
@@ -81,7 +113,7 @@ export async function delegateToBackend(request: Request, path: string): Promise
       }
     });
 
-    responseHeaders.set("x-data-plane", "shared-backend");
+    responseHeaders.set("x-data-plane", "staging-backend");
 
     const responseBody = await backendResponse.arrayBuffer();
     return new Response(responseBody, {
@@ -92,7 +124,7 @@ export async function delegateToBackend(request: Request, path: string): Promise
     return Response.json(
       {
         error: "backend_unavailable",
-        message: "Shared Backend service is unreachable",
+        message: "Configured staging backend service is unreachable",
         detail: (err as Error)?.message,
       },
       { status: 503 }
@@ -121,7 +153,7 @@ export function handleCors(request: Request): {
   }
 
   const isAllowed =
-    ALLOWED_CORS_ORIGINS.includes(origin) ||
+    isStagingOrigin(origin) ||
     (!isProd && (origin.includes("localhost") || origin.includes("127.0.0.1")));
 
   if (request.method === "OPTIONS") {

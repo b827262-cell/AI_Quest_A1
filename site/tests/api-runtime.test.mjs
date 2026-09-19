@@ -24,14 +24,15 @@ async function requestWorker(pathname, options = {}) {
   );
 }
 
-test("GET /api/health returns 200 OK with worker edge metadata", async () => {
+test("GET /api/health returns isolated worker edge metadata", async () => {
   const res = await requestWorker("/api/health");
   assert.equal(res.status, 200);
   const data = await res.json();
-  assert.equal(data.status, "ok");
+  assert.equal(data.status, "isolated");
   assert.equal(data.edge, "cloudflare-worker");
-  assert.equal(data.d1, "bound");
-  assert.equal(data.phase, 2);
+  assert.equal(data.d1, "disabled");
+  assert.equal(data.r2, "disabled");
+  assert.equal(data.backendTarget, null);
 });
 
 test("GET /api/student/me returns deterministic synthetic student or SIWC user", async () => {

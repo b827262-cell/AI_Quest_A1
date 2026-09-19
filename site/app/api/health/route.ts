@@ -1,19 +1,19 @@
-import { isBackendSite } from "../backend-client";
+import { getStagingBackendOrigin } from "../backend-client";
 
-export async function GET(request: Request) {
-  const isBackend = isBackendSite(request);
+export async function GET() {
+  const backendTarget = getStagingBackendOrigin();
   return Response.json({
-    status: "ok",
+    status: backendTarget ? "staging" : "isolated",
     edge: "cloudflare-worker",
-    d1: "bound",
-    r2: "bound",
-    storage: "r2",
-    phase: 2,
-    role: isBackend ? "shared-backend" : "frontend-proxy",
-    backendTarget: "https://ai-quest-a1-backend.b827262.chatgpt.site",
-    sharedD1Project: "appgprj_6aa80235182c8191a876361138ecbc36",
-    sharedR2Project: "appgprj_6aa80235182c8191a876361138ecbc36",
-    sharedR2Bucket: "BOOKS_BUCKET",
+    d1: "disabled",
+    r2: "disabled",
+    storage: "disabled",
+    role: "staging-isolated",
+    backendTarget,
+    sharedD1Project: null,
+    sharedR2Project: null,
+    sharedR2Bucket: null,
+    isolation: backendTarget ? "staging-only" : "disabled",
     time: new Date().toISOString(),
   });
 }

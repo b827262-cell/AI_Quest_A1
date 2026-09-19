@@ -131,14 +131,14 @@ export function verifyEnvironment(options) {
       fullGitSha(deployedGitSha) && deployedCommitExists && deployedCommitInLineage,
     );
 
-    // FPT-4: health endpoint origin anchored to SHARED_BACKEND_ORIGIN
+    // FPT-4: health endpoint origin anchored to the declared isolated test endpoint.
     let healthUrl = null;
     try {
       healthUrl = new URL(worker?.health_endpoint);
     } catch {
       healthUrl = null;
     }
-    check("worker.health_endpoint.origin", healthUrl ? healthUrl.origin : null, "https://ai-quest-a1-backend.b827262.chatgpt.site", healthUrl?.origin === "https://ai-quest-a1-backend.b827262.chatgpt.site");
+    check("worker.health_endpoint.origin", healthUrl ? healthUrl.origin : null, "https://isolated-staging.example.test", healthUrl?.origin === "https://isolated-staging.example.test");
     check("worker.health_status", worker?.health_status, 200, worker?.health_status === 200);
 
     const db = worker?.bindings?.DB;

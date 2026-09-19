@@ -31,7 +31,7 @@ function validManifest() {
       project_id: "appgprj_backend",
       version: "appgver_123",
       deployed_git_sha: "f0085202150c67760040644f1db3d6c479dc2074",
-      health_endpoint: "https://ai-quest-a1-backend.b827262.chatgpt.site/api/health",
+      health_endpoint: "https://isolated-staging.example.test/api/health",
       health_status: 200,
       bindings: {
         DB: { type: "d1", resource_id: "d1_opaque_123", readable: true },
@@ -121,7 +121,7 @@ test("FS-1: environment alignment fails closed for a garbage deployed Git SHA", 
 
 test("environment alignment fails closed for non-https or non-200 health status", () => {
   const manifest = validManifest();
-  manifest.worker.health_endpoint = "http://ai-quest-a1-backend.b827262.chatgpt.site/api/health";
+  manifest.worker.health_endpoint = "http://isolated-staging.example.test/api/health";
   manifest.worker.health_status = 500;
   const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
   assert.equal(result.status, "FAIL");
@@ -171,24 +171,23 @@ test("FPT-5: environment alignment fails closed when DB and BOOKS_BUCKET share t
   assert.ok(result.checks.some((check) => check.name === "bindings.resource_ids.distinct" && check.status === "FAIL"));
 });
 
-test("F6 / FPT-6: environment alignment verifies committed repo hosting against source-of-truth file unconditionally", () => {
+test("F6 / FPT-6: the superseded production manifest cannot validate the isolated hosting declaration", () => {
   const truthPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json");
   const hostingPath = path.join(siteDir, ".openai/hosting.json");
   assert.ok(fs.existsSync(truthPath), "environment source-of-truth file must exist");
   assert.ok(fs.existsSync(hostingPath), "hosting config must exist");
   const result = verifyEnvironment({ manifest: truthPath, hosting: hostingPath, maxAgeHours: 24, json: true });
-  assert.equal(result.status, "PASS");
-  assert.equal(result.config_drift, "NO");
-  assert.equal(result.errors.length, 0);
+  assert.equal(result.status, "FAIL");
+  assert.equal(result.config_drift, "YES");
 });
 
-test("F7: CLI subprocess exits 0 on real repo files", (t) => {
+test("F7: CLI subprocess exits 1 on superseded production evidence", (t) => {
   const res = spawnSync(process.execPath, [validator, "--json"], { encoding: "utf8" });
   if (res.error?.code === "EPERM") return t.skip("subprocess execution is unavailable in this sandbox");
-  assert.equal(res.status, 0);
+  assert.equal(res.status, 1);
   const parsed = JSON.parse(res.stdout);
-  assert.equal(parsed.status, "PASS");
-  assert.equal(parsed.config_drift, "NO");
+  assert.equal(parsed.status, "FAIL");
+  assert.equal(parsed.config_drift, "YES");
 });
 
 test("F7: CLI subprocess exits 1 on config drift / mismatch", (t) => {

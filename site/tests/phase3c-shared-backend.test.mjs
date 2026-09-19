@@ -6,7 +6,7 @@ async function requestWorker(pathname, options = {}) {
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-${Math.random()}`);
   const { default: worker } = await import(workerUrl.href);
 
-  const req = new Request(`http://localhost${pathname}`, {
+  const req = new Request(`${options.origin ?? "http://localhost"}${pathname}`, {
     headers: {
       accept: "application/json",
       "content-type": "application/json",
@@ -27,30 +27,53 @@ async function requestWorker(pathname, options = {}) {
   );
 }
 
-test("Phase 3C: GET /api/health exposes unified shared backend target and D1 project", async () => {
+test("Isolation: GET /api/health reports disabled data-plane bindings and no backend target", async () => {
   const res = await requestWorker("/api/health");
   assert.equal(res.status, 200);
   const data = await res.json();
-  assert.equal(data.status, "ok");
+  assert.equal(data.status, "isolated");
   assert.equal(data.edge, "cloudflare-worker");
-  assert.equal(data.d1, "bound");
-  assert.equal(data.phase, 2);
-  assert.equal(data.backendTarget, "https://ai-quest-a1-backend.b827262.chatgpt.site");
-  assert.equal(data.sharedD1Project, "appgprj_6aa80235182c8191a876361138ecbc36");
+  assert.equal(data.d1, "disabled");
+  assert.equal(data.r2, "disabled");
+  assert.equal(data.backendTarget, null);
+  assert.equal(data.sharedD1Project, null);
+  assert.equal(data.isolation, "disabled");
+});
+
+test("Isolation: an unconfigured staging backend never makes an outbound proxy request", async () => {
+  const originalEnv = process.env.NODE_ENV;
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  process.env.NODE_ENV = "production";
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("outbound fetch must not occur when staging backend is disabled");
+  };
+
+  try {
+    const res = await requestWorker("/api/student/me", {
+      origin: "https://ai-quest-a1-student-staging.b827262.chatgpt.site",
+    });
+    assert.equal(res.status, 200);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    process.env.NODE_ENV = originalEnv;
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("Phase 3C: OPTIONS preflight on /api/student/progress returns 204 with allowed CORS headers", async () => {
   const res = await requestWorker("/api/student/progress", {
     method: "OPTIONS",
     headers: {
-      origin: "https://ai-quest-a1-student.b827262.chatgpt.site",
+      origin: "https://ai-quest-a1-student-staging.b827262.chatgpt.site",
       "access-control-request-method": "PUT",
     },
   });
   assert.equal(res.status, 204);
   assert.equal(
     res.headers.get("access-control-allow-origin"),
-    "https://ai-quest-a1-student.b827262.chatgpt.site"
+    "https://ai-quest-a1-student-staging.b827262.chatgpt.site"
   );
   assert.ok(res.headers.get("access-control-allow-methods")?.includes("PUT"));
 });
