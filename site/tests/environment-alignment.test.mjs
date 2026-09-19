@@ -20,7 +20,7 @@ function writeFixture(dir, name, value) {
 function validManifest() {
   return {
     manifest_version: "phase4a.environment-source-of-truth/v1",
-    environment: "staging",
+    environment: "production",
     captured_at: new Date().toISOString(),
     sites: {
       shared_backend: { project_id: "appgprj_backend" },
@@ -31,7 +31,7 @@ function validManifest() {
       project_id: "appgprj_backend",
       version: "appgver_123",
       deployed_git_sha: "f0085202150c67760040644f1db3d6c479dc2074",
-      health_endpoint: "https://isolated-staging.example.test/api/health",
+      health_endpoint: "https://ai-quest-a1-backend.b827262.chatgpt.site/api/health",
       health_status: 200,
       bindings: {
         DB: { type: "d1", resource_id: "d1_opaque_123", readable: true },
@@ -121,7 +121,7 @@ test("FS-1: environment alignment fails closed for a garbage deployed Git SHA", 
 
 test("environment alignment fails closed for non-https or non-200 health status", () => {
   const manifest = validManifest();
-  manifest.worker.health_endpoint = "http://isolated-staging.example.test/api/health";
+  manifest.worker.health_endpoint = "http://ai-quest-a1-backend.b827262.chatgpt.site/api/health";
   manifest.worker.health_status = 500;
   const result = run(manifest, { project_id: "appgprj_backend", d1: "DB", r2: "BOOKS_BUCKET" });
   assert.equal(result.status, "FAIL");
@@ -171,23 +171,62 @@ test("FPT-5: environment alignment fails closed when DB and BOOKS_BUCKET share t
   assert.ok(result.checks.some((check) => check.name === "bindings.resource_ids.distinct" && check.status === "FAIL"));
 });
 
-test("F6 / FPT-6: the superseded production manifest cannot validate the isolated hosting declaration", () => {
-  const truthPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json");
+test("F6: committed staging source of truth validates the isolated hosting declaration", () => {
+  const truthPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.staging.json");
   const hostingPath = path.join(siteDir, ".openai/hosting.json");
   assert.ok(fs.existsSync(truthPath), "environment source-of-truth file must exist");
   assert.ok(fs.existsSync(hostingPath), "hosting config must exist");
   const result = verifyEnvironment({ manifest: truthPath, hosting: hostingPath, maxAgeHours: 24, json: true });
-  assert.equal(result.status, "FAIL");
-  assert.equal(result.config_drift, "YES");
+  assert.equal(result.status, "PASS");
+  assert.equal(result.config_drift, "NO");
+  assert.equal(result.checks.find((check) => check.name === "staging.postdeploy_live")?.actual, "PENDING");
 });
 
-test("F7: CLI subprocess exits 1 on superseded production evidence", (t) => {
+test("F7: CLI subprocess exits 0 on staging predeploy configuration", (t) => {
   const res = spawnSync(process.execPath, [validator, "--json"], { encoding: "utf8" });
   if (res.error?.code === "EPERM") return t.skip("subprocess execution is unavailable in this sandbox");
-  assert.equal(res.status, 1);
+  assert.equal(res.status, 0);
   const parsed = JSON.parse(res.stdout);
-  assert.equal(parsed.status, "FAIL");
-  assert.equal(parsed.config_drift, "YES");
+  assert.equal(parsed.status, "PASS");
+  assert.equal(parsed.config_drift, "NO");
+  assert.equal(parsed.checks.find((check) => check.name === "staging.postdeploy_live")?.actual, "PENDING");
+});
+
+test("staging fails closed when a production binding is introduced", () => {
+  const manifest = {
+    manifest_version: "phase4a.environment-source-of-truth/v1",
+    environment: "staging",
+    captured_at: new Date().toISOString(),
+    sites: { test_site: { project_id: "appgprj_6aaeb13a9930819186a64f6420ff65a4" } },
+    backend_mode: "isolated-fail-closed",
+    postdeploy_live: "PENDING",
+  };
+  const result = run(manifest, { project_id: manifest.sites.test_site.project_id, d1: "DB" });
+  assert.equal(result.status, "FAIL");
+  assert.ok(result.checks.some((check) => check.name === "hosting.d1_binding.absent" && check.status === "FAIL"));
+});
+
+test("staging fails closed when a production project literal is introduced", () => {
+  const manifest = {
+    manifest_version: "phase4a.environment-source-of-truth/v1",
+    environment: "staging",
+    captured_at: new Date().toISOString(),
+    sites: { test_site: { project_id: "appgprj_6aa80235182c8191a876361138ecbc36" } },
+    backend_mode: "isolated-fail-closed",
+    postdeploy_live: "PENDING",
+  };
+  const result = run(manifest, { project_id: manifest.sites.test_site.project_id });
+  assert.equal(result.status, "FAIL");
+  assert.ok(result.checks.some((check) => check.name === "staging.production_project_literals.absent" && check.status === "FAIL"));
+});
+
+test("production source of truth is independently stale and cannot validate staging hosting", () => {
+  const productionPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json");
+  const stagingHosting = path.join(siteDir, ".openai/hosting.json");
+  const result = verifyEnvironment({ manifest: productionPath, hosting: stagingHosting, maxAgeHours: 24, json: true });
+  assert.equal(result.status, "FAIL");
+  assert.equal(result.config_drift, "YES");
+  assert.ok(result.checks.some((check) => check.name === "captured_at" && check.status === "FAIL"));
 });
 
 test("F7: CLI subprocess exits 1 on config drift / mismatch", (t) => {

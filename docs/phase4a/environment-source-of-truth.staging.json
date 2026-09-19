@@ -1,0 +1,18 @@
+{
+  "manifest_version": "phase4a.environment-source-of-truth/v1",
+  "environment": "staging",
+  "captured_at": "2026-09-19T16:42:39.000Z",
+  "capture": {
+    "method": "site/scripts/capture-staging-environment.mjs",
+    "source": "site/.openai/hosting.json",
+    "network_io": false
+  },
+  "sites": {
+    "test_site": {
+      "project_id": "appgprj_6aaeb13a9930819186a64f6420ff65a4",
+      "url": "https://ai-quest-a1-qwen3-test.b827262.chatgpt.site"
+    }
+  },
+  "backend_mode": "isolated-fail-closed",
+  "postdeploy_live": "PENDING"
+}

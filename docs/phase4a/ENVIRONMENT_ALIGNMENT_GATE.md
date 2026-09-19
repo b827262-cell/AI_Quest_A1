@@ -1,9 +1,22 @@
 # Phase 4A environment-alignment gate
 
-`site/scripts/verify-environment-alignment.mjs` is the fail-closed release gate
-for the Shared Backend Sites deployment. It compares the committed target
-declaration at `site/.openai/hosting.json` with a fresh read-only control-plane
-manifest. It does not call a provider API and is safe to run offline.
+`site/scripts/verify-environment-alignment.mjs` is the fail-closed release gate.
+It selects a first-class schema from `environment`: production continues to
+validate the Shared Backend topology, while staging validates the isolated test
+site topology. It does not call a provider API and is safe to run offline.
+
+The default manifest is the staging predeploy capture,
+`docs/phase4a/environment-source-of-truth.staging.json`. Generate it
+reproducibly from the committed declaration (the command writes only stdout):
+
+```bash
+node site/scripts/capture-staging-environment.mjs > /tmp/environment-source-of-truth.staging.json
+```
+
+The current test site is `appgprj_6aaeb13a9930819186a64f6420ff65a4` at
+`https://ai-quest-a1-qwen3-test.b827262.chatgpt.site`. Its live deployment has
+not happened, so `postdeploy_live` is intentionally `PENDING`; a predeploy
+configuration PASS is not a claim of HTTP 200 or live QA.
 
 ## Source-of-truth manifest contract
 
@@ -48,7 +61,7 @@ signed URLs.
 }
 ```
 
-The collector must obtain every value in this manifest in its current
+For a **production** manifest, the collector must obtain every value in its current
 read-only run. Historical reports are not valid substitutes for a required
 field. The `environment` is intentionally restricted to `staging` or
 `production`; this prevents an arbitrary label from being mistaken for a
@@ -63,6 +76,16 @@ Key contract and validation requirements:
 - **Deployed Git SHA (F2 / FS-1)**: `worker.deployed_git_sha` must be at least 40 hexadecimal characters, resolve to a commit in the local repository, and be an ancestor of `HEAD`. This prevents an arbitrary value (for example, `banana`) from being accepted as deployment evidence; any lag against repo branch base is explicitly flagged.
 - **Environment Label Binding (FPT-3)**: `environment` is currently syntax-validated only. It is **not** cryptographically or control-plane bound to a distinct staging/production deployment target, so FPT-3 is not closed. Phase 4B must add a safe, read-only target-identity attestation (or equivalent provider evidence) before the label can be used as proof of environment.
 - **Repo Root Hygiene (F3)**: The legacy `.openai/hosting.json` at repo root is removed; if present, its `project_id` must match `shared_backend`.
+
+## Staging manifest contract
+
+`environment: "staging"` uses a deliberately incompatible schema. It has only
+`sites.test_site`, must exactly match `site/.openai/hosting.json`, and must not
+declare `worker`, production project literals, `DB`, `BOOKS_BUCKET`, or `d1`/`r2` hosting bindings. The gate
+also requires `backend_mode: "isolated-fail-closed"` and
+`postdeploy_live: "PENDING"`. This prevents a production source-of-truth from
+being made to look like a staging deployment and avoids invented student/admin
+project IDs.
 
 ## Run
 
@@ -92,7 +115,8 @@ node --test site/tests/environment-alignment.test.mjs
 ```
 
 The test suite covers:
-- Passing alignment and drift detection
+- Staging predeploy PASS/no-drift and CLI exit 0
+- Independently stale production-manifest negative case
 - Project mismatches and missing/unreadable bindings
 - Freshness threshold violations (FPT-1)
 - Duplicate project IDs across sites (FPT-2)

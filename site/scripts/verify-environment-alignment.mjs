@@ -14,8 +14,14 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const siteDir = path.resolve(scriptDir, "..");
 const repoDir = path.resolve(siteDir, "..");
-const defaultManifest = path.join(repoDir, "docs/phase4a/environment-source-of-truth.json");
+const defaultManifest = path.join(repoDir, "docs/phase4a/environment-source-of-truth.staging.json");
 const defaultHosting = path.join(siteDir, ".openai/hosting.json");
+// These are production deployment identities, never valid staging evidence.
+const productionProjectIds = new Set([
+  "appgprj_6aa80235182c8191a876361138ecbc36",
+  "appgprj_6a843b2ece70819191132bd6e99df7a1",
+  "appgprj_6a843b6432f88191aa4cc090c236f3d3",
+]);
 
 function usage() {
   console.error("Usage: node site/scripts/verify-environment-alignment.mjs [--manifest <path>] [--hosting <path>] [--max-age-hours <hours>] [--json]");
@@ -81,6 +87,68 @@ function captureAgeMs(capturedAt) {
   return Date.now() - parsed;
 }
 
+function containsProductionBinding(value) {
+  if (typeof value === "string") return value === "DB" || value === "BOOKS_BUCKET";
+  if (Array.isArray(value)) return value.some(containsProductionBinding);
+  if (value && typeof value === "object") return Object.values(value).some(containsProductionBinding);
+  return false;
+}
+
+function containsProductionProjectId(value) {
+  if (typeof value === "string") return productionProjectIds.has(value);
+  if (Array.isArray(value)) return value.some(containsProductionProjectId);
+  if (value && typeof value === "object") return Object.values(value).some(containsProductionProjectId);
+  return false;
+}
+
+function verifyProduction(manifest, hosting, check) {
+  const backend = manifest.sites?.shared_backend;
+  const student = manifest.sites?.student;
+  const admin = manifest.sites?.admin;
+  const worker = manifest.worker;
+  check("shared_backend.project_id", hosting.project_id, backend?.project_id, nonEmptyString(backend?.project_id) && hosting.project_id === backend.project_id);
+  check("worker.project_id", worker?.project_id, backend?.project_id, nonEmptyString(worker?.project_id) && worker.project_id === backend?.project_id);
+  check("student.project_id.present", student?.project_id, "non-empty", nonEmptyString(student?.project_id));
+  check("admin.project_id.present", admin?.project_id, "non-empty", nonEmptyString(admin?.project_id));
+  const projectIds = [backend?.project_id, student?.project_id, admin?.project_id].filter(nonEmptyString);
+  check("sites.project_ids.distinct", new Set(projectIds).size, 3, new Set(projectIds).size === 3 && projectIds.length === 3);
+  check("worker.version.present", worker?.version, "non-empty", nonEmptyString(worker?.version));
+  const deployedGitSha = worker?.deployed_git_sha;
+  const deployedCommitExists = fullGitSha(deployedGitSha) && gitCheck(["rev-parse", "--verify", "--quiet", `${deployedGitSha}^{commit}`]);
+  check("worker.deployed_git_sha.provenance", deployedGitSha, "40+ hexadecimal commit that exists in the repository and is an ancestor of HEAD", fullGitSha(deployedGitSha) && deployedCommitExists && gitCheck(["merge-base", "--is-ancestor", deployedGitSha, "HEAD"]));
+  let healthUrl = null;
+  try { healthUrl = new URL(worker?.health_endpoint); } catch { /* checked below */ }
+  check("worker.health_endpoint.origin", healthUrl ? healthUrl.origin : null, "https://ai-quest-a1-backend.b827262.chatgpt.site", healthUrl?.origin === "https://ai-quest-a1-backend.b827262.chatgpt.site");
+  check("worker.health_status", worker?.health_status, 200, worker?.health_status === 200);
+  const db = worker?.bindings?.DB;
+  const bucket = worker?.bindings?.BOOKS_BUCKET;
+  check("hosting.d1_binding", hosting.d1, "DB", hosting.d1 === "DB");
+  check("worker.DB.type", db?.type, "d1", db?.type === "d1");
+  check("worker.DB.resource_id", db?.resource_id, "non-empty", nonEmptyString(db?.resource_id));
+  check("worker.DB.resource_id_not_binding_echo", db?.resource_id, "opaque resource id", db?.resource_id !== "DB" || db?.identity_source === "unavailable");
+  check("worker.DB.readable", db?.readable, true, db?.readable === true);
+  check("hosting.r2_binding", hosting.r2, "BOOKS_BUCKET", hosting.r2 === "BOOKS_BUCKET");
+  check("worker.BOOKS_BUCKET.type", bucket?.type, "r2", bucket?.type === "r2");
+  check("worker.BOOKS_BUCKET.resource_id", bucket?.resource_id, "non-empty", nonEmptyString(bucket?.resource_id));
+  check("worker.BOOKS_BUCKET.resource_id_not_binding_echo", bucket?.resource_id, "opaque resource id", bucket?.resource_id !== "BOOKS_BUCKET" || bucket?.identity_source === "unavailable");
+  check("bindings.resource_ids.distinct", db?.resource_id !== bucket?.resource_id, "different", Boolean(db?.resource_id && bucket?.resource_id && db.resource_id !== bucket.resource_id));
+  check("worker.BOOKS_BUCKET.list_readable", bucket?.list_readable, true, bucket?.list_readable === true);
+  check("worker.BOOKS_BUCKET.get_readable", bucket?.get_readable, true, bucket?.get_readable === true);
+}
+
+function verifyStaging(manifest, hosting, check) {
+  const testSite = manifest.sites?.test_site;
+  check("test_site.project_id", hosting.project_id, testSite?.project_id, nonEmptyString(testSite?.project_id) && hosting.project_id === testSite.project_id);
+  check("test_site.project_id.format", testSite?.project_id, "appgprj_<opaque id>", /^appgprj_[a-z0-9]+$/i.test(testSite?.project_id ?? ""));
+  check("hosting.d1_binding.absent", hosting.d1 ?? null, null, !("d1" in hosting) || hosting.d1 == null);
+  check("hosting.r2_binding.absent", hosting.r2 ?? null, null, !("r2" in hosting) || hosting.r2 == null);
+  check("staging.production_bindings.absent", containsProductionBinding(manifest), false, !containsProductionBinding(manifest));
+  check("staging.production_project_literals.absent", containsProductionProjectId(manifest), false, !containsProductionProjectId(manifest));
+  check("staging.worker.absent", manifest.worker ?? null, null, !("worker" in manifest));
+  check("staging.postdeploy_live", manifest.postdeploy_live, "PENDING", manifest.postdeploy_live === "PENDING");
+  check("staging.backend_mode", manifest.backend_mode, "isolated-fail-closed", manifest.backend_mode === "isolated-fail-closed");
+}
+
 export function verifyEnvironment(options) {
   const errors = [];
   const checks = [];
@@ -101,77 +169,15 @@ export function verifyEnvironment(options) {
     check("manifest_version", manifest.manifest_version, "phase4a.environment-source-of-truth/v1", manifest.manifest_version === "phase4a.environment-source-of-truth/v1");
     check("environment", manifest.environment, "staging|production", manifest.environment === "staging" || manifest.environment === "production");
 
-    const backend = manifest.sites?.shared_backend;
-    const student = manifest.sites?.student;
-    const admin = manifest.sites?.admin;
-    const worker = manifest.worker;
-    check("shared_backend.project_id", hosting.project_id, backend?.project_id, nonEmptyString(backend?.project_id) && hosting.project_id === backend.project_id);
-    check("worker.project_id", worker?.project_id, backend?.project_id, nonEmptyString(worker?.project_id) && worker.project_id === backend?.project_id);
-    check("student.project_id.present", student?.project_id, "non-empty", nonEmptyString(student?.project_id));
-    check("admin.project_id.present", admin?.project_id, "non-empty", nonEmptyString(admin?.project_id));
-
-    // FPT-2: three site project_ids must be pairwise distinct
-    const projectIds = [backend?.project_id, student?.project_id, admin?.project_id].filter(nonEmptyString);
-    const distinctProjectIds = new Set(projectIds);
-    check("sites.project_ids.distinct", distinctProjectIds.size, 3, distinctProjectIds.size === 3 && projectIds.length === 3);
-
-    check("worker.version.present", worker?.version, "non-empty", nonEmptyString(worker?.version));
-    const deployedGitSha = worker?.deployed_git_sha;
-    // F2 / FS-1: a deployment SHA is evidence only when it names a local
-    // commit and that commit belongs to the checked-out repository lineage.
-    // Do not pass a plausible-looking, arbitrary object ID such as `banana`.
-    const deployedCommitExists = fullGitSha(deployedGitSha)
-      && gitCheck(["rev-parse", "--verify", "--quiet", `${deployedGitSha}^{commit}`]);
-    const deployedCommitInLineage = deployedCommitExists
-      && gitCheck(["merge-base", "--is-ancestor", deployedGitSha, "HEAD"]);
-    check(
-      "worker.deployed_git_sha.provenance",
-      deployedGitSha,
-      "40+ hexadecimal commit that exists in the repository and is an ancestor of HEAD",
-      fullGitSha(deployedGitSha) && deployedCommitExists && deployedCommitInLineage,
-    );
-
-    // FPT-4: health endpoint origin anchored to the declared isolated test endpoint.
-    let healthUrl = null;
-    try {
-      healthUrl = new URL(worker?.health_endpoint);
-    } catch {
-      healthUrl = null;
-    }
-    check("worker.health_endpoint.origin", healthUrl ? healthUrl.origin : null, "https://isolated-staging.example.test", healthUrl?.origin === "https://isolated-staging.example.test");
-    check("worker.health_status", worker?.health_status, 200, worker?.health_status === 200);
-
-    const db = worker?.bindings?.DB;
-    const bucket = worker?.bindings?.BOOKS_BUCKET;
-    check("hosting.d1_binding", hosting.d1, "DB", hosting.d1 === "DB");
-    check("worker.DB.type", db?.type, "d1", db?.type === "d1");
-    check("worker.DB.resource_id", db?.resource_id, "non-empty", nonEmptyString(db?.resource_id));
-
-    // F1: resource_id must not merely echo the binding name, unless identity_source says unavailable
-    const dbResourceEcho = db?.resource_id === "DB";
-    check("worker.DB.resource_id_not_binding_echo", db?.resource_id, "opaque resource id", !dbResourceEcho || db?.identity_source === "unavailable");
-
-    check("worker.DB.readable", db?.readable, true, db?.readable === true);
-    check("hosting.r2_binding", hosting.r2, "BOOKS_BUCKET", hosting.r2 === "BOOKS_BUCKET");
-    check("worker.BOOKS_BUCKET.type", bucket?.type, "r2", bucket?.type === "r2");
-    check("worker.BOOKS_BUCKET.resource_id", bucket?.resource_id, "non-empty", nonEmptyString(bucket?.resource_id));
-
-    // F1: resource_id must not merely echo the binding name, unless identity_source says unavailable
-    const bucketResourceEcho = bucket?.resource_id === "BOOKS_BUCKET";
-    check("worker.BOOKS_BUCKET.resource_id_not_binding_echo", bucket?.resource_id, "opaque resource id", !bucketResourceEcho || bucket?.identity_source === "unavailable");
-
-    // FPT-5: DB and BOOKS_BUCKET resource_ids must differ
-    check("bindings.resource_ids.distinct", db?.resource_id !== bucket?.resource_id, "different", Boolean(db?.resource_id && bucket?.resource_id && db.resource_id !== bucket.resource_id));
-
-    check("worker.BOOKS_BUCKET.list_readable", bucket?.list_readable, true, bucket?.list_readable === true);
-    check("worker.BOOKS_BUCKET.get_readable", bucket?.get_readable, true, bucket?.get_readable === true);
+    if (manifest.environment === "production") verifyProduction(manifest, hosting, check);
+    if (manifest.environment === "staging") verifyStaging(manifest, hosting, check);
 
     // F3 safeguard: check repo-root hosting if present
     const rootHostingPath = path.join(repoDir, ".openai/hosting.json");
     if (fs.existsSync(rootHostingPath)) {
       const rootHosting = readJson(rootHostingPath, "repo root hosting config", errors);
       if (rootHosting) {
-        check("repo_root.hosting.project_id", rootHosting.project_id, backend?.project_id, rootHosting.project_id === backend?.project_id);
+        check("repo_root.hosting.project_id", rootHosting.project_id, manifest.sites?.shared_backend?.project_id, manifest.environment === "production" && rootHosting.project_id === manifest.sites?.shared_backend?.project_id);
       }
     }
   }
