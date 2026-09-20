@@ -1,19 +1,29 @@
-import { getStagingBackendOrigin } from "../backend-client";
+import { isBackendSite } from "../backend-client";
 
-export async function GET() {
-  const backendTarget = getStagingBackendOrigin();
+type RuntimeEnv = Record<string, unknown> | undefined;
+
+function runtimeBinding(name: string): unknown {
+  const g = globalThis as unknown as {
+    [key: string]: unknown;
+    __env__?: RuntimeEnv;
+    env?: RuntimeEnv;
+  };
+  return g?.[name] ?? g?.__env__?.[name] ?? g?.env?.[name] ?? null;
+}
+
+export async function GET(request: Request) {
+  const isBackend = isBackendSite(request);
+  const d1Bound = Boolean(runtimeBinding("DB"));
+  const r2Bound = Boolean(runtimeBinding("BOOKS_BUCKET"));
   return Response.json({
-    status: backendTarget ? "staging" : "isolated",
+    status: "ok",
     edge: "cloudflare-worker",
-    d1: "disabled",
-    r2: "disabled",
-    storage: "disabled",
-    role: "staging-isolated",
-    backendTarget,
-    sharedD1Project: null,
-    sharedR2Project: null,
-    sharedR2Bucket: null,
-    isolation: backendTarget ? "staging-only" : "disabled",
+    d1: d1Bound ? "bound" : "unbound",
+    r2: r2Bound ? "bound" : "unbound",
+    storage: r2Bound ? "r2" : "none",
+    phase: 2,
+    role: isBackend ? "backend" : "standalone",
+    backendTarget: "disabled-or-staging-only",
     time: new Date().toISOString(),
   });
 }

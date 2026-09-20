@@ -27,17 +27,16 @@ async function requestWorker(pathname, options = {}) {
   );
 }
 
-test("Isolation: GET /api/health reports disabled data-plane bindings and no backend target", async () => {
+test("Phase 3C: GET /api/health exposes staging-only backend state without D1 binding", async () => {
   const res = await requestWorker("/api/health");
   assert.equal(res.status, 200);
   const data = await res.json();
-  assert.equal(data.status, "isolated");
+  assert.equal(data.status, "ok");
   assert.equal(data.edge, "cloudflare-worker");
-  assert.equal(data.d1, "disabled");
-  assert.equal(data.r2, "disabled");
-  assert.equal(data.backendTarget, null);
-  assert.equal(data.sharedD1Project, null);
-  assert.equal(data.isolation, "disabled");
+  assert.equal(data.d1, "unbound");
+  assert.equal(data.phase, 2);
+  assert.equal(data.role, "standalone");
+  assert.equal(data.backendTarget, "disabled-or-staging-only");
 });
 
 test("Isolation: an unconfigured staging backend never makes an outbound proxy request", async () => {
