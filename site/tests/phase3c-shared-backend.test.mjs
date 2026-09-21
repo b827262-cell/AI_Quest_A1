@@ -27,16 +27,16 @@ async function requestWorker(pathname, options = {}) {
   );
 }
 
-test("Phase 3C: GET /api/health exposes unified shared backend target and D1 project", async () => {
+test("Phase 3C: GET /api/health exposes staging-only backend state without D1 binding", async () => {
   const res = await requestWorker("/api/health");
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.status, "ok");
   assert.equal(data.edge, "cloudflare-worker");
-  assert.equal(data.d1, "bound");
+  assert.equal(data.d1, "unbound");
   assert.equal(data.phase, 2);
-  assert.equal(data.backendTarget, "https://ai-quest-a1-backend.b827262.chatgpt.site");
-  assert.equal(data.sharedD1Project, "appgprj_6aa80235182c8191a876361138ecbc36");
+  assert.equal(data.role, "standalone");
+  assert.equal(data.backendTarget, "disabled-or-staging-only");
 });
 
 test("Phase 3C: OPTIONS preflight on /api/student/progress returns 204 with allowed CORS headers", async () => {

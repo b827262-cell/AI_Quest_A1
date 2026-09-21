@@ -20,10 +20,13 @@ function writeFixture(dir, name, value) {
 function validManifest() {
   return {
     manifest_version: "phase4a.environment-source-of-truth/v1",
-    environment: "staging",
+    environment: "production",
     captured_at: new Date().toISOString(),
     sites: {
-      shared_backend: { project_id: "appgprj_backend" },
+      shared_backend: {
+        project_id: "appgprj_backend",
+        url: "https://ai-quest-a1-backend.b827262.chatgpt.site",
+      },
       student: { project_id: "appgprj_student" },
       admin: { project_id: "appgprj_admin" },
     },
@@ -171,8 +174,8 @@ test("FPT-5: environment alignment fails closed when DB and BOOKS_BUCKET share t
   assert.ok(result.checks.some((check) => check.name === "bindings.resource_ids.distinct" && check.status === "FAIL"));
 });
 
-test("F6 / FPT-6: environment alignment verifies committed repo hosting against source-of-truth file unconditionally", () => {
-  const truthPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json");
+test("F6 / FPT-6: environment alignment verifies committed repo hosting against the fresh staging source-of-truth", () => {
+  const truthPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.staging.json");
   const hostingPath = path.join(siteDir, ".openai/hosting.json");
   assert.ok(fs.existsSync(truthPath), "environment source-of-truth file must exist");
   assert.ok(fs.existsSync(hostingPath), "hosting config must exist");
@@ -180,6 +183,8 @@ test("F6 / FPT-6: environment alignment verifies committed repo hosting against 
   assert.equal(result.status, "PASS");
   assert.equal(result.config_drift, "NO");
   assert.equal(result.errors.length, 0);
+  assert.equal(result.predeploy_config, "PREDEPLOY_CONFIG_PASS");
+  assert.equal(result.postdeploy_live, "POSTDEPLOY_LIVE_PENDING");
 });
 
 test("F7: CLI subprocess exits 0 on real repo files", (t) => {
@@ -189,6 +194,16 @@ test("F7: CLI subprocess exits 0 on real repo files", (t) => {
   const parsed = JSON.parse(res.stdout);
   assert.equal(parsed.status, "PASS");
   assert.equal(parsed.config_drift, "NO");
+  assert.equal(parsed.predeploy_config, "PREDEPLOY_CONFIG_PASS");
+  assert.equal(parsed.postdeploy_live, "POSTDEPLOY_LIVE_PENDING");
+});
+
+test("superseded production source-of-truth fails when used as the staging validator input", () => {
+  const productionTruthPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json");
+  const hostingPath = path.join(siteDir, ".openai/hosting.json");
+  const result = verifyEnvironment({ manifest: productionTruthPath, hosting: hostingPath, maxAgeHours: 24, json: true });
+  assert.equal(result.status, "FAIL");
+  assert.equal(result.config_drift, "YES");
 });
 
 test("F7: CLI subprocess exits 1 on config drift / mismatch", (t) => {

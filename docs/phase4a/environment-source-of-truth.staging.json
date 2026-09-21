@@ -1,0 +1,20 @@
+{
+  "manifest_version": "phase4a.environment-source-of-truth/v1",
+  "environment": "staging",
+  "captured_at": "2026-09-21T04:33:08.000Z",
+  "sites": {
+    "shared_backend": {
+      "project_id": "appgprj_6aaeb13a9930819186a64f6420ff65a4",
+      "url": "https://ai-quest-a1-qwen3-test.b827262.chatgpt.site"
+    }
+  },
+  "worker": {
+    "project_id": "appgprj_6aaeb13a9930819186a64f6420ff65a4",
+    "deployment_state": "predeploy",
+    "version": "not_configured",
+    "health_endpoint": "https://ai-quest-a1-qwen3-test.b827262.chatgpt.site/api/health",
+    "health_status": "not_configured",
+    "bindings": {}
+  },
+  "recapture_note": "Re-attested 2026-09-21: hosting project_id matches appgprj_6aaeb13a9930819186a64f6420ff65a4; live health endpoint reachable (HTTP 200) reporting d1/r2 unbound, role standalone; frozen D-06 candidate remains predeploy (no new staging deploy)."
+}

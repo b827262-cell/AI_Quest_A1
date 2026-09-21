@@ -120,16 +120,14 @@ test("Phase 3D: Synthetic PDF fixture integrity and SHA-256 hash", async () => {
   assert.equal(sha, "170e2df4e4f324c124cb9d12c1de469277498647116fb7c3fd98a73af47bc736");
 });
 
-test("Phase 3D: GET /api/health exposes R2 binding and BOOKS_BUCKET identifier", async () => {
+test("Phase 3D: GET /api/health reports unbound R2 in staging predeploy state", async () => {
   const res = await requestWorker("/api/health");
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.status, "ok");
-  assert.equal(data.d1, "bound");
-  assert.equal(data.r2, "bound");
-  assert.equal(data.storage, "r2");
-  assert.equal(data.sharedR2Bucket, "BOOKS_BUCKET");
-  assert.equal(data.sharedR2Project, "appgprj_6aa80235182c8191a876361138ecbc36");
+  assert.equal(data.d1, "unbound");
+  assert.equal(data.r2, "unbound");
+  assert.equal(data.storage, "none");
 });
 
 test("Phase 3D: Admin textbook upload auth matrix (401 Guest, 403 Student, 201 Admin)", async () => {

@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const siteDir = path.resolve(scriptDir, "..");
 const repoDir = path.resolve(siteDir, "..");
-const defaultManifest = path.join(repoDir, "docs/phase4a/environment-source-of-truth.json");
+// The default is deliberately staging-only. The production record remains a
+// provenance artifact and must be named explicitly for a negative comparison.
+const defaultManifest = path.join(repoDir, "docs/phase4a/environment-source-of-truth.staging.json");
 const defaultHosting = path.join(siteDir, ".openai/hosting.json");
 
 function usage() {
@@ -102,69 +104,89 @@ export function verifyEnvironment(options) {
     check("environment", manifest.environment, "staging|production", manifest.environment === "staging" || manifest.environment === "production");
 
     const backend = manifest.sites?.shared_backend;
-    const student = manifest.sites?.student;
-    const admin = manifest.sites?.admin;
     const worker = manifest.worker;
+    const isStagingPredeploy = manifest.environment === "staging" && worker?.deployment_state === "predeploy";
     check("shared_backend.project_id", hosting.project_id, backend?.project_id, nonEmptyString(backend?.project_id) && hosting.project_id === backend.project_id);
     check("worker.project_id", worker?.project_id, backend?.project_id, nonEmptyString(worker?.project_id) && worker.project_id === backend?.project_id);
-    check("student.project_id.present", student?.project_id, "non-empty", nonEmptyString(student?.project_id));
-    check("admin.project_id.present", admin?.project_id, "non-empty", nonEmptyString(admin?.project_id));
+    if (!isStagingPredeploy) {
+      const student = manifest.sites?.student;
+      const admin = manifest.sites?.admin;
+      check("student.project_id.present", student?.project_id, "non-empty", nonEmptyString(student?.project_id));
+      check("admin.project_id.present", admin?.project_id, "non-empty", nonEmptyString(admin?.project_id));
 
-    // FPT-2: three site project_ids must be pairwise distinct
-    const projectIds = [backend?.project_id, student?.project_id, admin?.project_id].filter(nonEmptyString);
-    const distinctProjectIds = new Set(projectIds);
-    check("sites.project_ids.distinct", distinctProjectIds.size, 3, distinctProjectIds.size === 3 && projectIds.length === 3);
+      // FPT-2: three site project_ids must be pairwise distinct
+      const projectIds = [backend?.project_id, student?.project_id, admin?.project_id].filter(nonEmptyString);
+      const distinctProjectIds = new Set(projectIds);
+      check("sites.project_ids.distinct", distinctProjectIds.size, 3, distinctProjectIds.size === 3 && projectIds.length === 3);
 
-    check("worker.version.present", worker?.version, "non-empty", nonEmptyString(worker?.version));
-    const deployedGitSha = worker?.deployed_git_sha;
-    // F2 / FS-1: a deployment SHA is evidence only when it names a local
-    // commit and that commit belongs to the checked-out repository lineage.
-    // Do not pass a plausible-looking, arbitrary object ID such as `banana`.
-    const deployedCommitExists = fullGitSha(deployedGitSha)
-      && gitCheck(["rev-parse", "--verify", "--quiet", `${deployedGitSha}^{commit}`]);
-    const deployedCommitInLineage = deployedCommitExists
-      && gitCheck(["merge-base", "--is-ancestor", deployedGitSha, "HEAD"]);
-    check(
-      "worker.deployed_git_sha.provenance",
-      deployedGitSha,
-      "40+ hexadecimal commit that exists in the repository and is an ancestor of HEAD",
-      fullGitSha(deployedGitSha) && deployedCommitExists && deployedCommitInLineage,
-    );
+      check("worker.version.present", worker?.version, "non-empty", nonEmptyString(worker?.version));
+      const deployedGitSha = worker?.deployed_git_sha;
+      // F2 / FS-1: a deployment SHA is evidence only when it names a local
+      // commit and that commit belongs to the checked-out repository lineage.
+      // Do not pass a plausible-looking, arbitrary object ID such as `banana`.
+      const deployedCommitExists = fullGitSha(deployedGitSha)
+        && gitCheck(["rev-parse", "--verify", "--quiet", `${deployedGitSha}^{commit}`]);
+      const deployedCommitInLineage = deployedCommitExists
+        && gitCheck(["merge-base", "--is-ancestor", deployedGitSha, "HEAD"]);
+      check(
+        "worker.deployed_git_sha.provenance",
+        deployedGitSha,
+        "40+ hexadecimal commit that exists in the repository and is an ancestor of HEAD",
+        fullGitSha(deployedGitSha) && deployedCommitExists && deployedCommitInLineage,
+      );
+    } else {
+      check("worker.deployment_state", worker?.deployment_state, "predeploy", worker?.deployment_state === "predeploy");
+      check("worker.version", worker?.version, "not_configured", worker?.version === "not_configured");
+      check("worker.deployed_git_sha", worker?.deployed_git_sha, null, worker?.deployed_git_sha == null);
+    }
 
-    // FPT-4: health endpoint origin anchored to SHARED_BACKEND_ORIGIN
+    // FPT-4: derive the expected origin from the declared shared-backend URL.
+    let backendUrl = null;
     let healthUrl = null;
     try {
+      backendUrl = new URL(backend?.url);
       healthUrl = new URL(worker?.health_endpoint);
     } catch {
+      backendUrl = null;
       healthUrl = null;
     }
-    check("worker.health_endpoint.origin", healthUrl ? healthUrl.origin : null, "https://ai-quest-a1-backend.b827262.chatgpt.site", healthUrl?.origin === "https://ai-quest-a1-backend.b827262.chatgpt.site");
-    check("worker.health_status", worker?.health_status, 200, worker?.health_status === 200);
+    check("worker.health_endpoint.origin", healthUrl ? healthUrl.origin : null, backendUrl ? backendUrl.origin : null, Boolean(backendUrl && healthUrl && healthUrl.origin === backendUrl.origin));
+    check("worker.health_endpoint.path", healthUrl ? healthUrl.pathname : null, "/api/health", healthUrl?.pathname === "/api/health");
+    check("worker.health_status", worker?.health_status, isStagingPredeploy ? "not_configured" : 200, isStagingPredeploy ? worker?.health_status === "not_configured" : worker?.health_status === 200);
 
     const db = worker?.bindings?.DB;
     const bucket = worker?.bindings?.BOOKS_BUCKET;
-    check("hosting.d1_binding", hosting.d1, "DB", hosting.d1 === "DB");
-    check("worker.DB.type", db?.type, "d1", db?.type === "d1");
-    check("worker.DB.resource_id", db?.resource_id, "non-empty", nonEmptyString(db?.resource_id));
+    if (isStagingPredeploy) {
+      // Staging must never inherit production D1/R2 bindings. Absence is the
+      // required state; this is a configuration assertion, not a live probe.
+      check("hosting.d1_binding", hosting.d1, "unbound", hosting.d1 == null);
+      check("hosting.r2_binding", hosting.r2, "unbound", hosting.r2 == null);
+      check("worker.DB.binding", db, "unbound", db == null);
+      check("worker.BOOKS_BUCKET.binding", bucket, "unbound", bucket == null);
+    } else {
+      check("hosting.d1_binding", hosting.d1, "DB", hosting.d1 === "DB");
+      check("worker.DB.type", db?.type, "d1", db?.type === "d1");
+      check("worker.DB.resource_id", db?.resource_id, "non-empty", nonEmptyString(db?.resource_id));
 
     // F1: resource_id must not merely echo the binding name, unless identity_source says unavailable
-    const dbResourceEcho = db?.resource_id === "DB";
-    check("worker.DB.resource_id_not_binding_echo", db?.resource_id, "opaque resource id", !dbResourceEcho || db?.identity_source === "unavailable");
+      const dbResourceEcho = db?.resource_id === "DB";
+      check("worker.DB.resource_id_not_binding_echo", db?.resource_id, "opaque resource id", !dbResourceEcho || db?.identity_source === "unavailable");
 
-    check("worker.DB.readable", db?.readable, true, db?.readable === true);
-    check("hosting.r2_binding", hosting.r2, "BOOKS_BUCKET", hosting.r2 === "BOOKS_BUCKET");
-    check("worker.BOOKS_BUCKET.type", bucket?.type, "r2", bucket?.type === "r2");
-    check("worker.BOOKS_BUCKET.resource_id", bucket?.resource_id, "non-empty", nonEmptyString(bucket?.resource_id));
+      check("worker.DB.readable", db?.readable, true, db?.readable === true);
+      check("hosting.r2_binding", hosting.r2, "BOOKS_BUCKET", hosting.r2 === "BOOKS_BUCKET");
+      check("worker.BOOKS_BUCKET.type", bucket?.type, "r2", bucket?.type === "r2");
+      check("worker.BOOKS_BUCKET.resource_id", bucket?.resource_id, "non-empty", nonEmptyString(bucket?.resource_id));
 
     // F1: resource_id must not merely echo the binding name, unless identity_source says unavailable
-    const bucketResourceEcho = bucket?.resource_id === "BOOKS_BUCKET";
-    check("worker.BOOKS_BUCKET.resource_id_not_binding_echo", bucket?.resource_id, "opaque resource id", !bucketResourceEcho || bucket?.identity_source === "unavailable");
+      const bucketResourceEcho = bucket?.resource_id === "BOOKS_BUCKET";
+      check("worker.BOOKS_BUCKET.resource_id_not_binding_echo", bucket?.resource_id, "opaque resource id", !bucketResourceEcho || bucket?.identity_source === "unavailable");
 
     // FPT-5: DB and BOOKS_BUCKET resource_ids must differ
-    check("bindings.resource_ids.distinct", db?.resource_id !== bucket?.resource_id, "different", Boolean(db?.resource_id && bucket?.resource_id && db.resource_id !== bucket.resource_id));
+      check("bindings.resource_ids.distinct", db?.resource_id !== bucket?.resource_id, "different", Boolean(db?.resource_id && bucket?.resource_id && db.resource_id !== bucket.resource_id));
 
-    check("worker.BOOKS_BUCKET.list_readable", bucket?.list_readable, true, bucket?.list_readable === true);
-    check("worker.BOOKS_BUCKET.get_readable", bucket?.get_readable, true, bucket?.get_readable === true);
+      check("worker.BOOKS_BUCKET.list_readable", bucket?.list_readable, true, bucket?.list_readable === true);
+      check("worker.BOOKS_BUCKET.get_readable", bucket?.get_readable, true, bucket?.get_readable === true);
+    }
 
     // F3 safeguard: check repo-root hosting if present
     const rootHostingPath = path.join(repoDir, ".openai/hosting.json");
@@ -184,6 +206,8 @@ export function verifyEnvironment(options) {
     manifest: options.manifest,
     hosting: options.hosting,
     max_age_hours: options.maxAgeHours,
+    predeploy_config: manifest?.environment === "staging" && manifest?.worker?.deployment_state === "predeploy" ? "PREDEPLOY_CONFIG_PASS" : null,
+    postdeploy_live: manifest?.environment === "staging" && manifest?.worker?.deployment_state === "predeploy" ? "POSTDEPLOY_LIVE_PENDING" : null,
     checks,
     errors,
   };
@@ -209,6 +233,8 @@ function main() {
     console.log(`MANIFEST=${result.manifest}`);
     console.log(`HOSTING=${result.hosting}`);
     console.log(`MAX_AGE_HOURS=${result.max_age_hours}`);
+    if (result.predeploy_config) console.log(`PREDEPLOY_CONFIG=${result.predeploy_config}`);
+    if (result.postdeploy_live) console.log(`POSTDEPLOY_LIVE=${result.postdeploy_live}`);
     for (const item of result.checks) console.log(`CHECK_${item.name}=${item.status}`);
     for (const error of result.errors) console.error(`ERROR=${error}`);
   }
