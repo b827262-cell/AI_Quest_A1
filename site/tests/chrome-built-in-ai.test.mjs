@@ -344,6 +344,19 @@ test("Gate 5: WebGPU local inference renders streamed answer", async () => {
   assert.equal(mockWin.TRANSFORMERS_CONFIG.device, "webgpu");
 });
 
+test("Gate B: Chrome output normalizes Simplified text without changing name characters", async () => {
+  const chunks = [];
+  const env = {
+    LanguageModel: {
+      async availability() { return "available"; },
+      async create() { return { promptStreaming: () => stream(["经营策略是企业的长期规划。", " 于右任"]) }; },
+    },
+  };
+  const answer = await askWithChromeBuiltInAi("測試", (chunk) => chunks.push(chunk), { env });
+  assert.equal(answer, "經營策略是企業的長期規劃。 于右任");
+  assert.deepEqual(chunks, ["經營策略是企業的長期規劃。", " 于右任"]);
+});
+
 test("Gate 6: WebGPU unavailable falls back to WASM, or truthful unsupported without false-PASS", async () => {
   // Scenario A: WebGPU unavailable, WASM available -> evaluates WASM
   const mockWinWasm = mockTargetWindow();

@@ -12,6 +12,8 @@
 //
 // Enforced by tests/chrome-built-in-ai.test.mjs source and bundle gates.
 
+import { postprocessTraditionalChinese } from "./auto-fallback";
+
 export type AutoAiStatus =
   | "native ready"
   | "native model download"
@@ -316,7 +318,15 @@ async function streamAnswer(
   // so the same handoff is safe on both session kinds.
   const options = signal ? { signal } : undefined;
   const emit = (chunk: string) => {
-    const safe = guard ? guard.feed(chunk) : chunk;
+    // Normalise learner-visible output before it reaches the UI. The final
+    // validator repeats this deterministic operation as a defence in depth.
+    // `postprocessTraditionalChinese` trims final answers, but streamed chunks
+    // must retain their boundary whitespace ("WebGPU " + "運算結果").
+    const leadingWhitespace = chunk.match(/^\s*/)?.[0] ?? "";
+    const trailingWhitespace = chunk.match(/\s*$/)?.[0] ?? "";
+    const body = chunk.slice(leadingWhitespace.length, chunk.length - trailingWhitespace.length);
+    const normalized = body ? `${leadingWhitespace}${postprocessTraditionalChinese(body)}${trailingWhitespace}` : chunk;
+    const safe = guard ? guard.feed(normalized) : normalized;
     if (safe) onChunk(safe);
   };
   const thinkingGuard = createThinkingGuard(emit);
@@ -331,7 +341,7 @@ async function streamAnswer(
         if (guard?.stopped) {
           // Repetition loop caught: stop consuming and report the truncated
           // answer. The caller's finally still destroys the session.
-          return stripThinkingTags(guard.text);
+          return postprocessTraditionalChinese(stripThinkingTags(guard.text));
         }
       }
     } catch (error) {
@@ -342,21 +352,21 @@ async function streamAnswer(
     if (guard) {
       const tail = guard.finish();
       if (tail) onChunk(tail);
-      return stripThinkingTags(guard.text);
+      return postprocessTraditionalChinese(stripThinkingTags(guard.text));
     }
-    return stripThinkingTags(answer);
+    return postprocessTraditionalChinese(stripThinkingTags(answer));
   }
   if (!session.prompt) {
     throw new ChromeAiError("此瀏覽器/裝置目前不支援本機 AI 回答。");
   }
   const answer = await session.prompt(prompt, options);
   if (signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
-  const cleanAnswer = stripThinkingTags(answer);
+    const cleanAnswer = postprocessTraditionalChinese(stripThinkingTags(answer));
   if (guard) {
     emit(cleanAnswer);
     const tail = guard.finish();
     if (tail) onChunk(tail);
-    return stripThinkingTags(guard.text);
+    return postprocessTraditionalChinese(stripThinkingTags(guard.text));
   }
   onChunk(cleanAnswer);
   return cleanAnswer;

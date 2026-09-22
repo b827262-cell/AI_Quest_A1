@@ -1,7 +1,7 @@
 {
   "manifest_version": "phase4a.environment-source-of-truth/v1",
   "environment": "staging",
-  "captured_at": "2026-09-21T04:33:08.000Z",
+  "captured_at": "2026-09-22T07:16:40.000Z",
   "sites": {
     "shared_backend": {
       "project_id": "appgprj_6aaeb13a9930819186a64f6420ff65a4",
@@ -16,5 +16,5 @@
     "health_status": "not_configured",
     "bindings": {}
   },
-  "recapture_note": "Re-attested 2026-09-21: hosting project_id matches appgprj_6aaeb13a9930819186a64f6420ff65a4; live health endpoint reachable (HTTP 200) reporting d1/r2 unbound, role standalone; frozen D-06 candidate remains predeploy (no new staging deploy)."
+  "recapture_note": "Re-attested 2026-09-22T07:16:40Z (Hermes-E500, live curl): /api/health HTTP 200 {status:ok, edge:cloudflare-worker, d1:unbound, r2:unbound, storage:none, phase:2, role:standalone, backendTarget:disabled-or-staging-only}; hosting.json project_id matches appgprj_6aaeb13a9930819186a64f6420ff65a4; no new staging deploy performed (candidate remains predeploy)."
 }
