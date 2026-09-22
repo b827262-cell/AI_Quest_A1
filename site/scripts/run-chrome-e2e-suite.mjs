@@ -372,8 +372,34 @@ async function runChromeE2e() {
         if (t && t.url.startsWith("https://www.google.com/")) navUrl = t.url;
       }
       if (!navUrl) {
-        const finalState = await evalIn(call, `({ error: document.querySelector(".v2-auto-status")?.innerText, url: location.href })`).catch(() => ({ url: "page navigated (context gone)" }));
-        throw new Error(`Case 3: no Google navigation observed. final=${JSON.stringify(finalState)}`);
+        // Consent-gated contract: when the submit gesture's user activation has
+        // expired (the fault fires long after the click), the app must NOT
+        // auto-jump — it renders one explicit backup link instead. Verify the
+        // link's canonical params, then exercise the handoff with a REAL
+        // trusted click (valid user gesture) and observe the navigation CDP-side.
+        const linkCheck = await evalIn(call, `(() => {
+          const a = Array.from(document.querySelectorAll("a.v2-gesture-button")).find((x) => /google\\.com\\/search/.test(x.href));
+          return a ? { href: a.href } : null;
+        })()`).catch(() => null);
+        if (linkCheck && /請點擊下方連結|備援連結/.test(outcome?.error ?? "")) {
+          const lu = new URL(linkCheck.href);
+          assert.equal(lu.origin + lu.pathname, "https://www.google.com/search");
+          assert.equal(lu.searchParams.get("udm"), "50");
+          assert.equal(lu.searchParams.get("aep"), "11");
+          assert.equal(lu.searchParams.get("hl"), "zh-TW");
+          assert.ok(lu.searchParams.get("q"), "handoff URL must carry the original question");
+          await trustedClick(call, "a.v2-gesture-button[href*='google.com/search']");
+          for (let i = 0; i < 20 && !navUrl; i += 1) {
+            await sleep(1000);
+            const targets = await (await fetch(`${CDP}/json/list`)).json();
+            const t = tabId ? targets.find((x) => x.id === tabId) : null;
+            if (t && t.url.startsWith("https://www.google.com/")) navUrl = t.url;
+          }
+          if (!navUrl) throw new Error(`Case 3: backup link clicked but no Google navigation observed. href=${linkCheck.href}`);
+        } else {
+          const finalState = await evalIn(call, `({ error: document.querySelector(".v2-auto-status")?.innerText, url: location.href })`).catch(() => ({ url: "page navigated (context gone)" }));
+          throw new Error(`Case 3: no Google navigation observed. final=${JSON.stringify(finalState)}`);
+        }
       }
       // Google may immediately redirect /search to /sorry (CAPTCHA). Per owner
       // ruling, /sorry proves the navigation succeeded — never that Google

@@ -861,3 +861,42 @@ test("Gate 20: build output single file size is bounded under 25MB Sites limit",
   assert.match(ORT_WASM_URL, /https:\/\/cdn\.jsdelivr\.net\/npm\/onnxruntime-web@/);
   assert.match(ORT_WASM_URL, /ort-wasm-simd-threaded\.asyncify\.wasm/);
 });
+
+test("COLD_START: local download progress reports received/total bytes to onStatus", async () => {
+  const seen = [];
+  const TOTAL = 617687575;
+  const HALF = 308843787;
+  const mockWin = mockTargetWindow();
+  const env = {
+    window: mockWin,
+    navigator: { gpu: { requestAdapter: async () => f16Adapter() } },
+    WebAssembly: { instantiate: async () => ({}) },
+  };
+
+  const answer = await askWithChromeBuiltInAi("十三加五等於多少？", () => {}, {
+    env,
+    loadPolyfill: async () => {
+      mockWin.LanguageModel = {
+        __isPolyfill: true,
+        async availability() { return "available"; },
+        async create(options) {
+          if (options?.monitor) {
+            const target = new EventTarget();
+            options.monitor(target);
+            target.dispatchEvent(Object.assign(new Event("downloadprogress"), { loaded: HALF, total: TOTAL }));
+          }
+          return { promptStreaming: () => stream(["13"]) };
+        },
+      };
+    },
+    onStatus: (st, pr, bytes) => seen.push({ st, pr, bytes }),
+  });
+
+  assert.equal(answer, "13");
+  const byteEvents = seen.filter((s) => s.st === "local model download" && s.bytes);
+  assert.ok(byteEvents.length >= 1, "local download must report bytes");
+  assert.equal(byteEvents[0].bytes.received, HALF);
+  assert.equal(byteEvents[0].bytes.total, TOTAL);
+  assert.equal(byteEvents[0].pr, HALF / TOTAL);
+  assert.ok(seen.some((s) => s.st === "local model ready"), "ready status must precede generation");
+});

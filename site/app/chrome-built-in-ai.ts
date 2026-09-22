@@ -24,7 +24,11 @@ export type AutoAiStatus =
   | "local model ready"
   | "unsupported after fallback";
 
-export type StatusCallback = (status: AutoAiStatus, progress?: number | null) => void;
+export type StatusCallback = (
+  status: AutoAiStatus,
+  progress?: number | null,
+  bytes?: { received: number; total: number } | null,
+) => void;
 
 /**
  * Local-only failure evidence for mobile debugging. This deliberately excludes
@@ -744,7 +748,7 @@ export async function askWithChromeBuiltInAi(
       const loaded = Number(pe.loaded) || 0;
       const total = Number(pe.total) || 1;
       const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
-      options.onStatus?.("local model download", progress);
+      options.onStatus?.("local model download", progress, { received: loaded, total });
       reportLocalFallbackDiagnostic(options, {
         stage: "model-download-progress",
         modelId: chosenModelId,
@@ -875,9 +879,9 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
       }
       // Internal status watcher: the download/generation window switch must not
       // depend on the caller supplying an onStatus callback.
-      const internalStatus: StatusCallback = (status, progress) => {
+      const internalStatus: StatusCallback = (status, progress, bytes) => {
         if (!DOWNLOAD_PHASE_STATUSES.has(status)) armGenerationWindow();
-        onStatus?.(status, progress);
+        onStatus?.(status, progress, bytes);
       };
       try {
         return await askWithChromeBuiltInAi(question, onChunk, {

@@ -264,3 +264,38 @@ test("Gate B invariant: normalizeToHant covers the entire SIMPLIFIED_ONLY rewrit
   }
   assert.deepEqual(uncovered, []);
 });
+
+test("COLD_START: createAutoSubmitter forwards download bytes to the caller's onStatus", async () => {
+  const TOTAL = 617687575;
+  const HALF = 308843787;
+  const env = {
+    WebAssembly: { instantiate: () => ({}) },
+    window: {
+      LanguageModel: {
+        __isPolyfill: true,
+        async availability() { return "available"; },
+        async create(options) {
+          if (options?.monitor) {
+            const target = new EventTarget();
+            options.monitor(target);
+            target.dispatchEvent(Object.assign(new Event("downloadprogress"), { loaded: HALF, total: TOTAL }));
+          }
+          return { promptStreaming: () => (async function* () { yield "13"; })() };
+        },
+      },
+    },
+  };
+  const submitter = createAutoSubmitter(env, async () => {});
+  const seen = [];
+  const answer = await submitter.submit("十三加五等於多少？", () => {}, (s, p, b) => seen.push({ s, p, b }), {
+    timeoutMs: 45_000,
+    downloadTimeoutMs: 15 * 60_000,
+    forceLocalModel: true,
+    localModelId: "test-model",
+  });
+  assert.equal(answer, "13");
+  const byteEvents = seen.filter((x) => x.s === "local model download" && x.b);
+  assert.ok(byteEvents.length >= 1, "createAutoSubmitter must forward bytes to onStatus");
+  assert.equal(byteEvents[0].b.received, HALF);
+  assert.equal(byteEvents[0].b.total, TOTAL);
+});
