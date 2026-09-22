@@ -33,20 +33,68 @@ const CORE_PHRASES: Record<string, string> = {
   "数据结构": "資料結構",
   "资料结构": "資料結構",
   "产业升级": "產業升級",
+  // Qwen zh-Hant audit (2026-09-22) 6a: Taiwan-usage overrides for entries the
+  // auto-generated table (Big5/OpenCC criterion) got wrong for TW readers.
+  // CORE_PHRASES takes precedence over HANT_PHRASES, so these are the minimal fix.
+  "数据": "資料",
+  "变量": "變數",
+  "这里": "這裡",
+  "递回": "遞回",
+  "面积": "面積",
+  "长和面": "長和面",
 };
 
 export function normalizeToHant(text: string): { text: string; changed: number } {
   const src = String(text ?? "");
   let changed = 0;
-  const maxLen = Math.max(HANT_PHRASE_MAX, 6);
+  // CORE_PHRASES are curated Taiwan-usage/domain terms (incl. Qwen zh-Hant
+  // audit 6a overrides). They take precedence over the auto-generated
+  // HANT_PHRASES table even where a longer contextual HANT_PHRASES entry would
+  // otherwise shadow them (e.g. 供数据 vs 数据, 变量 `x` vs 变量). We therefore
+  // pre-scan CORE phrase spans and let them carve the text into protected
+  // segments; the auto table and char map only fill the gaps.
+  const coreKeys = Object.keys(CORE_PHRASES).filter((k) => k !== "" && k !== (CORE_PHRASES as Record<string, string>)[k]);
+  const maxCoreLen = coreKeys.reduce((m, k) => Math.max(m, [...k].length), 0);
+  const spans: Array<{ start: number; end: number; rep: string }> = [];
+  let si = 0;
+  outer: while (si < src.length) {
+    const upper = Math.min(maxCoreLen, src.length - si);
+    for (let n = upper; n >= 1; n -= 1) {
+      // Span matching is by UTF-16 code units; all CORE keys are BMP-only.
+      const key = src.slice(si, si + n);
+      const rep = (CORE_PHRASES as Record<string, string>)[key];
+      if (rep !== undefined && rep !== key) {
+        spans.push({ start: si, end: si + n, rep });
+        si += n;
+        continue outer;
+      }
+    }
+    si += 1;
+  }
+  const spanAt = new Map<number, { end: number; rep: string }>();
+  for (const s of spans) spanAt.set(s.start, s);
+  const nextCoreStart = (from: number): number => {
+    for (const s of spans) if (s.start >= from) return s.start;
+    return src.length;
+  };
+
   let out = "";
   let i = 0;
+  const maxLen = Math.max(HANT_PHRASE_MAX, 6);
   while (i < src.length) {
+    const core = spanAt.get(i);
+    if (core) {
+      out += core.rep;
+      changed += core.end - i;
+      i = core.end;
+      continue;
+    }
+    const limit = nextCoreStart(i); // an auto-table match must not cross a CORE span
     let matched: string | null = null;
-    const upper = Math.min(maxLen, src.length - i);
+    const upper = Math.min(maxLen, limit - i, src.length - i);
     for (let n = upper; n >= 2; n -= 1) {
       const key = src.slice(i, i + n);
-      const rep = (CORE_PHRASES as Record<string, string>)[key] ?? (HANT_PHRASES as Record<string, string>)[key];
+      const rep = (HANT_PHRASES as Record<string, string>)[key];
       if (rep !== undefined && rep !== key) {
         matched = rep;
         changed += n;

@@ -16,5 +16,5 @@
     "health_status": "not_configured",
     "bindings": {}
   },
-  "recapture_note": "Re-attested 2026-09-22T07:16:40Z (Hermes-E500, live curl): /api/health HTTP 200 {status:ok, edge:cloudflare-worker, d1:unbound, r2:unbound, storage:none, phase:2, role:standalone, backendTarget:disabled-or-staging-only}; hosting.json project_id matches appgprj_6aaeb13a9930819186a64f6420ff65a4; no new staging deploy performed (candidate remains predeploy)."
+  "recapture_note": "Re-attested 2026-09-22T07:32Z (Hermes-E500, live curl, evidence: note/handoff/d06-gateb-20260922/logs/staging-health-recapture.log sha256 195b08d4914f76f7c0bf1f55ac139fdb861c5f347bb830c075e0b8ce8000eaa2): /api/health HTTP 200 {status:ok, edge:cloudflare-worker, d1:unbound, r2:unbound, storage:none, phase:2, role:standalone, backendTarget:disabled-or-staging-only}; hosting.json project_id matches appgprj_6aaeb13a9930819186a64f6420ff65a4; no new staging deploy performed (candidate remains predeploy)."
 }

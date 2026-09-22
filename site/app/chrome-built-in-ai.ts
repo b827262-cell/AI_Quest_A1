@@ -21,6 +21,7 @@ export type AutoAiStatus =
   | "local fallback loading"
   | "local model requires user activation"
   | "local model download"
+  | "local model ready"
   | "unsupported after fallback";
 
 export type StatusCallback = (status: AutoAiStatus, progress?: number | null) => void;
@@ -672,7 +673,27 @@ export async function askWithChromeBuiltInAi(
             }
           : {}),
         ...(typeof globalThis !== "undefined" && typeof globalThis.fetch === "function"
-          ? { fetch: nodeRuntime ? isolatedNodeFetch : (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) }
+          ? {
+              fetch: nodeRuntime
+                ? isolatedNodeFetch
+                : (...args: Parameters<typeof fetch>) => {
+                    // COLD_START cancel contract: the submit AbortSignal must
+                    // reach the in-flight model-artifact download itself, not
+                    // only the post-download checkpoints. Merge it into every
+                    // browser fetch the polyfill/Transformers.js issues so
+                    // 取消下載 aborts a real cold download immediately.
+                    const [input, init] = args;
+                    const initSignal = (init as { signal?: AbortSignal | null } | undefined)?.signal ?? undefined;
+                    const merged =
+                      typeof AbortSignal !== "undefined" && typeof (AbortSignal as { any?: unknown }).any === "function" && options.signal
+                        ? [initSignal, options.signal].filter((s): s is AbortSignal => Boolean(s))
+                        : undefined;
+                    const nextInit = merged
+                      ? ({ ...(init as object), signal: AbortSignal.any(merged) } as RequestInit)
+                      : init;
+                    return globalThis.fetch(input, nextInit);
+                  },
+            }
           : {}),
         backends: {
           onnx: {
@@ -777,6 +798,11 @@ export async function askWithChromeBuiltInAi(
     throw new ChromeAiError("本機 AI 模型下載或初始化失敗，未使用任何雲端服務。");
   }
 
+  // COLD_START contract (owner ruling 2026-09-22): the model download window is
+  // separate from the answer-generation window. This status marks the moment
+  // the local model is fully loaded; generation timeouts may only start here.
+  options.onStatus?.("local model ready");
+
   try {
     const prompt = `${LOCAL_FALLBACK_PROMPT_INSTRUCTION}\n\n${question}`;
     const response = await streamAnswer(
@@ -797,6 +823,14 @@ export async function askWithChromeBuiltInAi(
 
 export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Promise<void>) {
   let controller: AbortController | null = null;
+  // Statuses that belong to the (possibly long) local-model download window.
+  // COLD_START contract: `downloadTimeoutMs` covers only this window; the
+  // generation timeout (`timeoutMs`) starts at "local model ready" instead.
+  const DOWNLOAD_PHASE_STATUSES = new Set([
+    "local fallback loading",
+    "local model requires user activation",
+    "local model download",
+  ]);
   return {
     get inFlight() {
       return controller !== null;
@@ -808,7 +842,7 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
       question: string,
       onChunk: (chunk: string) => void,
       onStatus?: StatusCallback,
-      submitOptions?: { localModelId?: string; timeoutMs?: number; forceLocalModel?: boolean } | string,
+      submitOptions?: { localModelId?: string; timeoutMs?: number; downloadTimeoutMs?: number; forceLocalModel?: boolean } | string,
     ) {
       if (controller) throw new ChromeAiError("AI 回答處理中，請稍候。");
       controller = new AbortController();
@@ -819,25 +853,49 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
           ? submitOptions
           : submitOptions?.localModelId;
       let timeout: ReturnType<typeof setTimeout> | undefined;
+      let downloadTimeout: ReturnType<typeof setTimeout> | undefined;
       let timedOut = false;
-      if (typeof submitOptions !== "string" && submitOptions?.timeoutMs) {
+      let downloadTimedOut = false;
+      let downloadPhaseDone = false;
+      if (typeof submitOptions !== "string" && submitOptions?.downloadTimeoutMs) {
+        downloadTimeout = setTimeout(() => { downloadTimedOut = true; controller?.abort(); }, submitOptions.downloadTimeoutMs);
+      }
+      const armGenerationWindow = () => {
+        if (downloadTimeout && !downloadPhaseDone) {
+          downloadPhaseDone = true;
+          clearTimeout(downloadTimeout);
+          if (typeof submitOptions !== "string" && submitOptions?.timeoutMs) {
+            timeout = setTimeout(() => { timedOut = true; controller?.abort(); }, submitOptions.timeoutMs);
+          }
+        }
+      };
+      if (typeof submitOptions !== "string" && !submitOptions?.downloadTimeoutMs && submitOptions?.timeoutMs) {
+        // Legacy single-window behavior when no download window is configured.
         timeout = setTimeout(() => { timedOut = true; controller?.abort(); }, submitOptions.timeoutMs);
       }
+      // Internal status watcher: the download/generation window switch must not
+      // depend on the caller supplying an onStatus callback.
+      const internalStatus: StatusCallback = (status, progress) => {
+        if (!DOWNLOAD_PHASE_STATUSES.has(status)) armGenerationWindow();
+        onStatus?.(status, progress);
+      };
       try {
         return await askWithChromeBuiltInAi(question, onChunk, {
           env,
           signal: controller.signal,
-          onStatus,
+          onStatus: internalStatus,
           loadPolyfill: loader,
           userActivation,
           localModelId,
           forceLocalModel: typeof submitOptions === "string" ? false : submitOptions?.forceLocalModel,
         });
       } catch (error) {
+        if (downloadTimedOut) throw new ChromeAiError("本機模型下載逾時，請檢查網路後重試；未使用任何雲端服務。");
         if (timedOut) throw new ChromeAiError("本機 AI 回答逾時。");
         throw error;
       } finally {
         if (timeout) clearTimeout(timeout);
+        if (downloadTimeout) clearTimeout(downloadTimeout);
         controller = null;
       }
     },

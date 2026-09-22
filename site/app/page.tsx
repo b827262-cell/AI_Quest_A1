@@ -44,7 +44,7 @@ export default function Home() {
           setDownloadProgress(typeof progress === "number" ? progress : null);
           setNeedsGesture(status === "local model requires user activation");
         },
-        { localModelId: "onnx-community/Qwen3-0.6B-ONNX", timeoutMs: 45_000, forceLocalModel: true },
+        { localModelId: "onnx-community/Qwen3-0.6B-ONNX", timeoutMs: 45_000, downloadTimeoutMs: 15 * 60_000, forceLocalModel: true },
       );
       const verdict = validateLocalAnswer(prompt, finalAnswer);
       if (verdict.status === "VALID") {

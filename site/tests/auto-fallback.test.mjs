@@ -5,10 +5,11 @@ import {
   createAutoFallbackGuard,
   hasUnresolvedSimplified,
   normalizeToHant,
+  postprocessTraditionalChinese,
   validateLocalAnswer,
 } from "../app/auto-fallback.ts";
 import { SIMPLIFIED_ONLY } from "../app/hant-set.ts";
-import { createAutoSubmitter } from "../app/chrome-built-in-ai.ts";
+import { createAutoSubmitter, askWithChromeBuiltInAi } from "../app/chrome-built-in-ai.ts";
 
 test("Gate 5b: local submit timeout fails closed with a truthful timeout error", async () => {
   const env = {
@@ -29,6 +30,104 @@ test("Gate 5b: local submit timeout fails closed with a truthful timeout error",
     /逾時/,
   );
   assert.equal(submitter.inFlight, false);
+});
+
+test("COLD_START: download timeout is separate from the 45s generation window", async () => {
+  const env = {
+    WebAssembly: { instantiate: () => ({}) },
+    window: {
+      LanguageModel: {
+        __isPolyfill: true,
+        create({ signal }) {
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("download aborted")));
+          });
+        },
+      },
+    },
+  };
+  const submitter = createAutoSubmitter(env, async () => {});
+  const statuses = [];
+  await assert.rejects(
+    submitter.submit("什麼是恐龍？", () => {}, (s) => statuses.push(s), { timeoutMs: 45_000, downloadTimeoutMs: 60 }),
+    /下載逾時/,
+  );
+  assert.equal(submitter.inFlight, false);
+  assert.equal(statuses.includes("local model ready"), false);
+});
+
+test("COLD_START: the submit abort signal reaches the browser model-artifact fetch", async () => {
+  const env = {
+    WebAssembly: { instantiate: () => ({}) },
+    window: {
+      LanguageModel: {
+        __isPolyfill: true,
+        async create() {
+          const cfg = env.window.TRANSFORMERS_CONFIG;
+          assert.equal(typeof cfg.env.fetch, "function");
+          fetchPromise = cfg.env.fetch("https://huggingface.co/onnx-community/Qwen3-0.6B-ONNX/resolve/main/onnx/model_quantized.onnx", {});
+          await fetchPromise;
+          return { async prompt() { return "x"; } };
+        },
+      },
+    },
+  };
+  let fetchPromise = null;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_input, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new Error("artifact download aborted")));
+  });
+  try {
+    // The signal-merging fetch wrapper is the browser branch; force it by
+    // defining window (Node otherwise takes the isolated nodeRuntime path).
+    globalThis.window = env.window;
+    const controller = new AbortController();
+    const pending = askWithChromeBuiltInAi("什麼是恐龍？", () => {}, {
+      env,
+      signal: controller.signal,
+      forceLocalModel: true,
+      userActivation: true,
+      loadPolyfill: async () => {},
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(fetchPromise instanceof Promise, true, "model fetch must be in flight");
+    controller.abort();
+    await assert.rejects(fetchPromise, /artifact download aborted/);
+    await assert.rejects(pending, /已取消/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.window;
+  }
+});
+
+test("COLD_START: generation timeout only starts after the local model is ready", async () => {
+  const env = {
+    WebAssembly: { instantiate: () => ({}) },
+    window: {
+      LanguageModel: {
+        __isPolyfill: true,
+        async create() {
+          await new Promise((r) => setTimeout(r, 150));
+          return {
+            async prompt() {
+              await new Promise((r) => setTimeout(r, 100));
+              return "恐龍是中生代的大型爬蟲類動物，早已滅絕。";
+            },
+          };
+        },
+      },
+    },
+  };
+  const submitter = createAutoSubmitter(env, async () => {});
+  const statuses = [];
+  const answer = await submitter.submit(
+    "什麼是恐龍？",
+    () => {},
+    (s) => statuses.push(s),
+    { timeoutMs: 200, downloadTimeoutMs: 10_000, forceLocalModel: true },
+  );
+  assert.match(answer, /恐龍/);
+  assert.equal(statuses.includes("local model ready"), true);
 });
 
 test("Gate C VALID stays local with zero Google navigation", () => {
@@ -79,6 +178,47 @@ test("Gate B preserves legitimate short numerals, names, and Traditional shared 
 test("Gate B converts a complete Simplified answer before leakage validation", () => {
   const result = validateLocalAnswer("什麼是經營策略？", "经营策略是企业的长期规划。");
   assert.deepEqual(result, { status: "VALID", answer: "經營策略是企業的長期規劃。" });
+});
+
+test("Qwen audit 6a: Taiwan-usage CORE_PHRASES override the auto-generated table", () => {
+  // Auto-table contextual variants must not shadow the curated Taiwan terms.
+  assert.equal(postprocessTraditionalChinese("数据备份很重要。"), "資料備份很重要。");
+  assert.equal(postprocessTraditionalChinese("系統會供数据完整性檢查。"), "系統會供資料完整性檢查。");
+  assert.equal(postprocessTraditionalChinese("数据结构是用來組織資料的方式。"), "資料結構是用來組織資料的方式。");
+  assert.equal(postprocessTraditionalChinese("变量 `x` 會遞增。"), "變數 `x` 會遞增。");
+  assert.equal(postprocessTraditionalChinese("这里有一张桌子。"), "這裡有一張桌子。");
+  assert.equal(postprocessTraditionalChinese("和面积相關的公式。"), "和面積相關的公式。");
+  assert.equal(postprocessTraditionalChinese("长和面的比例。"), "長和面的比例。");
+  assert.equal(postprocessTraditionalChinese("递回函式會把結果递回上一層。"), "遞回函式會把結果遞回上一層。");
+});
+
+test("Gate B residue probes: canonical Simplified sentences convert with zero residue", () => {
+  const residueOf = (served) => [...new Set([...served].filter((c) => SIMPLIFIED_ONLY.includes(c)))];
+  const cases = [
+    "产业升级是指产业结构改善。",
+    "电脑是一种计算设备。",
+    "台湾位于东亚。",
+    "软体是电脑程序。",
+    "经营策略是企业的长期规划。",
+  ];
+  for (const raw of cases) {
+    const result = validateLocalAnswer("測試", raw);
+    assert.equal(result.status, "VALID", raw);
+    assert.deepEqual(residueOf(result.answer), [], `${raw} -> ${result.answer}`);
+  }
+});
+
+test("Gate B documented tradeoff: neutral shared chars may remain (寧可漏改、不可改壞姓名)", () => {
+  // 台后干几云划准咸郁范于涌 are deliberately NOT in SIMPLIFIED_ONLY
+  // (Big5-legal shared characters; see hant-set.ts provenance). Mixed forms
+  // like 證据/根据/位于/计划 therefore stay VALID — these assertions pin that
+  // documented tradeoff so it is visible instead of accidental.
+  assert.equal(postprocessTraditionalChinese("证据显示该操作有效。"), "證据顯示該操作有效。");
+  assert.equal(postprocessTraditionalChinese("根据目前资料判断。"), "根据目前資料判斷。");
+  assert.equal(postprocessTraditionalChinese("计划明年上线。"), "計划明年上線。");
+  const name = validateLocalAnswer("這是誰？", "于右任是近代書法家。");
+  assert.equal(name.status, "VALID");
+  assert.match(name.answer, /于右任/);
 });
 
 test("cancelled flow cannot navigate or restart the same submission", () => {
