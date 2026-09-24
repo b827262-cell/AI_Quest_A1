@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   buildGoogleAiModeUrl,
   createAutoFallbackGuard,
   hasUnresolvedSimplified,
   normalizeToHant,
+  openConsentHandoffTab,
   postprocessTraditionalChinese,
   validateLocalAnswer,
 } from "../app/auto-fallback.ts";
@@ -298,4 +300,117 @@ test("COLD_START: createAutoSubmitter forwards download bytes to the caller's on
   assert.ok(byteEvents.length >= 1, "createAutoSubmitter must forward bytes to onStatus");
   assert.equal(byteEvents[0].b.received, HALF);
   assert.equal(byteEvents[0].b.total, TOTAL);
+});
+
+// ---------------------------------------------------------------------------
+// D-07 Gate-D: a consented Google handoff opens ONE new tab and keeps the
+// student page. Every case below asserts the same-tab navigation count stays at
+// zero, because evicting the page was the finding.
+// ---------------------------------------------------------------------------
+
+const CONSENT_QUESTION = "光合作用與呼吸作用的差異？&中文 test";
+const CONSENT_URL = buildGoogleAiModeUrl(CONSENT_QUESTION);
+
+function consentHarness({ popupBlocked = false, openThrows = false } = {}) {
+  const openCalls = [];
+  const sameTabNavigations = [];
+  const fakeTab = { opener: { self: "student page" } };
+  const win = {
+    open(url, target, features) {
+      openCalls.push({ url, target, features });
+      if (openThrows) throw new Error("open() refused by the browser");
+      return popupBlocked ? null : fakeTab;
+    },
+    location: {
+      assign(url) { sameTabNavigations.push(["assign", url]); },
+      replace(url) { sameTabNavigations.push(["replace", url]); },
+      href: "https://student.example/#auto-answer",
+    },
+  };
+  return { win, openCalls, sameTabNavigations, fakeTab };
+}
+
+test("Gate-D consent: one press opens exactly ONE new tab and never navigates this page", () => {
+  const { win, openCalls, sameTabNavigations, fakeTab } = consentHarness();
+  assert.equal(openConsentHandoffTab(CONSENT_URL, createAutoFallbackGuard(), win), "opened");
+  assert.equal(openCalls.length, 1);
+  assert.equal(openCalls[0].url, CONSENT_URL);
+  assert.equal(openCalls[0].target, "_blank");
+  assert.deepEqual(sameTabNavigations, []);
+  assert.equal(fakeTab.opener, null, "the new tab must not keep a handle on the student page");
+});
+
+test("Gate-D consent: the opened URL pins q, udm=50, aep=11 and hl=zh-TW", () => {
+  const { win, openCalls } = consentHarness();
+  openConsentHandoffTab(CONSENT_URL, createAutoFallbackGuard(), win);
+  const url = new URL(openCalls[0].url);
+  assert.equal(`${url.origin}${url.pathname}`, "https://www.google.com/search");
+  assert.equal(url.searchParams.get("q"), CONSENT_QUESTION);
+  assert.equal(url.searchParams.get("udm"), "50");
+  assert.equal(url.searchParams.get("aep"), "11");
+  assert.equal(url.searchParams.get("hl"), "zh-TW");
+  assert.equal([...url.searchParams.keys()].length, 4, "no extra parameter may ride along");
+});
+
+test("Gate-D consent: no features argument, so a null return still means popup-blocked", () => {
+  const { win, openCalls } = consentHarness();
+  openConsentHandoffTab(CONSENT_URL, createAutoFallbackGuard(), win);
+  // `window.open(url, "_blank", "noopener")` returns null even on success,
+  // which would make a successful open look blocked and double-fire the
+  // fallback. The opener is severed directly instead.
+  assert.equal(openCalls[0].features, undefined);
+});
+
+test("Gate-D consent: a second press on the same consent budget opens no extra tab", () => {
+  const { win, openCalls, sameTabNavigations } = consentHarness();
+  const guard = createAutoFallbackGuard();
+  assert.equal(openConsentHandoffTab(CONSENT_URL, guard, win), "opened");
+  assert.equal(openConsentHandoffTab(CONSENT_URL, guard, win), "duplicate");
+  assert.equal(openConsentHandoffTab(CONSENT_URL, guard, win), "duplicate");
+  assert.equal(openCalls.length, 1);
+  assert.deepEqual(sameTabNavigations, []);
+});
+
+test("Gate-D consent: a fresh consent dialog gets its own single-tab budget", () => {
+  const { win, openCalls } = consentHarness();
+  assert.equal(openConsentHandoffTab(CONSENT_URL, createAutoFallbackGuard(), win), "opened");
+  assert.equal(openConsentHandoffTab(buildGoogleAiModeUrl("另一題"), createAutoFallbackGuard(), win), "opened");
+  assert.equal(openCalls.length, 2);
+});
+
+test("Gate-D consent: a blocked popup shows the manual link without leaving the page", () => {
+  const { win, openCalls, sameTabNavigations } = consentHarness({ popupBlocked: true });
+  const guard = createAutoFallbackGuard();
+  assert.equal(openConsentHandoffTab(CONSENT_URL, guard, win), "blocked");
+  assert.equal(openCalls.length, 1);
+  assert.deepEqual(sameTabNavigations, []);
+  // The budget stays consumed: a retry must not fan out into more attempts.
+  assert.equal(openConsentHandoffTab(CONSENT_URL, guard, win), "duplicate");
+  assert.equal(openCalls.length, 1);
+});
+
+test("Gate-D consent: an open() that throws is treated as blocked, not as a navigation", () => {
+  const { win, sameTabNavigations } = consentHarness({ openThrows: true });
+  assert.equal(openConsentHandoffTab(CONSENT_URL, createAutoFallbackGuard(), win), "blocked");
+  assert.deepEqual(sameTabNavigations, []);
+});
+
+test("Gate-D consent: a missing window degrades to blocked instead of throwing", () => {
+  assert.equal(openConsentHandoffTab(CONSENT_URL, createAutoFallbackGuard(), null), "blocked");
+  assert.equal(openConsentHandoffTab(CONSENT_URL, createAutoFallbackGuard(), undefined), "blocked");
+});
+
+test("Gate-D consent: page.tsx routes the consent action through the new-tab helper", () => {
+  const source = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const start = source.indexOf("function handleOtherHandoff");
+  const end = source.indexOf("async function submit", start);
+  assert.ok(start > -1, "consent handoff handler is missing from page.tsx");
+  assert.ok(end > start, "could not bound the consent handler");
+  const consentPath = source.slice(start, end);
+  assert.match(consentPath, /openConsentHandoffTab\(/);
+  assert.doesNotMatch(consentPath, /location\s*\.\s*(?:assign|replace|href)/);
+  assert.doesNotMatch(consentPath, /document\s*\.\s*location/);
+  assert.doesNotMatch(consentPath, /requestSubmit|form\.submit|\.click\(\)/, "consent must not auto-submit a question");
+  assert.doesNotMatch(consentPath, /fetch\s*\(|XMLHttpRequest/, "consent must not relay or scrape Google");
+  assert.match(source, /target="_blank"[^>]*rel="noopener/, "the manual fallback link keeps the student page");
 });

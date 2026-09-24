@@ -208,6 +208,45 @@ export function buildGoogleAiModeUrl(question: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(question)}&udm=50&aep=11&hl=zh-TW`;
 }
 
+/** A consented handoff either opened one tab, was blocked, or was a repeat. */
+export type ConsentHandoffOutcome = "opened" | "blocked" | "duplicate";
+
+export type ConsentHandoffWindow = {
+  open(url: string, target: string, features?: string): { opener: unknown } | null;
+};
+
+/**
+ * Owner contract (D-07 Gate-D): pressing 「同意並在新分頁開啟 Google AI」 opens
+ * exactly ONE new tab and leaves the student page where it is — a same-tab
+ * navigation evicts the question, the triage result and any in-flight model
+ * work. The one-shot guard turns a double click into a no-op instead of a second
+ * tab, and a blocked popup degrades to a visible manual link rather than a
+ * navigation. Nothing is ever (re)submitted from here.
+ *
+ * `window.open` is deliberately called without a features string: passing
+ * `noopener` makes the call return null even when the tab did open, which would
+ * destroy the popup-blocked signal. The opener reference is severed directly.
+ */
+export function openConsentHandoffTab(
+  url: string,
+  guard: { begin(): boolean; navigateOnce(): boolean },
+  win: ConsentHandoffWindow | null | undefined,
+): ConsentHandoffOutcome {
+  // The guard instance IS the single-tab budget: the first press walks
+  // IDLE → GENERATING → GOOGLE_NAVIGATING, and every later press on that same
+  // guard is rejected before `window.open` is ever reached.
+  if (!guard.begin() || !guard.navigateOnce()) return "duplicate";
+  let opened: { opener: unknown } | null = null;
+  try {
+    opened = win?.open(url, "_blank") ?? null;
+  } catch {
+    opened = null;
+  }
+  if (!opened) return "blocked";
+  opened.opener = null;
+  return "opened";
+}
+
 export type AutoFallbackState = "IDLE" | "GENERATING" | "GOOGLE_NAVIGATING" | "DONE" | "CANCELLED";
 
 /** One submission may hand off once only; cancelled/returned flows are terminal. */
