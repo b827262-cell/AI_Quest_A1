@@ -4,10 +4,12 @@ import test from "node:test";
 import {
   buildGoogleAiModeUrl,
   createAutoFallbackGuard,
+  handoffReasonLabel,
   hasUnresolvedSimplified,
   normalizeToHant,
   openConsentHandoffTab,
   postprocessTraditionalChinese,
+  RESIDUE_OVERRIDE_CHARS,
   validateLocalAnswer,
 } from "../app/auto-fallback.ts";
 import { SIMPLIFIED_ONLY } from "../app/hant-set.ts";
@@ -195,29 +197,89 @@ test("Qwen audit 6a: Taiwan-usage CORE_PHRASES override the auto-generated table
 });
 
 test("Gate B residue probes: canonical Simplified sentences convert with zero residue", () => {
-  const residueOf = (served) => [...new Set([...served].filter((c) => SIMPLIFIED_ONLY.includes(c)))];
+  // The detector, not the raw table: `hasUnresolvedSimplified` covers
+  // SIMPLIFIED_ONLY *plus* the curated ambiguous-character overrides, which is
+  // exactly the set a served answer must be free of.
   const cases = [
     "产业升级是指产业结构改善。",
     "电脑是一种计算设备。",
     "台湾位于东亚。",
     "软体是电脑程序。",
     "经营策略是企业的长期规划。",
+    "计算机是一种计算设备。",
+    "数据库备份并恢复到最新的状态。",
+    "这种昆虫的危害已经蔓延到林区。",
+    "内存泄漏通常是由于对象未被及时释放造成的。",
+    "该功能限定了范围，并且采用了标准差。",
+    "请用繁体回答，不要使用简体字。",
   ];
   for (const raw of cases) {
     const result = validateLocalAnswer("測試", raw);
     assert.equal(result.status, "VALID", raw);
-    assert.deepEqual(residueOf(result.answer), [], `${raw} -> ${result.answer}`);
+    assert.equal(hasUnresolvedSimplified(result.answer), false, `${raw} -> ${result.answer}`);
   }
 });
 
-test("Gate B documented tradeoff: neutral shared chars may remain (寧可漏改、不可改壞姓名)", () => {
-  // 台后干几云划准咸郁范于涌 are deliberately NOT in SIMPLIFIED_ONLY
-  // (Big5-legal shared characters; see hant-set.ts provenance). Mixed forms
-  // like 證据/根据/位于/计划 therefore stay VALID — these assertions pin that
-  // documented tradeoff so it is visible instead of accidental.
-  assert.equal(postprocessTraditionalChinese("证据显示该操作有效。"), "證据顯示該操作有效。");
-  assert.equal(postprocessTraditionalChinese("根据目前资料判断。"), "根据目前資料判斷。");
-  assert.equal(postprocessTraditionalChinese("计划明年上线。"), "計划明年上線。");
+test("Gate B blocker 2: curated ambiguous characters convert, and fail closed if they ever survive", () => {
+  // Every character the generated table wrote off as Big5-legal `ambiguous` but
+  // that has no live Traditional reading in modern prose.
+  const served = validateLocalAnswer("什麼是備份？", "計算机备份并恢复，优化数据库，包含两种方法，接触外部系統。");
+  assert.equal(served.status, "VALID");
+  assert.equal(served.answer, "計算機備份並恢復，優化資料庫，包含兩種方法，接觸外部系統。");
+  // Negative control: bypassing the conversion must be caught, not displayed.
+  for (const ch of RESIDUE_OVERRIDE_CHARS) {
+    assert.equal(hasUnresolvedSimplified(`答案${ch}尾`), true, `${ch} is not fail-closed`);
+  }
+  assert.ok(RESIDUE_OVERRIDE_CHARS.length >= 20, "curated override set unexpectedly shrank");
+});
+
+test("Gate B blocker 2: an unlisted 于/范 residue fails closed while a surname in name position survives", () => {
+  // 受制于 is not a phrase the table can enumerate, so the leftover 于 must
+  // downgrade the answer instead of being served as Traditional.
+  const residue = validateLocalAnswer("測試", "整个系统受制于外部供应商。");
+  assert.equal(residue.status, "INVALID");
+  assert.equal(residue.reason, "unresolved-simplified");
+  assert.equal(hasUnresolvedSimplified("整個系統受制于外部供應商。"), true);
+
+  // Surname positions stay VALID: answer-initial, after an appellation, and for
+  // 范. The point of the context rule is that names are never residue.
+  for (const answer of ["于右任是近代書法家。", "書法家于右任創立標準草書。", "范仲淹是北宋名臣。", "散文家范曾受邀演講。"]) {
+    const result = validateLocalAnswer("這是誰？", answer);
+    assert.equal(result.status, "VALID", answer);
+    assert.doesNotMatch(result.answer, /於|范於/);
+  }
+  // Genuine Traditional homographs are never rejected either.
+  for (const answer of ["后里區在臺中。", "這段路有三公里。", "話劇《皇后》今夜公演。"]) {
+    assert.equal(validateLocalAnswer("測試", answer).status, "VALID", answer);
+  }
+});
+
+test("Gate B blocker 2: the handoff reason label is learner-facing copy and never undefined", () => {
+  assert.equal(handoffReasonLabel("question-echo"), "回答只有重複你的問題");
+  assert.equal(handoffReasonLabel("unresolved-simplified"), "回答仍有未轉換的簡體殘字");
+  assert.equal(handoffReasonLabel("timeout"), "本機模型逾時未回應");
+  assert.equal(handoffReasonLabel("local-error"), "本機模型發生錯誤");
+  assert.equal(handoffReasonLabel("stalled-download"), "模型下載停滯");
+  for (const unknown of [undefined, "", "not-a-reason"]) {
+    const label = handoffReasonLabel(unknown);
+    assert.equal(label, "本機模型無法完成這一道題");
+    assert.doesNotMatch(label, /undefined/);
+  }
+});
+
+test("Gate B documented tradeoff: only 后/里/几/庄/挂-style shared chars may remain (寧可漏改、不可改壞姓名)", () => {
+  // Blocker 2 (Owner 19:22) narrowed this tradeoff. The mixed forms this test
+  // used to pin - 證据/根据/位于/計划 - are now rewritten, because in those words
+  // the Simplified reading is the only live one. What deliberately still
+  // survives is a character with a real Traditional homograph: 后 (皇后), 里
+  // (公里), 划 (划算), 挂 (挂/掛 both standard). Those stay VALID un-rewritten
+  // rather than risk 改壞姓名, and stay OUT of the fail-closed set for the same
+  // reason - see the residue probes below.
+  assert.equal(postprocessTraditionalChinese("证据显示该操作有效。"), "證據顯示該操作有效。");
+  assert.equal(postprocessTraditionalChinese("根据目前资料判断。"), "根據目前資料判斷。");
+  assert.equal(postprocessTraditionalChinese("计划明年上线。"), "計畫明年上線。");
+  assert.equal(postprocessTraditionalChinese("系统优化后响应时间减少。"), "系統優化后響應時間減少。");
+  assert.equal(postprocessTraditionalChinese("标准差计算包括在模型里。"), "標準差計算包括在模型里。");
   const name = validateLocalAnswer("這是誰？", "于右任是近代書法家。");
   assert.equal(name.status, "VALID");
   assert.match(name.answer, /于右任/);
@@ -242,9 +304,11 @@ test("Gate B regression: 于右任 and historical variants are preserved without
   assert.match(r1.answer, /于右任/);
   assert.doesNotMatch(r1.answer, /於右任/);
 
+  // Phrase-aware, not blanket: the preposition 位于 is residue and is rewritten,
+  // while a surname-initial 于 is untouched by the same table.
   const r2 = validateLocalAnswer("地理問題", "阿里山位于嘉義縣。");
   assert.equal(r2.status, "VALID");
-  assert.match(r2.answer, /位于/);
+  assert.equal(r2.answer, "阿里山位於嘉義縣。");
 });
 
 test("Gate B regression: technical and business Simplified terms convert reliably to Traditional without residue", () => {
@@ -259,9 +323,13 @@ test("Gate B regression: technical and business Simplified terms convert reliabl
 
 test("Gate B invariant: normalizeToHant covers the entire SIMPLIFIED_ONLY rewrite set", () => {
   // Conversion-first contract: no character the table promises to rewrite may
-  // survive normalization, otherwise VALID answers could serve residue.
+  // survive normalization, otherwise VALID answers could serve residue. The
+  // curated override characters are held to the same promise.
   const uncovered = [];
   for (const ch of SIMPLIFIED_ONLY) {
+    if (hasUnresolvedSimplified(normalizeToHant(ch).text)) uncovered.push(ch);
+  }
+  for (const ch of RESIDUE_OVERRIDE_CHARS) {
     if (hasUnresolvedSimplified(normalizeToHant(ch).text)) uncovered.push(ch);
   }
   assert.deepEqual(uncovered, []);
@@ -413,4 +481,40 @@ test("Gate-D consent: page.tsx routes the consent action through the new-tab hel
   assert.doesNotMatch(consentPath, /requestSubmit|form\.submit|\.click\(\)/, "consent must not auto-submit a question");
   assert.doesNotMatch(consentPath, /fetch\s*\(|XMLHttpRequest/, "consent must not relay or scrape Google");
   assert.match(source, /target="_blank"[^>]*rel="noopener/, "the manual fallback link keeps the student page");
+});
+
+// Blocker 1 (Owner 19:22): an INVALID answer, a timeout, a local error and a
+// stalled download all used to be able to move the student's own tab. The whole
+// page is now navigation-free - the only Google route is a consented click.
+test("Gate-D consent: no local-failure path may navigate the student page", () => {
+  const source = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /location\s*\.\s*(?:assign|replace)\s*\(/, "same-tab navigation is back");
+  assert.doesNotMatch(source, /document\s*\.\s*location|window\s*\.\s*location\s*=/);
+  assert.doesNotMatch(source, /userActivation/, "the gesture-sniffing auto-jump must not come back");
+
+  const body = source.slice(source.indexOf("async function submit"));
+  const submitPath = body.slice(0, body.indexOf("function requestFailureHandoff"));
+  assert.match(submitPath, /requestFailureHandoff\(prompt, verdict\.reason/, "INVALID must ask consent, not navigate");
+  assert.match(submitPath, /requestFailureHandoff\(prompt, \/逾時\|abort\/i\.test\(message\)/, "timeout/error must ask consent");
+  assert.match(submitPath, /requestConsentedHandoff\(prompt, "subject"\)/);
+
+  const failure = body.slice(body.indexOf("function requestFailureHandoff"), body.indexOf("return <main"));
+  assert.match(failure, /guard\.done\(\)/, "the local attempt must be closed, not left able to navigate");
+  assert.match(failure, /requestConsentedHandoff\(originalQuestion, "failure"/);
+  assert.match(failure, /handoffReasonLabel\(reason\)/);
+
+  // The dialog is re-minted per question with its own single-tab budget, and a
+  // local failure never offers the subject-only "load the model" shortcuts.
+  const request = source.slice(source.indexOf("function requestConsentedHandoff"), source.indexOf("function handleOtherHandoff"));
+  assert.match(request, /consentGuardRef\.current = createAutoFallbackGuard\(\)/);
+  assert.match(request, /setConsentKind\(kind\)/);
+  assert.match(request, /setShowSubjectConsent\(true\)/);
+  assert.match(source, /原因：\{consentReason\}/);
+  assert.match(source, /consentKind === "subject" && <>/);
+  assert.match(source, /setShowSubjectConsent\(false\);\s*handleOtherHandoff\(pendingQuestion\)/);
+
+  // Stalled download: the escape hatch is an explicit new tab, never this page.
+  const stalled = source.slice(source.indexOf("改用 Google AI 求解"));
+  assert.match(stalled.slice(0, 240), /target="_blank"/);
+  assert.match(stalled.slice(0, 240), /rel="noopener/);
 });

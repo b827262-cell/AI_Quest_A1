@@ -327,7 +327,7 @@ async function runChromeE2e() {
     }
 
 
-    console.log("\n--- Case 3: INVALID/ERROR path hands off to Google exactly once (fault injection) ---");
+    console.log("\n--- Case 3: INVALID/ERROR path asks consent and hands off to ONE new tab (fault injection) ---");
     {
       const { call } = await openTab();
       // Fault injection at the network layer only: block the model/CDN hosts so
@@ -335,77 +335,68 @@ async function runChromeE2e() {
       // code is mocked or reimplemented.
       await call("Network.enable");
       await call("Network.setBlockedURLs", { urls: ["*huggingface.co*", "*hf.co*", "*hf-mirror.com*"] });
+      const CASE_Q = "3+4+6 等於多少？（只回答數字）";
       const setQ = `(() => {
         const ta = document.querySelector("#auto-question");
         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
-        setter.call(ta, "3+4+6 等於多少？（只回答數字）");
+        setter.call(ta, ${JSON.stringify(CASE_Q)});
         ta.dispatchEvent(new Event("input", { bubbles: true }));
       })()`;
       await evalIn(call, setQ);
       await submitForm(call);
-      // NOTE: Location members are [Unforgeable] (own, non-configurable
-      // properties of the Location instance), so no prototype override can
-      // intercept window.location.assign. The one-shot Google handoff is
-      // therefore verified CDP-side: when the real same-tab navigation fires,
-      // the page context dies and the tab's URL becomes the canonical Google
-      // AI Mode URL. nav-count semantics stay covered by createAutoFallbackGuard
-      // unit tests; this case proves the real navigation and its exact target.
-      let outcome = null;
+      // Blocker-1 contract (owner 2026-09-24 19:22): a local failure no longer
+      // has any same-tab route to take. The page must stay on the site and show
+      // the per-question consent dialog that names the failure. "The page
+      // context died" is therefore a regression, not (as before) the evidence.
+      let dialog = null;
       const deadline = Date.now() + 120 * 1000;
-      while (Date.now() < deadline) {
-        const state = await evalIn(call, `(() => ({
-          error: document.querySelector(".v2-auto-status")?.innerText ?? null,
-          answer: document.querySelector(".v2-auto-answer pre")?.innerText ?? null,
-          url: location.href,
-        }))()`).catch(() => null);
-        if (state === null) break; // real navigation happened (page context gone)
-        if (state.error && /Google/.test(state.error)) { outcome = { error: state.error }; break; }
+      while (Date.now() < deadline && !dialog) {
+        const state = await evalIn(call, `(() => {
+          const box = document.querySelector(".v2-subject-consent");
+          return {
+            alive: true,
+            url: location.href,
+            nav: window.__nav ? window.__nav.length : -1,
+            consent: box ? box.innerText : null,
+            alert: document.querySelector('p[role="alert"]')?.innerText ?? null,
+          };
+        })()`).catch(() => ({ alive: false }));
+        if (!state.alive) throw new Error("Case 3: the student page navigated away — same-tab handoff is back (blocker 1 regression)");
+        if (state.consent) { dialog = state; break; }
         await sleep(2000);
       }
-      // Read the tab URL from CDP (works even after the page context died).
-      const tabId = await call("Target.getTargetInfo").then((r) => r.targetInfo.targetId).catch(() => null);
-      let navUrl = null;
-      for (let i = 0; i < 20 && !navUrl; i += 1) {
+      if (!dialog) throw new Error(`Case 3: no per-question Google consent dialog after a local failure. last=${JSON.stringify(dialog)}`);
+      assert.equal(dialog.url.startsWith(SITE), true, "the consent dialog must not have moved the page");
+      assert.equal(dialog.nav, 0, "no location.assign attempt may be recorded");
+      assert.match(dialog.consent, /本機 AI 未能完成/, "the dialog must name the local failure, not the unsupported subject");
+      assert.match(dialog.consent, /新分頁/, "the dialog must say the answer opens in a new tab");
+      assert.doesNotMatch(dialog.consent, /改以資訊科試解|改以會計科試解/, "a local failure must not offer the subject-only model shortcuts");
+      console.log("  [consent dialog]", dialog.consent.replace(/\s+/g, " ").slice(0, 220));
+      // Consent given with a REAL trusted click: exactly one new tab opens and
+      // this page is untouched. A popup-blocked run fails this case loudly —
+      // headless Chrome does not block, so a missing tab is a bug, not noise.
+      const pageIds = async () => (await (await fetch(`${CDP}/json/list`)).json()).filter((t) => t.type === "page").map((t) => t.id);
+      const tabsBefore = await pageIds();
+      const clicked = await trustedClick(call, ".v2-subject-consent button.v2-button-primary");
+      if (!clicked) throw new Error("Case 3: consent button not found/clickable");
+      let handoffUrl = null;
+      let extra = [];
+      for (let i = 0; i < 25 && !handoffUrl; i += 1) {
         await sleep(1000);
-        const targets = await (await fetch(`${CDP}/json/list`)).json();
-        const t = tabId ? targets.find((x) => x.id === tabId) : null;
-        if (t && t.url.startsWith("https://www.google.com/")) navUrl = t.url;
+        extra = (await (await fetch(`${CDP}/json/list`)).json()).filter((t) => t.type === "page" && !tabsBefore.includes(t.id));
+        handoffUrl = extra.find((t) => t.url.startsWith("https://www.google.com/"))?.url ?? null;
       }
-      if (!navUrl) {
-        // Consent-gated contract: when the submit gesture's user activation has
-        // expired (the fault fires long after the click), the app must NOT
-        // auto-jump — it renders one explicit backup link instead. Verify the
-        // link's canonical params, then exercise the handoff with a REAL
-        // trusted click (valid user gesture) and observe the navigation CDP-side.
-        const linkCheck = await evalIn(call, `(() => {
-          const a = Array.from(document.querySelectorAll("a.v2-gesture-button")).find((x) => /google\\.com\\/search/.test(x.href));
-          return a ? { href: a.href } : null;
-        })()`).catch(() => null);
-        if (linkCheck && /請點擊下方連結|備援連結/.test(outcome?.error ?? "")) {
-          const lu = new URL(linkCheck.href);
-          assert.equal(lu.origin + lu.pathname, "https://www.google.com/search");
-          assert.equal(lu.searchParams.get("udm"), "50");
-          assert.equal(lu.searchParams.get("aep"), "11");
-          assert.equal(lu.searchParams.get("hl"), "zh-TW");
-          assert.ok(lu.searchParams.get("q"), "handoff URL must carry the original question");
-          await trustedClick(call, "a.v2-gesture-button[href*='google.com/search']");
-          for (let i = 0; i < 20 && !navUrl; i += 1) {
-            await sleep(1000);
-            const targets = await (await fetch(`${CDP}/json/list`)).json();
-            const t = tabId ? targets.find((x) => x.id === tabId) : null;
-            if (t && t.url.startsWith("https://www.google.com/")) navUrl = t.url;
-          }
-          if (!navUrl) throw new Error(`Case 3: backup link clicked but no Google navigation observed. href=${linkCheck.href}`);
-        } else {
-          const finalState = await evalIn(call, `({ error: document.querySelector(".v2-auto-status")?.innerText, url: location.href })`).catch(() => ({ url: "page navigated (context gone)" }));
-          throw new Error(`Case 3: no Google navigation observed. final=${JSON.stringify(finalState)}`);
-        }
-      }
+      const stillHere = await evalIn(call, `({ url: location.href, nav: window.__nav.length })`).catch(() => ({ url: "CONTEXT GONE" }));
+      assert.equal(stillHere.url.startsWith(SITE), true, `the student page must survive the handoff, got ${stillHere.url}`);
+      assert.equal(stillHere.nav, 0, "the student page must never be assigned to Google");
+      if (!handoffUrl) throw new Error(`Case 3: consented click opened no Google tab. extra=${JSON.stringify(extra.map((t) => t.url))}`);
+      const openedTabs = extra.filter((t) => t.url.startsWith("https://www.google.com/"));
+      assert.equal(openedTabs.length, 1, `consent opens exactly one new tab, got ${openedTabs.length}`);
       // Google may immediately redirect /search to /sorry (CAPTCHA). Per owner
       // ruling, /sorry proves the navigation succeeded — never that Google
       // answered. The canonical handoff params are checked on whichever URL
       // Google actually served (for /sorry, inside its `continue` parameter).
-      let u = new URL(navUrl);
+      let u = new URL(handoffUrl);
       if (u.pathname.startsWith("/sorry")) {
         const cont = u.searchParams.get("continue");
         assert.ok(cont, "sorry redirect must carry the original target in `continue`");
@@ -415,10 +406,10 @@ async function runChromeE2e() {
       assert.equal(u.searchParams.get("udm"), "50");
       assert.equal(u.searchParams.get("aep"), "11");
       assert.equal(u.searchParams.get("hl"), "zh-TW");
-      assert.equal(u.searchParams.get("q"), "3+4+6 等於多少？（只回答數字）");
-      console.log("  [handoff url]", navUrl);
-      if (outcome?.error) console.log("  [error text]", outcome.error);
-      console.log("PASS: real local-error path navigated exactly once (same-tab) to the canonical Google AI Mode URL with the original question. Per owner ruling, this proves navigation only — NOT that Google answered.");
+      assert.equal(u.searchParams.get("q"), CASE_Q);
+      console.log("  [handoff url]", handoffUrl);
+      console.log("PASS: real local-error path asked per-question consent, kept the student page, and opened exactly ONE new tab on the canonical Google AI Mode URL with the original question. Per owner ruling, this proves navigation only — NOT that Google answered.");
+      for (const tab of extra) await fetch(`${CDP}/json/close/${tab.id}`).catch(() => {});
       await closeTab(call);
     }
 

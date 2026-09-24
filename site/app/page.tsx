@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { AutoAiStatus, createAutoSubmitter } from "./chrome-built-in-ai";
-import { buildGoogleAiModeUrl, createAutoFallbackGuard, openConsentHandoffTab, validateLocalAnswer } from "./auto-fallback";
+import { buildGoogleAiModeUrl, createAutoFallbackGuard, handoffReasonLabel, openConsentHandoffTab, validateLocalAnswer } from "./auto-fallback";
 import {
   createLocalModelFetchAdapter,
   runLocalModelBootstrap,
@@ -39,6 +39,12 @@ export default function Home() {
   const [backupGoogleUrl, setBackupGoogleUrl] = useState("");
   const [showSubjectConsent, setShowSubjectConsent] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState("");
+  // Which of the two reasons opened the current consent dialog, and (for a local
+  // failure) the learner-facing cause. `pendingQuestion` alone cannot tell them
+  // apart, and the copy must never claim "this subject is unsupported" when the
+  // model actually timed out.
+  const [consentKind, setConsentKind] = useState<"subject" | "failure">("subject");
+  const [consentReason, setConsentReason] = useState("");
   const autoSubmitter = useRef(createAutoSubmitter());
   const isLoadingRef = useRef(false);
   const lastProgressAt = useRef(0);
@@ -141,7 +147,22 @@ export default function Home() {
   }
 
   /**
-   * Handle OTHER/UNKNOWN handoff to Google AI Mode after explicit consent.
+   * Open the per-question Google consent dialog. Both unsupported subjects and
+   * local-model failures (INVALID answer, timeout, runtime error) arrive here:
+   * the page itself never navigates, so the learner always sees the reason and
+   * presses the button that opens ONE new tab. A fresh dialog mints a fresh
+   * one-tab budget; the guard survives double clicks on the button.
+   */
+  function requestConsentedHandoff(prompt: string, kind: "subject" | "failure", reason = "") {
+    consentGuardRef.current = createAutoFallbackGuard();
+    setPendingQuestion(prompt);
+    setConsentKind(kind);
+    setConsentReason(kind === "failure" ? handoffReasonLabel(reason) : "");
+    setShowSubjectConsent(true);
+  }
+
+  /**
+   * Execute the consented Google handoff for either dialog kind.
    * Contract: the consented click opens ONE new tab and this page stays put —
    * never `location.assign`, never a retry that multiplies tabs, never an
    * automatic re-submit of the question.
@@ -179,9 +200,7 @@ export default function Home() {
     if (!canUseLocalModel(effectiveCategory)) {
       // Fresh dialog = fresh consent = one new-tab budget. The ref survives the
       // dialog's own double clicks.
-      consentGuardRef.current = createAutoFallbackGuard();
-      setPendingQuestion(prompt);
-      setShowSubjectConsent(true);
+      requestConsentedHandoff(prompt, "subject");
       return;
     }
 
@@ -214,14 +233,14 @@ export default function Home() {
         fallbackGuard.done();
         return;
       }
-      handOffToGoogle(prompt, verdict.reason, fallbackGuard);
+      requestFailureHandoff(prompt, verdict.reason, fallbackGuard);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "目前無法取得 AI 回答。";
       if (/已取消/.test(message)) {
         fallbackGuard.cancel();
         setError(message);
       } else {
-        handOffToGoogle(prompt, /逾時|abort/i.test(message) ? "timeout" : "local-error", fallbackGuard);
+        requestFailureHandoff(prompt, /逾時|abort/i.test(message) ? "timeout" : "local-error", fallbackGuard);
       }
     } finally {
       isLoadingRef.current = false;
@@ -241,27 +260,14 @@ export default function Home() {
         .catch(() => {});
     }
 
-    function handOffToGoogle(originalQuestion: string, reason: string, guard: ReturnType<typeof createAutoFallbackGuard>) {
-      const url = buildGoogleAiModeUrl(originalQuestion);
-      if (!guard.navigateOnce()) return;
-      // Consent-gated handoff (I-6/C-14 contract): the one-shot auto navigation
-      // runs only while the submission gesture's user activation is still
-      // active. Once activation is lost we never fake a gesture or auto-jump —
-      // the learner gets one explicit, clearly-labelled link instead.
-      const activationActive = typeof navigator !== "undefined" && navigator.userActivation?.isActive === true;
-      if (activationActive) {
-        setError(`地端 AI 無法完成（${reason}），正在自動開啟 Google AI 解答。本站不會讀取或回填 Google 的回答。`);
-        try {
-          window.location.assign(url);
-        } catch {
-          // A policy/browser navigation block is the only case that exposes the backup link.
-          setBackupGoogleUrl(url);
-          setError(`地端 AI 無法完成（${reason}）。Google AI 導航遭阻擋，請使用備援連結。`);
-        }
-      } else {
-        setBackupGoogleUrl(url);
-        setError(`地端 AI 無法完成（${reason}）。請點擊下方連結前往 Google AI 解答（同分頁開啟；本站不會讀取或回填 Google 的回答）。`);
-      }
+    function requestFailureHandoff(originalQuestion: string, reason: string, guard: ReturnType<typeof createAutoFallbackGuard>) {
+      // The local attempt is terminal: `done()` consumes the GENERATING budget so
+      // this submission can never navigate later, and the learner-facing route
+      // only exists behind the consent dialog below. No `location.assign`, no
+      // user-activation sniffing - an automatic jump was the finding.
+      guard.done();
+      setError(`地端 AI 無法完成這一道題（${handoffReasonLabel(reason)}）。本頁保持原樣，不會自動跳頁。`);
+      requestConsentedHandoff(originalQuestion, "failure", reason);
     }
   }
 
@@ -269,11 +275,15 @@ export default function Home() {
     <header className="v2-nav shell"><a className="v2-brand" href="#top" aria-label="AI-SmartBook 首頁"><BrandMark /><strong>AI-SmartBook</strong></a><nav aria-label="主要導覽"><a href="#features">功能</a><a href="#auto-answer">公開問答</a><a href="#workflow">使用方式</a><a href="#structure">系統架構</a></nav><a className="v2-nav-login" href={studentRoute}>學員登入 <span aria-hidden="true">↗</span></a></header>
     <section className="v2-hero shell" id="top"><div className="v2-hero-copy v2-reveal"><p className="v2-eyebrow"><span />學習，不必在工具之間來回切換</p><h1>把閱讀、提問與<br /><em>下一步</em>放在一起。</h1><p className="v2-lead">AI-SmartBook 是以教材閱讀為中心的學習工作台。從進入書庫，到理解內容與回顧進度，每一步都有清楚的位置。</p><div className="v2-actions"><a className="v2-button v2-button-primary" href={studentRoute}>開始學習 <span aria-hidden="true">→</span></a><a className="v2-button v2-button-secondary" href="#auto-answer">體驗公開問答 <span aria-hidden="true">↓</span></a></div><p className="v2-note">使用既有學員帳號登入即可進入個人學習工作台。</p></div><div className="v2-hero-art v2-reveal v2-delay-1" role="img" aria-label="AI-SmartBook 學習介面示意"><div className="v2-orbit v2-orbit-one" /><div className="v2-orbit v2-orbit-two" /><div className="v2-product-card"><div className="v2-product-top"><span className="v2-mini-brand">✦</span><span>我的學習工作台</span><i /></div><div className="v2-product-body"><aside><span className="active" /><span /><span /><span /></aside><div className="v2-product-content"><p>正在閱讀</p><h2>從教材開始整理你的理解</h2><div className="v2-reading-lines"><b /><b /><b /><b /></div><div className="v2-question"><span>✦</span><p>針對這一段提出問題</p><span aria-hidden="true">↑</span></div></div></div></div><div className="v2-float-card v2-float-progress"><span>◔</span><div><small>學習脈絡</small><b>接續上次閱讀</b></div></div><div className="v2-float-card v2-float-answer"><span>✦</span><div><small>閱讀輔助</small><b>把疑問留在此處</b></div></div></div></section>
     <section className="v2-trust shell" aria-label="產品重點"><span>READ</span><i /><span>ASK</span><i /><span>ORGANIZE</span><i /><span>CONTINUE</span></section>
-    <section className="v2-auto shell" id="auto-answer" aria-labelledby="auto-heading"><div><p className="v2-eyebrow"><span />Chrome Built-in AI</p><h2 id="auto-heading">直接在這裡，開始你的問題。</h2><p>資訊（程式設計、資訊安全、資料結構…）與會計題目會以本機 Qwen3-0.6B 優先作答（首次需下載約 618MB 模型）。其他科目則不下載模型，經您同意後在新分頁以 Google AI Mode 為您尋找解答（本頁保持原樣）。</p></div><form className="v2-auto-form" onSubmit={submit}><label htmlFor="auto-question">輸入你的問題</label><textarea id="auto-question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：請解釋這個段落的重點……" disabled={isLoading} /><div className="v2-auto-controls"><select value={model} onChange={(event) => setModel(event.target.value)} aria-label="AI 模型" disabled={isLoading}><option value="Auto">Auto (Qwen3-0.6B)</option><option value="Qwen3-0.6B">Qwen3-0.6B</option></select><select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="解題模式" disabled={isLoading}><option>自動判斷</option><option>程式設計</option><option>數學解題</option><option>文科問答</option><option>資通安全</option><option>教材問答</option></select><button className="v2-button v2-button-primary" type="submit" disabled={!question.trim() || isLoading}>{isLoading ? "處理中…" : "送出問題"}</button></div><div className="v2-quick-modes" aria-label="快速題型">{quickModes.map((item) => <button key={item} type="button" aria-pressed={mode === item} onClick={() => setMode(item)} disabled={isLoading}>{item}</button>)}</div>{isLoading && <p className="v2-auto-status" role="status">{statusText(aiStatus, downloadProgress, downloadBytes)}</p>}{(aiStatus === "native model download" || aiStatus === "local model download") && isLoading && <button className="v2-gesture-button" type="button" onClick={() => autoSubmitter.current.cancel()}>取消下載</button>}{downloadStalled && isLoading && <span className="v2-gesture-button" role="alert">下載停滯（連續 90 秒無新資料）</span>}{downloadStalled && isLoading && <button className="v2-gesture-button" type="button" onClick={retryDownload}>重新下載</button>}{downloadStalled && isLoading && <a className="v2-gesture-button" href={buildGoogleAiModeUrl(question)}>改用 Google AI 求解</a>}{error && <p className="v2-auto-status" role="alert">{aiStatus ? `[${aiStatus}] ` : ""}{error}</p>}{backupGoogleUrl && <a className="v2-gesture-button" href={backupGoogleUrl} target="_blank" rel="noopener noreferrer">在新分頁開啟 Google AI 備援連結</a>}{needsGesture && !isLoading && <button className="v2-gesture-button" type="button" onClick={() => { void submit(); }}>開始下載本機模型</button>}{cacheNote && !isLoading && <p className="v2-auto-status" role="status">{cacheNote}</p>}{answer && <section className="v2-auto-answer" aria-label="本機 AI 回答"><p role="status">本機 AI 回答</p><pre>{answer}</pre><p className="v2-auto-status" role="status">本機模型回答僅供參考，內容未經外部事實查證（NEEDS_GUARD）；如需確認建議另行查證或前往 Google AI。</p></section>}
+    <section className="v2-auto shell" id="auto-answer" aria-labelledby="auto-heading"><div><p className="v2-eyebrow"><span />Chrome Built-in AI</p><h2 id="auto-heading">直接在這裡，開始你的問題。</h2><p>資訊（程式設計、資訊安全、資料結構…）與會計題目會以本機 Qwen3-0.6B 優先作答（首次需下載約 618MB 模型）。其他科目則不下載模型，經您同意後在新分頁以 Google AI Mode 為您尋找解答（本頁保持原樣）。</p></div><form className="v2-auto-form" onSubmit={submit}><label htmlFor="auto-question">輸入你的問題</label><textarea id="auto-question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：請解釋這個段落的重點……" disabled={isLoading} /><div className="v2-auto-controls"><select value={model} onChange={(event) => setModel(event.target.value)} aria-label="AI 模型" disabled={isLoading}><option value="Auto">Auto (Qwen3-0.6B)</option><option value="Qwen3-0.6B">Qwen3-0.6B</option></select><select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="解題模式" disabled={isLoading}><option>自動判斷</option><option>程式設計</option><option>數學解題</option><option>文科問答</option><option>資通安全</option><option>教材問答</option></select><button className="v2-button v2-button-primary" type="submit" disabled={!question.trim() || isLoading}>{isLoading ? "處理中…" : "送出問題"}</button></div><div className="v2-quick-modes" aria-label="快速題型">{quickModes.map((item) => <button key={item} type="button" aria-pressed={mode === item} onClick={() => setMode(item)} disabled={isLoading}>{item}</button>)}</div>{isLoading && <p className="v2-auto-status" role="status">{statusText(aiStatus, downloadProgress, downloadBytes)}</p>}{(aiStatus === "native model download" || aiStatus === "local model download") && isLoading && <button className="v2-gesture-button" type="button" onClick={() => autoSubmitter.current.cancel()}>取消下載</button>}{downloadStalled && isLoading && <span className="v2-gesture-button" role="alert">下載停滯（連續 90 秒無新資料）</span>}{downloadStalled && isLoading && <button className="v2-gesture-button" type="button" onClick={retryDownload}>重新下載</button>}{downloadStalled && isLoading && <a className="v2-gesture-button" href={buildGoogleAiModeUrl(question)} target="_blank" rel="noopener noreferrer">改用 Google AI 求解（新分頁）</a>}{error && <p className="v2-auto-status" role="alert">{aiStatus ? `[${aiStatus}] ` : ""}{error}</p>}{backupGoogleUrl && <a className="v2-gesture-button" href={backupGoogleUrl} target="_blank" rel="noopener noreferrer">在新分頁開啟 Google AI 備援連結</a>}{needsGesture && !isLoading && <button className="v2-gesture-button" type="button" onClick={() => { void submit(); }}>開始下載本機模型</button>}{cacheNote && !isLoading && <p className="v2-auto-status" role="status">{cacheNote}</p>}{answer && <section className="v2-auto-answer" aria-label="本機 AI 回答"><p role="status">本機 AI 回答</p><pre>{answer}</pre><p className="v2-auto-status" role="status">本機模型回答僅供參考，內容未經外部事實查證（NEEDS_GUARD）；如需確認建議另行查證或前往 Google AI。</p></section>}
 </form>
 {showSubjectConsent && !isLoading && (
-  <div className="v2-subject-consent" role="dialog" aria-modal="true" aria-label="非資訊或會計題目的輔助說明">
-    <p>此題目前歸類為「<strong>{subjectCategoryLabel(subjectCategory)}</strong>」，本機模型僅支援資訊／會計科目。</p>
+  <div className="v2-subject-consent" role="dialog" aria-modal="true" aria-label="前往 Google AI 的逐題同意">
+    {consentKind === "subject" ? (
+      <p>此題目前歸類為「<strong>{subjectCategoryLabel(subjectCategory)}</strong>」，本機模型僅支援資訊／會計科目。</p>
+    ) : (
+      <p>本機 AI 未能完成<b>這一題</b>（原因：{consentReason}）。本頁不會自動跳頁，也不會重複送題。</p>
+    )}
     <p>選擇「同意並在新分頁開啟」後，本站會將您的題目加上告知後，於<b>新分頁</b>以 Google AI Mode 單次為您尋找解答；本頁會保持原樣，不會跳離。本站不會讀取或回填外部搜尋結果，也不會自動重新送題。</p>
     <div className="v2-subject-consent-actions">
       <button className="v2-button v2-button-primary" type="button" onClick={() => { setShowSubjectConsent(false); handleOtherHandoff(pendingQuestion); }}>
@@ -282,12 +292,14 @@ export default function Home() {
       <button className="v2-button v2-button-secondary" type="button" onClick={() => setShowSubjectConsent(false)}>
         取消
       </button>
-      <button className="v2-button v2-button-secondary" type="button" onClick={() => handleManualOverride("IT")}>
-        改以資訊科試解（載入模型）
-      </button>
-      <button className="v2-button v2-button-secondary" type="button" onClick={() => handleManualOverride("ACCOUNTING")}>
-        改以會計科試解（載入模型）
-      </button>
+      {consentKind === "subject" && <>
+        <button className="v2-button v2-button-secondary" type="button" onClick={() => handleManualOverride("IT")}>
+          改以資訊科試解（載入模型）
+        </button>
+        <button className="v2-button v2-button-secondary" type="button" onClick={() => handleManualOverride("ACCOUNTING")}>
+          改以會計科試解（載入模型）
+        </button>
+      </>}
     </div>
   </div>
 )}
