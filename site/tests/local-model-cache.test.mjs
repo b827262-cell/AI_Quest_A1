@@ -450,4 +450,3 @@ test("ensure fails closed on a 206 instead of persisting a truncated model file"
   assert.equal(result.failedCount, 1);
   assert.equal(cache.store.has(cacheKey(IDENTITY, URL_A)), false);
 });
-
