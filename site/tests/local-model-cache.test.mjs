@@ -363,3 +363,91 @@ test("readManifest tolerates legacy string-array manifests and delete is revisio
   assert.equal(cache.store.has(manifestKeyOf(IDENTITY)), false);
   assert.equal(cache.store.has(cacheKey(other, URL_B)), true, "other identity bytes must be untouched");
 });
+
+test("a 206 slice is served but never persisted; a 200 to the same request is", async () => {
+  const cache = makeCache();
+  const network = makeFetch(
+    () => new Response(bytesFor(URL_A, 100), { status: 206, headers: { "content-range": "bytes 0-99/618000000" } }),
+  );
+  const fetchImpl = createModelCacheFetch(IDENTITY, network, { cache });
+  const first = await fetchImpl(URL_A, { headers: { Range: "bytes=0-99" } });
+  assert.equal((await first.arrayBuffer()).byteLength, 100, "the caller still gets the partial body");
+  assert.equal(
+    cache.store.has(cacheKey(IDENTITY, URL_A)),
+    false,
+    "a truncated slice must never become a warm entry under the full-artifact key",
+  );
+  await fetchImpl(URL_A);
+  assert.equal(network.calls.length, 2, "nothing was poisoned, so the next read still goes to the network");
+
+  // A compliant server answers a Range request with 200 + the whole resource;
+  // that must still be cached, or ranged artifact loads would never warm up.
+  const whole = makeFetch(() => new Response(bytesFor(URL_A, 300), { status: 200 }));
+  const rangedCache = makeCache();
+  const rangedImpl = createModelCacheFetch(IDENTITY, whole, { cache: rangedCache });
+  const stored = await rangedImpl(URL_A, { headers: { Range: "bytes=0-" } });
+  assert.equal((await stored.arrayBuffer()).byteLength, 300);
+  assert.equal(rangedCache.store.has(cacheKey(IDENTITY, URL_A)), true);
+  await rangedImpl(URL_A);
+  assert.equal(whole.calls.length, 1, "the whole body replays from cache with zero re-GET");
+});
+
+test("warm replay drops transport headers so decoded bytes are not decoded twice", async () => {
+  const cache = makeCache();
+  const network = makeFetch(
+    () =>
+      new Response(bytesFor(URL_A, 300), {
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-encoding": "gzip",
+          "content-length": "118",
+          "transfer-encoding": "chunked",
+        },
+      }),
+  );
+  const fetchImpl = createModelCacheFetch(IDENTITY, network, { cache });
+  await fetchImpl(URL_A);
+
+  const stored = cache.store.get(cacheKey(IDENTITY, URL_A));
+  assert.ok(stored, "the whole 200 body is persisted");
+  assert.equal(stored.headers["content-encoding"], undefined, "body is stored decoded, not gzip");
+  assert.equal(stored.headers["content-length"], undefined, "stale length must not outlive the body");
+  assert.equal(stored.headers["transfer-encoding"], undefined);
+  assert.equal(stored.headers["content-type"], "application/octet-stream", "content metadata is preserved");
+  assert.equal(stored.bytes.byteLength, 300);
+
+  const warm = await fetchImpl(URL_A);
+  assert.equal((await warm.arrayBuffer()).byteLength, 300);
+  assert.equal(warm.headers.get("content-encoding"), null);
+  assert.equal(network.calls.length, 1, "the sanitized entry replays with zero re-GET");
+});
+
+test("an unreadable warm entry falls back to the network instead of failing the load", async () => {
+  const cache = makeCache();
+  await seedAsset(cache, IDENTITY, URL_A, 300);
+  cache.match = async () => {
+    throw new DOMException("read failed");
+  };
+  const network = makeFetch(() => new Response(bytesFor(URL_A, 300)));
+  const fetchImpl = createModelCacheFetch(IDENTITY, network, { cache });
+  const response = await fetchImpl(URL_A);
+  assert.equal((await response.arrayBuffer()).byteLength, 300);
+  assert.equal(network.calls.length, 1);
+});
+
+test("ensure fails closed on a 206 instead of persisting a truncated model file", async () => {
+  const cache = makeCache();
+  const network = makeFetch(
+    () => new Response(bytesFor(URL_A, 100), { status: 206 }),
+  );
+  const result = await ensureLocalModelCache({
+    identity: IDENTITY,
+    assets: [{ url: URL_A, expectedBytes: 0 }],
+    env: { cache, fetch: network },
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.downloadedCount, 0);
+  assert.equal(result.failedCount, 1);
+  assert.equal(cache.store.has(cacheKey(IDENTITY, URL_A)), false);
+});
+

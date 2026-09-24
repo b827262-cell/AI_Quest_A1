@@ -4,6 +4,13 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { AutoAiStatus, createAutoSubmitter } from "./chrome-built-in-ai";
 import { buildGoogleAiModeUrl, createAutoFallbackGuard, validateLocalAnswer } from "./auto-fallback";
 import {
+  createLocalModelFetchAdapter,
+  runLocalModelBootstrap,
+  LOCAL_MODEL_ID,
+  LOCAL_MODEL_IDENTITY,
+  type ModelFetchAdapter,
+} from "./local-model-bootstrap";
+import {
   classifySubject,
   canUseLocalModel,
   subjectCategoryLabel,
@@ -36,6 +43,10 @@ export default function Home() {
   const isLoadingRef = useRef(false);
   const lastProgressAt = useRef(0);
   const manualOverrideRef = useRef<SubjectCategory | null>(null);
+  // D-07 durable local-model cache: a non-blocking integrity badge plus the
+  // cache-backed fetch adapter that Transformers.js reads/writes through.
+  const [cacheNote, setCacheNote] = useState("");
+  const cacheFetchRef = useRef<ModelFetchAdapter | null>(null);
 
   // Subject Triage First: classify synchronously during render — no model download
   // Pure computation (no async, no side effects) — safe to compute during render
@@ -54,6 +65,45 @@ export default function Home() {
     }, 5_000);
     return () => clearInterval(timer);
   }, [downloading]);
+
+  // D-07 page-open integrity probe. Runs strictly AFTER first paint: the probe
+  // is a zero-GET Cache Storage integrity check and any repair is scheduled as
+  // a fire-and-forget background task, so the OTHER/UI consent flow and the
+  // Google AI handoff are never blocked by model-cache work. A pristine cache
+  // intentionally starts no download here — the ~618MB fetch only begins on a
+  // real IT/ACCOUNTING submit (user gesture), preserving zero-download for
+  // OTHER/UNKNOWN questions.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    cacheFetchRef.current = createLocalModelFetchAdapter();
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      if (controller.signal.aborted) return;
+      void runLocalModelBootstrap({
+        identity: LOCAL_MODEL_IDENTITY,
+        signal: controller.signal,
+        onStatus: (decision) => {
+          if (controller.signal.aborted) return;
+          if (decision.action === "warm") setCacheNote("本機模型快取已驗證完整，可直接載入。");
+          else if (decision.action === "repair")
+            setCacheNote(`偵測到模型快取缺損，背景修復中（${decision.missingCount + decision.corruptCount} 個檔案）…`);
+        },
+      })
+        .then((handle) => handle.ensure)
+        .then((result) => {
+          if (controller.signal.aborted || !result) return;
+          if (result.status === "warm" || result.status === "downloaded")
+            setCacheNote("本機模型快取已於背景準備完成。");
+          else if (result.status === "quota")
+            setCacheNote("本機模型快取空間不足，改為需要時再載入。");
+        })
+        .catch(() => {});
+    }, 0);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   function retryDownload() {
     autoSubmitter.current.cancel();
@@ -149,7 +199,7 @@ export default function Home() {
           if (typeof progress === "number" || bytes) lastProgressAt.current = Date.now();
           setNeedsGesture(status === "local model requires user activation");
         },
-        { localModelId: "onnx-community/Qwen3-0.6B-ONNX", timeoutMs: 45_000, downloadTimeoutMs: 15 * 60_000, forceLocalModel: true },
+        { localModelId: LOCAL_MODEL_ID, timeoutMs: 45_000, downloadTimeoutMs: 15 * 60_000, forceLocalModel: true, modelCacheFetch: cacheFetchRef.current?.fetch },
       );
       const verdict = validateLocalAnswer(prompt, finalAnswer);
       if (verdict.status === "VALID") {
@@ -169,6 +219,19 @@ export default function Home() {
     } finally {
       isLoadingRef.current = false;
       setIsLoading(false);
+      // D-07: fold the artifacts Transformers.js actually stored into the
+      // durable manifest (re-verifying warm bytes costs zero GET) so the next
+      // page open starts warm. This sits in `finally`, not on the VALID branch:
+      // bytes already paid for must survive an INVALID answer or a handoff, and
+      // an abort leaves only complete 200 bodies recorded, which stays
+      // resumable. Deliberately not awaited - cache bookkeeping never blocks
+      // rendering the answer.
+      void cacheFetchRef.current?.persistManifest()
+        .then((result) => {
+          if (result && (result.status === "warm" || result.status === "downloaded"))
+            setCacheNote("本機模型快取已更新，下次開啟可立即載入。");
+        })
+        .catch(() => {});
     }
 
     function handOffToGoogle(originalQuestion: string, reason: string, guard: ReturnType<typeof createAutoFallbackGuard>) {
@@ -199,7 +262,7 @@ export default function Home() {
     <header className="v2-nav shell"><a className="v2-brand" href="#top" aria-label="AI-SmartBook 首頁"><BrandMark /><strong>AI-SmartBook</strong></a><nav aria-label="主要導覽"><a href="#features">功能</a><a href="#auto-answer">公開問答</a><a href="#workflow">使用方式</a><a href="#structure">系統架構</a></nav><a className="v2-nav-login" href={studentRoute}>學員登入 <span aria-hidden="true">↗</span></a></header>
     <section className="v2-hero shell" id="top"><div className="v2-hero-copy v2-reveal"><p className="v2-eyebrow"><span />學習，不必在工具之間來回切換</p><h1>把閱讀、提問與<br /><em>下一步</em>放在一起。</h1><p className="v2-lead">AI-SmartBook 是以教材閱讀為中心的學習工作台。從進入書庫，到理解內容與回顧進度，每一步都有清楚的位置。</p><div className="v2-actions"><a className="v2-button v2-button-primary" href={studentRoute}>開始學習 <span aria-hidden="true">→</span></a><a className="v2-button v2-button-secondary" href="#auto-answer">體驗公開問答 <span aria-hidden="true">↓</span></a></div><p className="v2-note">使用既有學員帳號登入即可進入個人學習工作台。</p></div><div className="v2-hero-art v2-reveal v2-delay-1" role="img" aria-label="AI-SmartBook 學習介面示意"><div className="v2-orbit v2-orbit-one" /><div className="v2-orbit v2-orbit-two" /><div className="v2-product-card"><div className="v2-product-top"><span className="v2-mini-brand">✦</span><span>我的學習工作台</span><i /></div><div className="v2-product-body"><aside><span className="active" /><span /><span /><span /></aside><div className="v2-product-content"><p>正在閱讀</p><h2>從教材開始整理你的理解</h2><div className="v2-reading-lines"><b /><b /><b /><b /></div><div className="v2-question"><span>✦</span><p>針對這一段提出問題</p><span aria-hidden="true">↑</span></div></div></div></div><div className="v2-float-card v2-float-progress"><span>◔</span><div><small>學習脈絡</small><b>接續上次閱讀</b></div></div><div className="v2-float-card v2-float-answer"><span>✦</span><div><small>閱讀輔助</small><b>把疑問留在此處</b></div></div></div></section>
     <section className="v2-trust shell" aria-label="產品重點"><span>READ</span><i /><span>ASK</span><i /><span>ORGANIZE</span><i /><span>CONTINUE</span></section>
-    <section className="v2-auto shell" id="auto-answer" aria-labelledby="auto-heading"><div><p className="v2-eyebrow"><span />Chrome Built-in AI</p><h2 id="auto-heading">直接在這裡，開始你的問題。</h2><p>資訊（程式設計、資訊安全、資料結構…）與會計題目會以本機 Qwen3-0.6B 優先作答（首次需下載約 618MB 模型）。其他科目則不下載模型，經您同意後直接以 Google AI Mode 為您尋找解答。</p></div><form className="v2-auto-form" onSubmit={submit}><label htmlFor="auto-question">輸入你的問題</label><textarea id="auto-question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：請解釋這個段落的重點……" disabled={isLoading} /><div className="v2-auto-controls"><select value={model} onChange={(event) => setModel(event.target.value)} aria-label="AI 模型" disabled={isLoading}><option value="Auto">Auto (Qwen3-0.6B)</option><option value="Qwen3-0.6B">Qwen3-0.6B</option></select><select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="解題模式" disabled={isLoading}><option>自動判斷</option><option>程式設計</option><option>數學解題</option><option>文科問答</option><option>資通安全</option><option>教材問答</option></select><button className="v2-button v2-button-primary" type="submit" disabled={!question.trim() || isLoading}>{isLoading ? "處理中…" : "送出問題"}</button></div><div className="v2-quick-modes" aria-label="快速題型">{quickModes.map((item) => <button key={item} type="button" aria-pressed={mode === item} onClick={() => setMode(item)} disabled={isLoading}>{item}</button>)}</div>{isLoading && <p className="v2-auto-status" role="status">{statusText(aiStatus, downloadProgress, downloadBytes)}</p>}{(aiStatus === "native model download" || aiStatus === "local model download") && isLoading && <button className="v2-gesture-button" type="button" onClick={() => autoSubmitter.current.cancel()}>取消下載</button>}{downloadStalled && isLoading && <span className="v2-gesture-button" role="alert">下載停滯（連續 90 秒無新資料）</span>}{downloadStalled && isLoading && <button className="v2-gesture-button" type="button" onClick={retryDownload}>重新下載</button>}{downloadStalled && isLoading && <a className="v2-gesture-button" href={buildGoogleAiModeUrl(question)}>改用 Google AI 求解</a>}{error && <p className="v2-auto-status" role="alert">{aiStatus ? `[${aiStatus}] ` : ""}{error}</p>}{backupGoogleUrl && <a className="v2-gesture-button" href={backupGoogleUrl}>開啟 Google AI 備援連結</a>}{needsGesture && !isLoading && <button className="v2-gesture-button" type="button" onClick={() => { void submit(); }}>開始下載本機模型</button>}{answer && <section className="v2-auto-answer" aria-label="本機 AI 回答"><p role="status">本機 AI 回答</p><pre>{answer}</pre><p className="v2-auto-status" role="status">本機模型回答僅供參考，內容未經外部事實查證（NEEDS_GUARD）；如需確認建議另行查證或前往 Google AI。</p></section>}
+    <section className="v2-auto shell" id="auto-answer" aria-labelledby="auto-heading"><div><p className="v2-eyebrow"><span />Chrome Built-in AI</p><h2 id="auto-heading">直接在這裡，開始你的問題。</h2><p>資訊（程式設計、資訊安全、資料結構…）與會計題目會以本機 Qwen3-0.6B 優先作答（首次需下載約 618MB 模型）。其他科目則不下載模型，經您同意後直接以 Google AI Mode 為您尋找解答。</p></div><form className="v2-auto-form" onSubmit={submit}><label htmlFor="auto-question">輸入你的問題</label><textarea id="auto-question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：請解釋這個段落的重點……" disabled={isLoading} /><div className="v2-auto-controls"><select value={model} onChange={(event) => setModel(event.target.value)} aria-label="AI 模型" disabled={isLoading}><option value="Auto">Auto (Qwen3-0.6B)</option><option value="Qwen3-0.6B">Qwen3-0.6B</option></select><select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="解題模式" disabled={isLoading}><option>自動判斷</option><option>程式設計</option><option>數學解題</option><option>文科問答</option><option>資通安全</option><option>教材問答</option></select><button className="v2-button v2-button-primary" type="submit" disabled={!question.trim() || isLoading}>{isLoading ? "處理中…" : "送出問題"}</button></div><div className="v2-quick-modes" aria-label="快速題型">{quickModes.map((item) => <button key={item} type="button" aria-pressed={mode === item} onClick={() => setMode(item)} disabled={isLoading}>{item}</button>)}</div>{isLoading && <p className="v2-auto-status" role="status">{statusText(aiStatus, downloadProgress, downloadBytes)}</p>}{(aiStatus === "native model download" || aiStatus === "local model download") && isLoading && <button className="v2-gesture-button" type="button" onClick={() => autoSubmitter.current.cancel()}>取消下載</button>}{downloadStalled && isLoading && <span className="v2-gesture-button" role="alert">下載停滯（連續 90 秒無新資料）</span>}{downloadStalled && isLoading && <button className="v2-gesture-button" type="button" onClick={retryDownload}>重新下載</button>}{downloadStalled && isLoading && <a className="v2-gesture-button" href={buildGoogleAiModeUrl(question)}>改用 Google AI 求解</a>}{error && <p className="v2-auto-status" role="alert">{aiStatus ? `[${aiStatus}] ` : ""}{error}</p>}{backupGoogleUrl && <a className="v2-gesture-button" href={backupGoogleUrl}>開啟 Google AI 備援連結</a>}{needsGesture && !isLoading && <button className="v2-gesture-button" type="button" onClick={() => { void submit(); }}>開始下載本機模型</button>}{cacheNote && !isLoading && <p className="v2-auto-status" role="status">{cacheNote}</p>}{answer && <section className="v2-auto-answer" aria-label="本機 AI 回答"><p role="status">本機 AI 回答</p><pre>{answer}</pre><p className="v2-auto-status" role="status">本機模型回答僅供參考，內容未經外部事實查證（NEEDS_GUARD）；如需確認建議另行查證或前往 Google AI。</p></section>}
 </form>
 {showSubjectConsent && !isLoading && (
   <div className="v2-subject-consent" role="dialog" aria-modal="true" aria-label="非資訊或會計題目的輔助說明">

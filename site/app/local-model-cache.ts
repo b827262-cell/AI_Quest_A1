@@ -213,6 +213,24 @@ function freshRecord(
   };
 }
 
+/**
+ * Headers for a Cache Storage entry rebuilt from *decoded* bytes.
+ *
+ * `arrayBuffer()` yields the transport-decoded body, so carrying the original
+ * `content-encoding` / `content-length` / `transfer-encoding` would make the
+ * warm replay claim a compressed length it no longer has and get decoded a
+ * second time on read - delivering corrupt model bytes that still pass a
+ * presence-only check. Those three are exactly what the byte-size and digest
+ * verification below re-derives, so they must not be copied verbatim.
+ */
+function storableHeaders(source: Headers | undefined): Headers {
+  const headers = new Headers(source);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  headers.delete("transfer-encoding");
+  return headers;
+}
+
 async function digestHex(buffer: ArrayBuffer): Promise<string | null> {
   const subtle = (globalThis.crypto as Crypto | undefined)?.subtle;
   if (!subtle) return null;
@@ -359,19 +377,26 @@ export function createModelCacheFetch(
     const cache = env.cache;
     const key = cacheKey(identity, url);
 
-    const cached = cache ? await cache.match(key) : undefined;
+    // A warm hit must never be able to fail the load: an unreadable entry is
+    // treated as cold and repaired from the network below.
+    const cached = cache ? await cache.match(key).catch(() => undefined) : undefined;
     if (cached) return cached;
 
     const response = await (env.fetch as typeof fetch)(input, init);
     const isGet = (init?.method ?? "GET").toUpperCase() === "GET";
-    if (cache && response.ok && isGet) {
+    // Durability gate: only a whole-resource 200 may be written. A Range read is
+    // answered 206 with a slice of the artifact; storing that under the
+    // full-artifact key would later verify as "warm" with a matching byte length
+    // while the model file stayed truncated. A 200 answers a Range request with
+    // the full representation, so the request headers need no inspection.
+    if (cache && isGet && response.status === 200) {
       try {
         const buffer = await response.clone().arrayBuffer();
         const expectedBytes = buffer.byteLength;
         const replay = new Response(buffer.slice(0), {
           status: response.status,
           statusText: response.statusText,
-          headers: new Headers(response.headers),
+          headers: storableHeaders(response.headers),
         });
         await cache.put(key, replay);
         const digest =
@@ -539,6 +564,11 @@ export async function ensureLocalModelCache(
           method: "GET",
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        // A 206 here would be a truncated artifact; it must fail closed so the
+        // asset is retried rather than persisted as a short warm entry.
+        if (response.status !== 200) {
+          throw new Error(`unexpected partial response (HTTP ${response.status})`);
+        }
         const buffer = await response.arrayBuffer();
         const bytes = buffer.byteLength;
         if (asset.expectedBytes > 0 && bytes !== asset.expectedBytes) {
@@ -550,7 +580,7 @@ export async function ensureLocalModelCache(
         }
         await cache.put(
           cacheKey(identity, asset.url),
-          new Response(buffer.slice(0), { headers: new Headers(response.headers) }),
+          new Response(buffer.slice(0), { headers: storableHeaders(response.headers) }),
         );
         downloadedCount += 1;
         totalBytes += bytes;

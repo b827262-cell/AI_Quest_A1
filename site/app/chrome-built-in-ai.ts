@@ -419,6 +419,15 @@ export type AskOptions = {
   loadLocalLanguageModel?: () => Promise<ChromeAiEnvironment["LanguageModel"]>;
   /** Captured synchronously from the initiating UI gesture. */
   userActivation?: boolean;
+  /**
+   * D-07 cache-backed artifact fetch. When supplied, the Transformers.js
+   * browser backend reads model artifacts through it instead of hitting
+   * `globalThis.fetch` directly: a verified warm entry resolves from Cache
+   * Storage with *no network GET*, and a cold/missing entry is repaired and
+   * persisted. It must remain a `typeof fetch` so the abort-signal merge below
+   * still reaches the underlying in-flight download when `取消下載` fires.
+   */
+  modelCacheFetch?: typeof fetch;
 };
 
 interface PolyfillHostWindow {
@@ -695,7 +704,14 @@ export async function askWithChromeBuiltInAi(
                     const nextInit = merged
                       ? ({ ...(init as object), signal: AbortSignal.any(merged) } as RequestInit)
                       : init;
-                    return globalThis.fetch(input, nextInit);
+                    // D-07: when the caller supplied a cache-backed fetch, the
+                    // merged abort signal still rides in `nextInit` so the
+                    // repair download stays cancellable; a warm entry never
+                    // reaches the network. Otherwise behave exactly as before.
+                    const cacheFetch = options.modelCacheFetch;
+                    return cacheFetch
+                      ? cacheFetch(input, nextInit)
+                      : globalThis.fetch(input, nextInit);
                   },
             }
           : {}),
@@ -846,7 +862,7 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
       question: string,
       onChunk: (chunk: string) => void,
       onStatus?: StatusCallback,
-      submitOptions?: { localModelId?: string; timeoutMs?: number; downloadTimeoutMs?: number; forceLocalModel?: boolean } | string,
+      submitOptions?: { localModelId?: string; timeoutMs?: number; downloadTimeoutMs?: number; forceLocalModel?: boolean; modelCacheFetch?: typeof fetch } | string,
     ) {
       if (controller) throw new ChromeAiError("AI 回答處理中，請稍候。");
       controller = new AbortController();
@@ -892,6 +908,7 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
           userActivation,
           localModelId,
           forceLocalModel: typeof submitOptions === "string" ? false : submitOptions?.forceLocalModel,
+          modelCacheFetch: typeof submitOptions === "string" ? undefined : submitOptions?.modelCacheFetch,
         });
       } catch (error) {
         if (downloadTimedOut) throw new ChromeAiError("本機模型下載逾時，請檢查網路後重試；未使用任何雲端服務。");
