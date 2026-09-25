@@ -18,13 +18,18 @@ const repoDir = path.resolve(siteDir, "..");
 // provenance artifact and must be named explicitly for a negative comparison.
 const defaultManifest = path.join(repoDir, "docs/phase4a/environment-source-of-truth.staging.json");
 const defaultHosting = path.join(siteDir, ".openai/hosting.json");
+export const DEFAULT_MAX_AGE_HOURS = 72;
+// Owner D-09 F7 decision, recorded in docs/phase4a/F7_FRESHNESS_POLICY_D09.md.
+// This is an explicit, one-off credit for this decision only.  It is not a
+// calendar/weekend calculation and is deliberately not applied per holiday.
+export const ONE_TIME_HOLIDAY_DEDUCTION_HOURS = 24;
 
 function usage() {
-  console.error("Usage: node site/scripts/verify-environment-alignment.mjs [--manifest <path>] [--hosting <path>] [--max-age-hours <hours>] [--json]");
+  console.error("Usage: node site/scripts/verify-environment-alignment.mjs [--manifest <path>] [--hosting <path>] [--max-age-hours <hours>] [--test-run-at <iso-timestamp>] [--json]");
 }
 
 function parseArgs(args) {
-  const options = { manifest: defaultManifest, hosting: defaultHosting, maxAgeHours: 24, json: false };
+  const options = { manifest: defaultManifest, hosting: defaultHosting, maxAgeHours: DEFAULT_MAX_AGE_HOURS, json: false };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") options.json = true;
@@ -38,6 +43,11 @@ function parseArgs(args) {
       if (!value || value.startsWith("--")) throw new Error("Missing value for --max-age-hours");
       options.maxAgeHours = Number(value);
       if (!Number.isFinite(options.maxAgeHours) || options.maxAgeHours < 0) throw new Error("--max-age-hours must be a non-negative number");
+      index += 1;
+    } else if (arg === "--test-run-at") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) throw new Error("Missing value for --test-run-at");
+      options.testRunAt = value;
       index += 1;
     } else if (arg === "--help" || arg === "-h") {
       usage();
@@ -77,27 +87,58 @@ function gitCheck(args) {
   return result.status === 0;
 }
 
-function captureAgeMs(capturedAt) {
+function captureAgeMs(capturedAt, runAtMs) {
+  // A timezone is mandatory: a timestamp without one is ambiguous and cannot
+  // be accepted as control-plane evidence.
+  if (typeof capturedAt !== "string" || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(capturedAt)) return null;
   const parsed = Date.parse(capturedAt);
   if (Number.isNaN(parsed)) return null;
-  return Date.now() - parsed;
+  return runAtMs - parsed;
+}
+
+function taipeiTimestamp(timestampMs) {
+  if (!Number.isFinite(timestampMs)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(timestampMs));
+  const value = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day} ${value.hour}:${value.minute}:${value.second} +08:00`;
 }
 
 export function verifyEnvironment(options) {
   const errors = [];
   const checks = [];
+  const testRunAt = options.testRunAt ? new Date(options.testRunAt) : new Date();
+  const runAtMs = testRunAt.getTime();
   const manifest = readJson(options.manifest, "manifest", errors);
   const hosting = readJson(options.hosting, "hosting config", errors);
-  const capturedAtMs = manifest ? captureAgeMs(manifest.captured_at) : null;
+  const capturedAtMs = manifest && Number.isFinite(runAtMs) ? captureAgeMs(manifest.captured_at, runAtMs) : null;
+  const actualElapsedHours = capturedAtMs === null ? null : capturedAtMs / (3600 * 1000);
+  const effectiveAgeHours = actualElapsedHours === null
+    ? null
+    : Math.max(0, actualElapsedHours - ONE_TIME_HOLIDAY_DEDUCTION_HOURS);
 
   const check = (name, actual, expected, valid) => {
     checks.push({ name, status: valid ? "PASS" : "FAIL", actual: actual ?? null, expected: expected ?? null });
     if (!valid) errors.push(`${name}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
   };
 
-  // FPT-1: captured_at freshness (default max-age 24h; null/unparseable = FAIL)
-  const maxAgeMs = options.maxAgeHours * 3600 * 1000;
-  check("captured_at", manifest?.captured_at ?? null, `within ${options.maxAgeHours}h`, capturedAtMs !== null && capturedAtMs >= 0 && capturedAtMs <= maxAgeMs);
+  // FPT-1: missing timezone, null, unparseable, future, or stale evidence
+  // fail closed.  The D-09 credit is applied exactly once to elapsed time;
+  // it is never derived from weekends or reapplied for consecutive holidays.
+  check(
+    "captured_at",
+    manifest?.captured_at ?? null,
+    `effective age within ${options.maxAgeHours}h after one-time ${ONE_TIME_HOLIDAY_DEDUCTION_HOURS}h holiday deduction`,
+    capturedAtMs !== null && capturedAtMs >= 0 && effectiveAgeHours <= options.maxAgeHours,
+  );
 
   if (manifest && hosting) {
     check("manifest_version", manifest.manifest_version, "phase4a.environment-source-of-truth/v1", manifest.manifest_version === "phase4a.environment-source-of-truth/v1");
@@ -206,6 +247,17 @@ export function verifyEnvironment(options) {
     manifest: options.manifest,
     hosting: options.hosting,
     max_age_hours: options.maxAgeHours,
+    captured_at: manifest?.captured_at ?? null,
+    test_run_at: Number.isFinite(runAtMs) ? testRunAt.toISOString() : null,
+    test_run_at_taipei: taipeiTimestamp(runAtMs),
+    captured_at_taipei: manifest && typeof manifest.captured_at === "string" && !Number.isNaN(Date.parse(manifest.captured_at))
+      ? taipeiTimestamp(Date.parse(manifest.captured_at))
+      : null,
+    // Kept for consumers of the earlier schema; it is the unmodified elapsed age.
+    age_hours: actualElapsedHours,
+    actual_elapsed_hours: actualElapsedHours,
+    holiday_deduction_hours: ONE_TIME_HOLIDAY_DEDUCTION_HOURS,
+    effective_age_hours: effectiveAgeHours,
     predeploy_config: manifest?.environment === "staging" && manifest?.worker?.deployment_state === "predeploy" ? "PREDEPLOY_CONFIG_PASS" : null,
     postdeploy_live: manifest?.environment === "staging" && manifest?.worker?.deployment_state === "predeploy" ? "POSTDEPLOY_LIVE_PENDING" : null,
     checks,
@@ -233,6 +285,13 @@ function main() {
     console.log(`MANIFEST=${result.manifest}`);
     console.log(`HOSTING=${result.hosting}`);
     console.log(`MAX_AGE_HOURS=${result.max_age_hours}`);
+    console.log(`SOT_CAPTURED_AT=${result.captured_at}`);
+    console.log(`TEST_RUN_AT=${result.test_run_at}`);
+    console.log(`TEST_RUN_AT_TAIPEI=${result.test_run_at_taipei}`);
+    console.log(`SOT_CAPTURED_AT_TAIPEI=${result.captured_at_taipei}`);
+    console.log(`ACTUAL_ELAPSED_HOURS=${result.actual_elapsed_hours}`);
+    console.log(`HOLIDAY_DEDUCTION_HOURS=${result.holiday_deduction_hours}`);
+    console.log(`EFFECTIVE_AGE_HOURS=${result.effective_age_hours}`);
     if (result.predeploy_config) console.log(`PREDEPLOY_CONFIG=${result.predeploy_config}`);
     if (result.postdeploy_live) console.log(`POSTDEPLOY_LIVE=${result.postdeploy_live}`);
     for (const item of result.checks) console.log(`CHECK_${item.name}=${item.status}`);
