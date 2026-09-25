@@ -13,6 +13,7 @@
 // Enforced by tests/chrome-built-in-ai.test.mjs source and bundle gates.
 
 import { postprocessTraditionalChinese } from "./auto-fallback";
+import { createModelCacheFetch, deleteLocalModelCache, markLocalModelCacheReady } from "./local-model-cache";
 
 export type AutoAiStatus =
   | "native ready"
@@ -24,11 +25,8 @@ export type AutoAiStatus =
   | "local model ready"
   | "unsupported after fallback";
 
-export type StatusCallback = (
-  status: AutoAiStatus,
-  progress?: number | null,
-  bytes?: { received: number; total: number } | null,
-) => void;
+export type DownloadProgress = { loaded: number; total: number | null };
+export type StatusCallback = (status: AutoAiStatus, progress?: number | null, bytes?: DownloadProgress) => void;
 
 /**
  * Local-only failure evidence for mobile debugging. This deliberately excludes
@@ -110,6 +108,8 @@ export class ChromeAiError extends Error {
 // Neither model triggers cloud AI, and silent double downloads are strictly prevented.
 export const QWEN25_BASELINE_MODEL_ID = "onnx-community/Qwen2.5-0.5B-Instruct";
 export const QWEN3_TEST_MODEL_ID = "onnx-community/Qwen3-0.6B-ONNX";
+/** Cache identity is explicit. Change this only for an intentional model revision upgrade. */
+export const LOCAL_FALLBACK_MODEL_REVISION = "da1453100cf3ff33ef56d17983fc7a8648706db6";
 export const DEFAULT_LOCAL_FALLBACK_MODEL_ID = QWEN3_TEST_MODEL_ID;
 export const LOCAL_FALLBACK_MODEL_ID = DEFAULT_LOCAL_FALLBACK_MODEL_ID;
 export const SUPPORTED_LOCAL_MODELS = [
@@ -366,7 +366,7 @@ async function streamAnswer(
   }
   const answer = await session.prompt(prompt, options);
   if (signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
-    const cleanAnswer = postprocessTraditionalChinese(stripThinkingTags(answer));
+  const cleanAnswer = postprocessTraditionalChinese(stripThinkingTags(answer));
   if (guard) {
     emit(cleanAnswer);
     const tail = guard.finish();
@@ -593,9 +593,9 @@ export async function askWithChromeBuiltInAi(
           m.addEventListener("downloadprogress", (e: Event) => {
             const pe = e as ProgressLikeEvent;
             const loaded = Number(pe.loaded) || 0;
-            const total = Number(pe.total) || 1;
+            const total = Number(pe.total) || 0;
             const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
-            options.onStatus?.("native model download", progress);
+            options.onStatus?.("native model download", progress, { loaded, total: total > 0 ? total : null });
           });
         },
         signal: options.signal,
@@ -607,6 +607,7 @@ export async function askWithChromeBuiltInAi(
 
     if (session) {
       try {
+        options.onStatus?.("native ready");
         const response = await streamAnswer(
           session,
           `請用繁體中文清楚準確回答以下學習問題：\n\n${question}`,
@@ -666,6 +667,7 @@ export async function askWithChromeBuiltInAi(
       device: localDevice,
       dtype,
       modelName: chosenModelId,
+      revision: LOCAL_FALLBACK_MODEL_REVISION,
       env: {
         ...(nodeRuntime
           ? {
@@ -677,27 +679,13 @@ export async function askWithChromeBuiltInAi(
             }
           : {}),
         ...(typeof globalThis !== "undefined" && typeof globalThis.fetch === "function"
-          ? {
-              fetch: nodeRuntime
-                ? isolatedNodeFetch
-                : (...args: Parameters<typeof fetch>) => {
-                    // COLD_START cancel contract: the submit AbortSignal must
-                    // reach the in-flight model-artifact download itself, not
-                    // only the post-download checkpoints. Merge it into every
-                    // browser fetch the polyfill/Transformers.js issues so
-                    // 取消下載 aborts a real cold download immediately.
-                    const [input, init] = args;
-                    const initSignal = (init as { signal?: AbortSignal | null } | undefined)?.signal ?? undefined;
-                    const merged =
-                      typeof AbortSignal !== "undefined" && typeof (AbortSignal as { any?: unknown }).any === "function" && options.signal
-                        ? [initSignal, options.signal].filter((s): s is AbortSignal => Boolean(s))
-                        : undefined;
-                    const nextInit = merged
-                      ? ({ ...(init as object), signal: AbortSignal.any(merged) } as RequestInit)
-                      : init;
-                    return globalThis.fetch(input, nextInit);
-                  },
-            }
+          ? { fetch: nodeRuntime
+            ? isolatedNodeFetch
+            : createModelCacheFetch(
+                { modelId: chosenModelId, revision: LOCAL_FALLBACK_MODEL_REVISION },
+                globalThis.fetch.bind(globalThis),
+                { signal: options.signal },
+              ) }
           : {}),
         backends: {
           onnx: {
@@ -746,9 +734,9 @@ export async function askWithChromeBuiltInAi(
     m.addEventListener("downloadprogress", (e: Event) => {
       const pe = e as ProgressLikeEvent;
       const loaded = Number(pe.loaded) || 0;
-      const total = Number(pe.total) || 1;
+      const total = Number(pe.total) || 0;
       const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
-      options.onStatus?.("local model download", progress, { received: loaded, total });
+      options.onStatus?.("local model download", progress, { loaded, total: total > 0 ? total : null });
       reportLocalFallbackDiagnostic(options, {
         stage: "model-download-progress",
         modelId: chosenModelId,
@@ -798,10 +786,17 @@ export async function askWithChromeBuiltInAi(
   }
 
   if (!localSession) {
+    // A cancelled or timed-out submission is not evidence that the stored
+    // artifacts are bad; wiping here would break download-once and force the
+    // learner to re-fetch ~618MB. Only a genuine load failure may evict.
+    if (!options.signal?.aborted) {
+      await deleteLocalModelCache({ modelId: chosenModelId, revision: LOCAL_FALLBACK_MODEL_REVISION }).catch(() => 0);
+    }
     options.onStatus?.("unsupported after fallback");
     throw new ChromeAiError("本機 AI 模型下載或初始化失敗，未使用任何雲端服務。");
   }
 
+  await markLocalModelCacheReady({ modelId: chosenModelId, revision: LOCAL_FALLBACK_MODEL_REVISION }).catch(() => false);
   // COLD_START contract (owner ruling 2026-09-22): the model download window is
   // separate from the answer-generation window. This status marks the moment
   // the local model is fully loaded; generation timeouts may only start here.
@@ -827,13 +822,11 @@ export async function askWithChromeBuiltInAi(
 
 export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Promise<void>) {
   let controller: AbortController | null = null;
-  // Statuses that belong to the (possibly long) local-model download window.
-  // COLD_START contract: `downloadTimeoutMs` covers only this window; the
-  // generation timeout (`timeoutMs`) starts at "local model ready" instead.
-  const DOWNLOAD_PHASE_STATUSES = new Set([
+  const downloadStatuses = new Set<AutoAiStatus>([
     "local fallback loading",
     "local model requires user activation",
     "local model download",
+    "native model download",
   ]);
   return {
     get inFlight() {
@@ -864,23 +857,19 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
       if (typeof submitOptions !== "string" && submitOptions?.downloadTimeoutMs) {
         downloadTimeout = setTimeout(() => { downloadTimedOut = true; controller?.abort(); }, submitOptions.downloadTimeoutMs);
       }
-      const armGenerationWindow = () => {
-        if (downloadTimeout && !downloadPhaseDone) {
-          downloadPhaseDone = true;
-          clearTimeout(downloadTimeout);
-          if (typeof submitOptions !== "string" && submitOptions?.timeoutMs) {
-            timeout = setTimeout(() => { timedOut = true; controller?.abort(); }, submitOptions.timeoutMs);
-          }
+      const startGenerationTimeout = () => {
+        if (downloadPhaseDone) return;
+        downloadPhaseDone = true;
+        if (downloadTimeout) clearTimeout(downloadTimeout);
+        if (typeof submitOptions !== "string" && submitOptions?.timeoutMs) {
+          timeout = setTimeout(() => { timedOut = true; controller?.abort(); }, submitOptions.timeoutMs);
         }
       };
       if (typeof submitOptions !== "string" && !submitOptions?.downloadTimeoutMs && submitOptions?.timeoutMs) {
-        // Legacy single-window behavior when no download window is configured.
         timeout = setTimeout(() => { timedOut = true; controller?.abort(); }, submitOptions.timeoutMs);
       }
-      // Internal status watcher: the download/generation window switch must not
-      // depend on the caller supplying an onStatus callback.
       const internalStatus: StatusCallback = (status, progress, bytes) => {
-        if (!DOWNLOAD_PHASE_STATUSES.has(status)) armGenerationWindow();
+        if (!downloadStatuses.has(status)) startGenerationTimeout();
         onStatus?.(status, progress, bytes);
       };
       try {

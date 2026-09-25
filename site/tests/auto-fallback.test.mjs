@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   buildGoogleAiModeUrl,
@@ -6,10 +7,11 @@ import {
   hasUnresolvedSimplified,
   normalizeToHant,
   postprocessTraditionalChinese,
+  shouldUseLocalTutor,
   validateLocalAnswer,
 } from "../app/auto-fallback.ts";
 import { SIMPLIFIED_ONLY } from "../app/hant-set.ts";
-import { createAutoSubmitter, askWithChromeBuiltInAi } from "../app/chrome-built-in-ai.ts";
+import { askWithChromeBuiltInAi, createAutoSubmitter, LOCAL_FALLBACK_MODEL_REVISION } from "../app/chrome-built-in-ai.ts";
 
 test("Gate 5b: local submit timeout fails closed with a truthful timeout error", async () => {
   const env = {
@@ -57,6 +59,8 @@ test("COLD_START: download timeout is separate from the 45s generation window", 
 });
 
 test("COLD_START: the submit abort signal reaches the browser model-artifact fetch", async () => {
+  const artifactUrl = "https://huggingface.co/onnx-community/Qwen3-0.6B-ONNX/resolve/main/onnx/model_quantized.onnx";
+  const observed = [];
   const env = {
     WebAssembly: { instantiate: () => ({}) },
     window: {
@@ -65,7 +69,7 @@ test("COLD_START: the submit abort signal reaches the browser model-artifact fet
         async create() {
           const cfg = env.window.TRANSFORMERS_CONFIG;
           assert.equal(typeof cfg.env.fetch, "function");
-          fetchPromise = cfg.env.fetch("https://huggingface.co/onnx-community/Qwen3-0.6B-ONNX/resolve/main/onnx/model_quantized.onnx", {});
+          fetchPromise = cfg.env.fetch(artifactUrl, {});
           await fetchPromise;
           return { async prompt() { return "x"; } };
         },
@@ -74,9 +78,16 @@ test("COLD_START: the submit abort signal reaches the browser model-artifact fet
   };
   let fetchPromise = null;
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (_input, init) => new Promise((_resolve, reject) => {
-    init?.signal?.addEventListener("abort", () => reject(new Error("artifact download aborted")));
-  });
+  // The durable-cache adapter may hand the merged signal on the Request or on
+  // init; observe both so a regression that drops either one fails here.
+  globalThis.fetch = (input, init) => {
+    const signal = init?.signal ?? (typeof Request !== "undefined" && input instanceof Request ? input.signal : null);
+    observed.push({ url: input instanceof Request ? input.url : String(input), hasSignal: Boolean(signal) });
+    return new Promise((_resolve, reject) => {
+      if (!signal) return reject(new Error("artifact fetch lost the abort signal"));
+      signal.addEventListener("abort", () => reject(new Error("artifact download aborted")));
+    });
+  };
   try {
     // The signal-merging fetch wrapper is the browser branch; force it by
     // defining window (Node otherwise takes the isolated nodeRuntime path).
@@ -91,9 +102,47 @@ test("COLD_START: the submit abort signal reaches the browser model-artifact fet
     });
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(fetchPromise instanceof Promise, true, "model fetch must be in flight");
+    assert.equal(observed.at(-1).hasSignal, true, "the submit signal must be merged into the artifact fetch");
     controller.abort();
     await assert.rejects(fetchPromise, /artifact download aborted/);
     await assert.rejects(pending, /已取消/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.window;
+  }
+});
+
+test("COLD_START: model artifacts are fetched from the pinned immutable revision", async () => {
+  const observed = [];
+  const env = {
+    WebAssembly: { instantiate: () => ({}) },
+    window: {
+      LanguageModel: {
+        __isPolyfill: true,
+        async create() {
+          const cfg = env.window.TRANSFORMERS_CONFIG;
+          await cfg.env.fetch("https://huggingface.co/onnx-community/Qwen3-0.6B-ONNX/resolve/main/tokenizer.json", {});
+          return { async prompt() { return "恐龍已滅絕。"; } };
+        },
+      },
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    observed.push({ url: input instanceof Request ? input.url : String(input), status: init?.status });
+    return Promise.resolve(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
+  };
+  try {
+    globalThis.window = env.window;
+    await askWithChromeBuiltInAi("什麼是恐龍？", () => {}, {
+      env,
+      forceLocalModel: true,
+      userActivation: true,
+      loadPolyfill: async () => {},
+    });
+    assert.equal(observed.length, 1, "the artifact request must reach fetch");
+    assert.match(observed[0].url, new RegExp(`/resolve/${LOCAL_FALLBACK_MODEL_REVISION}/`), "main must be pinned to the recorded revision");
+    assert.doesNotMatch(observed[0].url, /\/resolve\/main\//);
   } finally {
     globalThis.fetch = originalFetch;
     delete globalThis.window;
@@ -296,6 +345,111 @@ test("COLD_START: createAutoSubmitter forwards download bytes to the caller's on
   assert.equal(answer, "13");
   const byteEvents = seen.filter((x) => x.s === "local model download" && x.b);
   assert.ok(byteEvents.length >= 1, "createAutoSubmitter must forward bytes to onStatus");
-  assert.equal(byteEvents[0].b.received, HALF);
+  assert.equal(byteEvents[0].b.loaded, HALF);
   assert.equal(byteEvents[0].b.total, TOTAL);
+});
+
+test("IT and ACCOUNTING stay tutor-only while OTHER/UNKNOWN and 完整解題 go to the consent-gated handoff", () => {
+  assert.equal(shouldUseLocalTutor("IT", "自動判斷"), true);
+  assert.equal(shouldUseLocalTutor("ACCOUNTING", "教材解釋"), true);
+  assert.equal(shouldUseLocalTutor("OTHER", "自動判斷"), false);
+  assert.equal(shouldUseLocalTutor("UNKNOWN", "自動判斷"), false);
+  assert.equal(shouldUseLocalTutor("IT", "完整解題（Google）"), false);
+});
+
+test("Google handoff remains explicit, new-tab-only, and cannot bypass consent through its fallback link", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /if \(!googleConsent \|\| !googleUrl \|\| googleOpened\) return/);
+  assert.match(page, /window\.open\(googleUrl, "_blank", "noopener,noreferrer"\)/);
+  assert.match(page, /googleConsent \? <a className="v2-gesture-button" href=\{googleUrl\} target="_blank" rel="noopener noreferrer"/);
+  assert.doesNotMatch(page, /window\.location\.(?:assign|href)/);
+});
+
+test("cold-start UI keeps byte progress, the stall escape hatch and the NEEDS_GUARD notice", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /DOWNLOAD_STALL_MS = 90_000/);
+  assert.match(page, /下載停滯（連續 90 秒無新資料）/);
+  assert.match(page, /onClick=\{retryDownload\}>重新下載</);
+  assert.match(page, /if \(bytes\?\.loaded\) lastProgressAt\.current = Date\.now\(\);/);
+  assert.match(page, /未經外部事實查證（NEEDS_GUARD）/);
+});
+
+function fakeCacheStorage() {
+  const entries = new Map();
+  const deletes = [];
+  const cache = {
+    async match() { return undefined; },
+    async put() {},
+    async delete(key) { deletes.push(typeof key === "string" ? key : key.url); return true; },
+    async keys() { return [...entries.keys()].map((url) => new Request(url)); },
+  };
+  return { cache, deletes, storage: { open: async () => cache } };
+}
+
+test("COLD_START: cancelling a model download never evicts the stored model cache", async () => {
+  const { cache, deletes } = fakeCacheStorage();
+  const originalCaches = globalThis.caches;
+  globalThis.caches = { open: async () => cache };
+  const env = {
+    WebAssembly: { instantiate: () => ({}) },
+    window: {
+      LanguageModel: {
+        __isPolyfill: true,
+        create({ signal }) {
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("download aborted")));
+          });
+        },
+      },
+    },
+  };
+  try {
+    globalThis.window = env.window;
+    const controller = new AbortController();
+    const pending = askWithChromeBuiltInAi("什麼是恐龍？", () => {}, {
+      env,
+      signal: controller.signal,
+      forceLocalModel: true,
+      userActivation: true,
+      loadPolyfill: async () => {},
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    controller.abort();
+    await assert.rejects(pending, /已取消/);
+    assert.deepEqual(deletes, [], "cancel/timeout must not force a re-download of ~618MB");
+  } finally {
+    globalThis.caches = originalCaches;
+    delete globalThis.window;
+  }
+});
+
+test("COLD_START: a genuine model load failure still evicts for a clean retry", async () => {
+  const { cache, deletes } = fakeCacheStorage();
+  const originalCaches = globalThis.caches;
+  globalThis.caches = { open: async () => cache };
+  const env = {
+    WebAssembly: { instantiate: () => ({}) },
+    window: {
+      LanguageModel: {
+        __isPolyfill: true,
+        async create() { throw new Error("incompatible onnx graph"); },
+      },
+    },
+  };
+  try {
+    globalThis.window = env.window;
+    await assert.rejects(
+      askWithChromeBuiltInAi("什麼是恐龍？", () => {}, {
+        env,
+        forceLocalModel: true,
+        userActivation: true,
+        loadPolyfill: async () => {},
+      }),
+      /下載或初始化失敗/,
+    );
+    assert.ok(deletes.length >= 1, "a failed load must clear the unusable cache manifest");
+  } finally {
+    globalThis.caches = originalCaches;
+    delete globalThis.window;
+  }
 });

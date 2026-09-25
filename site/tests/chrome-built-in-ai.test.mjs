@@ -34,6 +34,7 @@ import {
   isTraditionalChinese,
   LOCAL_FALLBACK_DTYPE_CANDIDATES,
   LOCAL_FALLBACK_MODEL_ID,
+  LOCAL_FALLBACK_MODEL_REVISION,
   LOCAL_FALLBACK_PROMPT_INSTRUCTION,
   ORT_WASM_URL,
   QWEN25_BASELINE_MODEL_ID,
@@ -349,7 +350,7 @@ test("Gate B: Chrome output normalizes Simplified text without changing name cha
   const env = {
     LanguageModel: {
       async availability() { return "available"; },
-      async create() { return { promptStreaming: () => stream(["经营策略是企业的长期规划。", " 于右任"]) }; },
+      async create() { return { promptStreaming: () => stream(["经营策略是企業的長期規劃。", " 于右任"]) }; },
     },
   };
   const answer = await askWithChromeBuiltInAi("測試", (chunk) => chunks.push(chunk), { env });
@@ -862,41 +863,38 @@ test("Gate 20: build output single file size is bounded under 25MB Sites limit",
   assert.match(ORT_WASM_URL, /ort-wasm-simd-threaded\.asyncify\.wasm/);
 });
 
-test("COLD_START: local download progress reports received/total bytes to onStatus", async () => {
-  const seen = [];
-  const TOTAL = 617687575;
-  const HALF = 308843787;
+test("local model download reports actual byte progress and pins its revision", async () => {
+  const TOTAL = 617_687_575;
+  const LOADED = 308_843_787;
   const mockWin = mockTargetWindow();
   const env = {
     window: mockWin,
     navigator: { gpu: { requestAdapter: async () => f16Adapter() } },
     WebAssembly: { instantiate: async () => ({}) },
   };
-
-  const answer = await askWithChromeBuiltInAi("十三加五等於多少？", () => {}, {
-    env,
-    loadPolyfill: async () => {
-      mockWin.LanguageModel = {
-        __isPolyfill: true,
-        async availability() { return "available"; },
-        async create(options) {
-          if (options?.monitor) {
-            const target = new EventTarget();
-            options.monitor(target);
-            target.dispatchEvent(Object.assign(new Event("downloadprogress"), { loaded: HALF, total: TOTAL }));
-          }
-          return { promptStreaming: () => stream(["13"]) };
-        },
-      };
-    },
-    onStatus: (st, pr, bytes) => seen.push({ st, pr, bytes }),
+  const submitter = createAutoSubmitter(env, async () => {
+    mockWin.LanguageModel = {
+      __isPolyfill: true,
+      async create(options) {
+        const target = new EventTarget();
+        options.monitor(target);
+        target.dispatchEvent(Object.assign(new Event("downloadprogress"), { loaded: LOADED, total: TOTAL }));
+        return { promptStreaming: () => stream(["13"]) };
+      },
+    };
   });
+  const seen = [];
+  assert.equal(await submitter.submit("十三加五等於多少？", () => {}, (status, progress, bytes) => seen.push({ status, progress, bytes }), {
+    timeoutMs: 1_000,
+    downloadTimeoutMs: 5_000,
+    localModelId: QWEN3_TEST_MODEL_ID,
+    forceLocalModel: true,
+  }), "13");
 
-  assert.equal(answer, "13");
-  const byteEvents = seen.filter((s) => s.st === "local model download" && s.bytes);
-  assert.ok(byteEvents.length >= 1, "local download must report bytes");
-  assert.equal(byteEvents[0].bytes.received, HALF);
-  assert.equal(byteEvents[0].bytes.total, TOTAL);
-  assert.equal(byteEvents[0].pr, HALF / TOTAL);
-  assert.ok(seen.some((s) => s.st === "local model ready"), "ready status must precede generation");
+  const progress = seen.find((entry) => entry.status === "local model download" && entry.bytes?.loaded === LOADED);
+  assert.deepEqual(progress.bytes, { loaded: LOADED, total: TOTAL });
+  assert.equal(progress.progress, LOADED / TOTAL);
+  assert.ok(seen.some((entry) => entry.status === "local model ready"));
+  assert.match(LOCAL_FALLBACK_MODEL_REVISION, /^[a-f0-9]{40}$/);
+  assert.equal(mockWin.TRANSFORMERS_CONFIG.revision, LOCAL_FALLBACK_MODEL_REVISION);
 });

@@ -2,6 +2,7 @@
 
 import { HANT_MAP, SIMPLIFIED_ONLY } from "./hant-set";
 import { HANT_PHRASES, HANT_PHRASE_MAX } from "./hant-phrases";
+import { canUseLocalModel, type SubjectCategory } from "./subject-triage";
 
 export type LocalAnswerVerdict =
   | { status: "VALID"; answer: string }
@@ -206,6 +207,11 @@ export function validateLocalAnswer(question: string, rawAnswer: string): LocalA
 /** The product's canonical Google AI Mode URL builder. Never fetches Google. */
 export function buildGoogleAiModeUrl(question: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(question)}&udm=50&aep=11&hl=zh-TW`;
+}
+
+/** Only IT/ACCOUNTING tutor prompts may initialize the optional local model. */
+export function shouldUseLocalTutor(category: SubjectCategory, mode: string) {
+  return mode !== "完整解題（Google）" && canUseLocalModel(category);
 }
 
 export type AutoFallbackState = "IDLE" | "GENERATING" | "GOOGLE_NAVIGATING" | "DONE" | "CANCELLED";
