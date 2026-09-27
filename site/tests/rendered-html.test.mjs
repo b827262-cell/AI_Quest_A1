@@ -39,6 +39,17 @@ test("renders the AI-SmartBook learning homepage", async () => {
   assert.doesNotMatch(html, /\/guest-answer\b/);
   assert.doesNotMatch(html, /\/admin\/login\b/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview|react-loading-skeleton/);
+
+  // A1: Auto (Qwen3-0.6B) -> Auto, unclassified copy, consent checkbox, Google full-solve/fallback, manual buttons removed
+  assert.match(html, /<option value="Auto"[^>]*>Auto<\/option>/);
+  assert.doesNotMatch(html, /Auto \(Qwen3-0\.6B\)/);
+  assert.doesNotMatch(html, /模型只在 IT／會計題目啟用/);
+  assert.doesNotMatch(html, /我同意將原題送往 Google AI/);
+  assert.doesNotMatch(html, /開啟 Google AI 完整解題/);
+  assert.doesNotMatch(html, /先同意後提供備援連結/);
+  assert.doesNotMatch(html, /改以資訊科試解/);
+  assert.doesNotMatch(html, /改以會計科試解/);
+  assert.doesNotMatch(html, /完整解題（Google）/);
 });
 
 // H3 accessibility remediation: normal text must clear WCAG 2.1 AA (>=4.5:1)

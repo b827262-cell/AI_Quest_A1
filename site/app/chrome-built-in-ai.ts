@@ -13,6 +13,14 @@
 // Enforced by tests/chrome-built-in-ai.test.mjs source and bundle gates.
 
 import { postprocessTraditionalChinese } from "./auto-fallback";
+import {
+  AUTO_INSTRUCTION,
+  AutoRouteSchemaError,
+  buildAutoRoutePrompt,
+  parseAutoRouteResponse,
+  type AutoRoute,
+  type AutoRouteDecision,
+} from "./auto-route";
 import { createModelCacheFetch, deleteLocalModelCache, markLocalModelCacheReady } from "./local-model-cache";
 
 export type AutoAiStatus =
@@ -94,6 +102,14 @@ export type ChromeAiEnvironment = {
 };
 
 export class ChromeAiError extends Error {
+  /**
+   * Set only when a caller-supplied warm session failed to answer. The
+   * submitter reads it to dispose and rebuild that session exactly once (A2/B4);
+   * cancellations and timeouts never set it, so a cancel is never mistaken for
+   * a dead session.
+   */
+  warmSessionStale = false;
+
   constructor(message: string) {
     super(message);
     this.name = "ChromeAiError";
@@ -419,6 +435,26 @@ export type AskOptions = {
   loadLocalLanguageModel?: () => Promise<ChromeAiEnvironment["LanguageModel"]>;
   /** Captured synchronously from the initiating UI gesture. */
   userActivation?: boolean;
+  /** Preloaded session to reuse without downloading or re-creating. */
+  session?: LanguageModelSession;
+  /** Keep session alive after generation completes. */
+  preserveSession?: boolean;
+  /**
+   * Offered a locally created session after it answered once, so the submitter
+   * can publish it as the shared ready session (A2/B2) instead of paying for a
+   * full model load on the next answer. Returning `true` transfers ownership:
+   * this call must then not destroy the session. A2/B4: only a session that
+   * actually produced an answer may be offered — one that failed generation is
+   * stale evidence and must die here, never enter the ready state.
+   */
+  onLocalSession?: (session: LanguageModelSession) => boolean;
+  /**
+   * The caller already supplies a complete instruction (the A3 JSON route
+   * contract). The default zh-Hant short-answer instruction is then NOT
+   * prepended: stacking it on the contract prompt makes the model answer in
+   * prose and makes its own echo trip the D-06 instruction-echo guard.
+   */
+  rawPrompt?: boolean;
 };
 
 interface PolyfillHostWindow {
@@ -489,6 +525,32 @@ export async function askWithChromeBuiltInAi(
   onChunk: (chunk: string) => void,
   options: AskOptions = {},
 ): Promise<string> {
+  if (options.session) {
+    options.onStatus?.("local model ready");
+    if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+    try {
+      const prompt = options.rawPrompt ? question : `${LOCAL_FALLBACK_PROMPT_INSTRUCTION}\n\n${question}`;
+      const response = await streamAnswer(
+        options.session,
+        prompt,
+        onChunk,
+        options.signal,
+        createRepetitionGuard(),
+      );
+      return response;
+    } catch (error) {
+      if (error instanceof ChromeAiError) throw error;
+      // Anything the reused session itself rejected (a context the browser
+      // already dropped, a dead accelerator) is stale-session evidence, never a
+      // cancellation: those all arrive as ChromeAiError above.
+      const stale = new ChromeAiError("本機 AI 模型無法完成回答，未使用任何雲端服務。");
+      stale.warmSessionStale = true;
+      throw stale;
+    } finally {
+      if (!options.preserveSession) options.session.destroy?.();
+    }
+  }
+
   const env = options.env ?? environment();
   const win = (env.window ?? (typeof window !== "undefined" ? window : globalThis)) as PolyfillHostWindow;
   // Capture this before the native availability awaits. The polyfill requires
@@ -537,7 +599,10 @@ export async function askWithChromeBuiltInAi(
       let toTraditionalChinese: Translator | null = null;
       try {
       let input = question;
-      if (isTraditionalChinese(question)) {
+      // The JSON contract must reach the model verbatim and come back verbatim:
+      // a zh-Hant → en → zh-Hant round trip would rewrite the contract keys and
+      // the parser would fail closed on a model that answered correctly.
+      if (isTraditionalChinese(question) && !options.rawPrompt) {
         [toEnglish, toTraditionalChinese] = await Promise.all([
           createTranslator(env.Translator, "zh-Hant", "en"),
           createTranslator(env.Translator, "en", "zh-Hant"),
@@ -547,9 +612,11 @@ export async function askWithChromeBuiltInAi(
         }
       }
 
-      const promptText = toEnglish && toTraditionalChinese
-        ? `Answer this learner question clearly and accurately:\n\n${input}`
-        : `請用繁體中文清楚準確回答以下學習問題：\n\n${input}`;
+      const promptText = options.rawPrompt
+        ? input
+        : toEnglish && toTraditionalChinese
+          ? `Answer this learner question clearly and accurately:\n\n${input}`
+          : `請用繁體中文清楚準確回答以下學習問題：\n\n${input}`;
 
       const bufferedChunks: string[] = [];
       const response = await streamAnswer(
@@ -610,7 +677,7 @@ export async function askWithChromeBuiltInAi(
         options.onStatus?.("native ready");
         const response = await streamAnswer(
           session,
-          `請用繁體中文清楚準確回答以下學習問題：\n\n${question}`,
+          options.rawPrompt ? question : `請用繁體中文清楚準確回答以下學習問題：\n\n${question}`,
           onChunk,
           options.signal,
         );
@@ -753,6 +820,8 @@ export async function askWithChromeBuiltInAi(
   // side effects. Retry the conservative candidate in order; never request a
   // cloud service for a missing local quantization.
   let localSession: LanguageModelSession | undefined;
+  // Set when the caller took ownership of the session created here (A2/B2).
+  let publishedSession = false;
   for (const dtype of dtypeCandidates) {
     configureFallback(dtype);
     options.onStatus?.("local model download", 0);
@@ -803,7 +872,7 @@ export async function askWithChromeBuiltInAi(
   options.onStatus?.("local model ready");
 
   try {
-    const prompt = `${LOCAL_FALLBACK_PROMPT_INSTRUCTION}\n\n${question}`;
+    const prompt = options.rawPrompt ? question : `${LOCAL_FALLBACK_PROMPT_INSTRUCTION}\n\n${question}`;
     const response = await streamAnswer(
       localSession,
       prompt,
@@ -811,77 +880,559 @@ export async function askWithChromeBuiltInAi(
       options.signal,
       createRepetitionGuard(),
     );
+    // Offered only after the session proved it can answer, so a session that
+    // dies mid-generation can never be published as the ready session.
+    if (options.onLocalSession?.(localSession) === true) publishedSession = true;
     return response;
   } catch (error) {
     if (error instanceof ChromeAiError) throw error;
     throw new ChromeAiError("本機 AI 模型無法完成回答，未使用任何雲端服務。");
   } finally {
-    localSession.destroy?.();
+    if (!publishedSession) localSession.destroy?.();
   }
 }
 
+// ==========================================
+// A3: JSON contract — the single authority is ./auto-route.ts (A-01 Phase 2).
+// These names are kept as aliases so the Auto slice stays the only place the
+// learner-facing generation is wired; the vocabulary, parser, 0.75 floor and
+// display gate must never be redefined here.
+// ==========================================
+
+export type InferenceRoute = AutoRoute;
+
+export type InferenceResult = AutoRouteDecision;
+
+export const InferenceSchemaError = AutoRouteSchemaError;
+
+export const INFERENCE_PROMPT_INSTRUCTION = AUTO_INSTRUCTION;
+
+export function buildInferencePrompt(question: string): string {
+  return buildAutoRoutePrompt(question);
+}
+
+export function parseInferenceResponse(raw: string): InferenceResult {
+  return parseAutoRouteResponse(raw);
+}
+
+export async function askInferenceWithChromeBuiltInAi(
+  question: string,
+  onChunk: (chunk: string) => void,
+  options: AskOptions = {},
+): Promise<InferenceResult> {
+  const rawResponse = await askWithChromeBuiltInAi(
+    buildInferencePrompt(question),
+    onChunk,
+    { ...options, rawPrompt: true },
+  );
+  return parseInferenceResponse(rawResponse);
+}
+
+// ==========================================
+// A2: Preload / Warm-up
+// ==========================================
+
+export type PreloadOptions = {
+  env?: ChromeAiEnvironment;
+  onStatus?: StatusCallback;
+  localModelId?: string;
+  forceLocalModel?: boolean;
+  loadPolyfill?: () => Promise<void>;
+  loadLocalLanguageModel?: () => Promise<ChromeAiEnvironment["LanguageModel"]>;
+  signal?: AbortSignal;
+};
+
+/**
+ * Why a warm-up produced no session. `gesture` is transient (retry it from a
+ * real click); `unsupported` is the device verdict that must stay visible.
+ * `cancelled` is neither: the learner (or a cache reset) withdrew the download,
+ * so it must not be reported as a capability verdict either.
+ */
+export type PreloadOutcome = "warmed" | "gesture" | "unsupported" | "cancelled";
+
+export type PreloadResult = { outcome: PreloadOutcome; session: LanguageModelSession | null };
+
+/** Local model identity a warm-up/answer actually targets; mirrors the ask path. */
+function resolveLocalModelId(localModelId?: string): string {
+  return localModelId || DEFAULT_LOCAL_FALLBACK_MODEL_ID;
+}
+
+/**
+ * The prompt-api polyfill refuses a cold model download without a fresh user
+ * activation and raises NotAllowedError. That is a moment in time, not a
+ * capability verdict, and must never be reported as `unsupported`.
+ */
+function isUserActivationRefusal(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === "NotAllowedError";
+}
+
+export async function preloadLocalModel(options: PreloadOptions = {}): Promise<PreloadResult> {
+  const unsupported: PreloadResult = { outcome: "unsupported", session: null };
+  const env = options.env ?? environment();
+  const win = (env.window ?? (typeof window !== "undefined" ? window : globalThis)) as PolyfillHostWindow;
+  const localDevice = await detectLocalDevice(env);
+  if (!localDevice) {
+    options.onStatus?.("unsupported after fallback");
+    return unsupported;
+  }
+
+  options.onStatus?.("local fallback loading");
+  if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+
+  const chosenModelId = resolveLocalModelId(options.localModelId);
+  const dtypeCandidates = LOCAL_FALLBACK_DTYPE_CANDIDATES[localDevice];
+  const nodeRuntime = typeof window === "undefined";
+  let nodeArtifactRequest: Promise<Response> | undefined;
+  const isolatedNodeFetch = (...args: Parameters<typeof fetch>) => {
+    if (!nodeArtifactRequest) {
+      nodeArtifactRequest = globalThis.fetch(...args);
+      return nodeArtifactRequest;
+    }
+    return nodeArtifactRequest.then(
+      () => Promise.reject(new Error("Local model initialization is browser-only.")),
+      (error) => Promise.reject(error),
+    );
+  };
+  const configureFallback = (dtype: string) => {
+    win.TRANSFORMERS_CONFIG = {
+      apiKey: "dummy",
+      device: localDevice,
+      dtype,
+      modelName: chosenModelId,
+      revision: LOCAL_FALLBACK_MODEL_REVISION,
+      env: {
+        ...(nodeRuntime
+          ? {
+              allowLocalModels: false,
+              useFS: false,
+              useFSCache: false,
+              useBrowserCache: false,
+              useWasmCache: false,
+            }
+          : {}),
+        ...(typeof globalThis !== "undefined" && typeof globalThis.fetch === "function"
+          ? {
+              fetch: nodeRuntime
+                ? isolatedNodeFetch
+                : createModelCacheFetch(
+                    { modelId: chosenModelId, revision: LOCAL_FALLBACK_MODEL_REVISION },
+                    globalThis.fetch.bind(globalThis),
+                    { signal: options.signal },
+                  ),
+            }
+          : {}),
+        backends: {
+          onnx: {
+            wasm: {
+              wasmPaths: ORT_WASM_PATHS,
+            },
+          },
+        },
+      },
+    };
+  };
+
+  let polyfillLM: ChromeAiEnvironment["LanguageModel"];
+  try {
+    if (options.loadLocalLanguageModel) {
+      polyfillLM = await options.loadLocalLanguageModel();
+    } else if (options.loadPolyfill) {
+      await options.loadPolyfill();
+      polyfillLM = win.LanguageModel;
+    } else if (win.LanguageModel) {
+      polyfillLM = win.LanguageModel;
+    } else {
+      polyfillLM = await loadRealLocalLanguageModel();
+    }
+  } catch (error) {
+    // A warm-up can be refused before the engine even finishes loading: the
+    // polyfill gates its module bootstrap on the same activation contract as
+    // create(). That is still a moment in time, so it must follow the gesture
+    // path; calling it a device verdict would hide the CTA that recovers it.
+    if (isUserActivationRefusal(error)) {
+      options.onStatus?.("local model requires user activation");
+      return { outcome: "gesture", session: null };
+    }
+    options.onStatus?.("unsupported after fallback");
+    throw error;
+  }
+
+  if (!polyfillLM) {
+    options.onStatus?.("unsupported after fallback");
+    return unsupported;
+  }
+
+  const monitorDownload = (m: EventTarget) => {
+    m.addEventListener("downloadprogress", (e: Event) => {
+      const pe = e as ProgressLikeEvent;
+      const loaded = Number(pe.loaded) || 0;
+      const total = Number(pe.total) || 0;
+      const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
+      options.onStatus?.("local model download", progress, { loaded, total: total > 0 ? total : null });
+    });
+  };
+
+  for (const dtype of dtypeCandidates) {
+    configureFallback(dtype);
+    options.onStatus?.("local model download", 0);
+    if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+    try {
+      const session = await polyfillLM.create({
+        monitor: monitorDownload,
+        signal: options.signal,
+      });
+      // A browser is free to *resolve* a create() it was told to abort. That
+      // session belongs to state the learner already wiped, so it must reach no
+      // side effect at all: retire it and report cancellation here, before the
+      // cache manifest is marked ready and before "local model ready" is told.
+      // Marking ready from an abandoned warm-up is what makes the next run
+      // believe a model it never finished loading is warm.
+      if (options.signal?.aborted) {
+        session.destroy?.();
+        throw new ChromeAiError("已取消 AI 回答。");
+      }
+      await markLocalModelCacheReady({ modelId: chosenModelId, revision: LOCAL_FALLBACK_MODEL_REVISION }).catch(() => false);
+      options.onStatus?.("local model ready");
+      return { outcome: "warmed", session };
+    } catch (error) {
+      if (options.signal?.aborted) throw new ChromeAiError("已取消 AI 回答。");
+      if (isUserActivationRefusal(error)) {
+        // Page-mount warm-up runs without a gesture, so this refusal is the
+        // expected cold-cache case. Stop burning dtype candidates on a refusal
+        // that a quantization retry cannot fix, and keep the transient status:
+        // the learner still gets the gesture CTA and submit can finish the job.
+        options.onStatus?.("local model requires user activation");
+        return { outcome: "gesture", session: null };
+      }
+    }
+  }
+
+  options.onStatus?.("unsupported after fallback");
+  return unsupported;
+}
+
+export type AutoSubmitOptions = {
+  localModelId?: string;
+  timeoutMs?: number;
+  downloadTimeoutMs?: number;
+  forceLocalModel?: boolean;
+  /** Send the caller's instruction verbatim instead of adding the answer contract (A3). */
+  rawPrompt?: boolean;
+};
+
+/**
+ * The single in-flight warm-up. `promise` is what both mount preload and submit
+ * await, and `resolve` lets a synchronous reset release every awaiter instead of
+ * leaving them hanging on a download whose state was just discarded.
+ */
+type WarmOwner = {
+  promise: Promise<PreloadResult>;
+  resolve: (result: PreloadResult) => void;
+  controller: AbortController;
+  epoch: number;
+  modelId: string;
+};
+
 export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Promise<void>) {
   let controller: AbortController | null = null;
+  // A2/B2: `owner` is the only warm-up in flight and `warm` is the only ready
+  // state. Readiness *is* the session object, so nothing can advertise
+  // "local model ready" in the window before that session exists — closing that
+  // gap is what stops a submit from starting a second download of one model.
+  let owner: WarmOwner | null = null;
+  let warm: { session: LanguageModelSession; modelId: string } | null = null;
+  // A2/B4: every clear/delete bumps the epoch, so a warm-up that finishes after
+  // its state was wiped can never publish its session into fresh state.
+  let epoch = 0;
+  // A2/B2: the download slot has one owner in both directions. While a submit
+  // loads a model itself it holds this, so a page-mount warm-up joins it instead
+  // of starting a rival fetch of the same artifacts.
+  let submitSettled: Promise<void> | null = null;
+  // A2/B4: the ready session a running submit is generating with. Reference
+  // counting by ownership, not by boolean flags: whoever holds a borrow releases
+  // it, so no path can destroy a session mid-answer or leak one past a reset.
+  let borrowed: LanguageModelSession | null = null;
+
   const downloadStatuses = new Set<AutoAiStatus>([
     "local fallback loading",
     "local model requires user activation",
     "local model download",
     "native model download",
   ]);
+
+  const releaseSession = (session: LanguageModelSession | null | undefined) => {
+    if (!session) return;
+    try {
+      session.destroy?.();
+    } catch {
+      // A browser-dropped session is exactly the case where destroy() can fail;
+      // the reference is gone either way.
+    }
+  };
+
+  // A2/B4: a session a submit is generating with belongs to that submit until it
+  // settles. Dropping the ready state must never tear down the model an answer is
+  // being read from — the borrower releases it instead, so clearing is safe at any
+  // point of the lifecycle without double-destroying or leaking a session.
+  const dropSession = (session: LanguageModelSession | null | undefined) => {
+    if (session === borrowed) return;
+    releaseSession(session);
+  };
+
+  const clearWarm = () => {
+    if (!warm) return;
+    // Retiring state always moves the epoch first, so nothing that was already
+    // running can publish into the state the learner just wiped.
+    epoch += 1;
+    const dying = warm;
+    warm = null;
+    dropSession(dying?.session);
+  };
+
+  const clearOwner = (outcome: PreloadOutcome) => {
+    const abandoned = owner;
+    if (!abandoned) return;
+    epoch += 1;
+    owner = null;
+    abandoned.controller.abort();
+    // Awaiters are released synchronously. A browser may leave an aborted create()
+    // pending indefinitely, and a submit parked on that promise would never reach
+    // the retry the learner just asked for.
+    abandoned.resolve({ outcome, session: null });
+  };
+
+  const readyFor = (modelId: string) => warm !== null && warm.modelId === modelId;
+
+  const startWarmup = (
+    onStatus?: StatusCallback,
+    preloadOptions?: { localModelId?: string; forceLocalModel?: boolean },
+  ): Promise<PreloadResult> => {
+    let resolve!: (result: PreloadResult) => void;
+    const promise = new Promise<PreloadResult>((settled) => { resolve = settled; });
+    const current: WarmOwner = {
+      promise,
+      resolve,
+      controller: new AbortController(),
+      epoch,
+      modelId: resolveLocalModelId(preloadOptions?.localModelId),
+    };
+    // Published before the first await: a second preload (or a submit) that
+    // starts during the download joins this promise instead of competing.
+    owner = current;
+    const finish = (result: PreloadResult) => {
+      if (owner === current) owner = null;
+      const reusable = result.session !== null && current.epoch === epoch;
+      if (reusable) {
+        warm = { session: result.session as LanguageModelSession, modelId: current.modelId };
+      } else {
+        releaseSession(result.session);
+      }
+      current.resolve(reusable ? result : { outcome: result.outcome, session: null });
+    };
+    preloadLocalModel({
+      env,
+      loadPolyfill: loader,
+      localModelId: current.modelId,
+      forceLocalModel: preloadOptions?.forceLocalModel ?? true,
+      signal: current.controller.signal,
+      onStatus: (status, progress, bytes) => {
+        // A superseded warm-up stays silent: its state was already cleared, so
+        // it must not repaint the learner-facing status line.
+        if (owner === current) onStatus?.(status, progress, bytes);
+      },
+    }).then(finish, (error) => {
+      // The activation contract can also surface as a rejection from the engine
+      // bootstrap, and a withdrawn download must not read as a device verdict.
+      // Only a genuine failure to load the model may publish `unsupported`.
+      const cancelled = current.controller.signal.aborted;
+      const gesture = !cancelled && isUserActivationRefusal(error);
+      if (gesture) onStatus?.("local model requires user activation");
+      finish({ outcome: cancelled ? "cancelled" : gesture ? "gesture" : "unsupported", session: null });
+    });
+    return promise;
+  };
+
   return {
     get inFlight() {
       return controller !== null;
     },
+    get isPreloaded() {
+      return warm !== null;
+    },
+    get isPreloading() {
+      return owner !== null;
+    },
     cancel() {
       controller?.abort();
+      // A warm-up the learner withdrew must stop being the thing everybody else
+      // waits on: aborting its controller alone is not enough, because a browser
+      // is free to leave the aborted create() pending, and every later submit
+      // would then park on `await owner.promise` forever.
+      clearOwner("cancelled");
+    },
+    async preload(
+      onStatus?: StatusCallback,
+      preloadOptions?: { localModelId?: string; forceLocalModel?: boolean },
+    ): Promise<PreloadOutcome> {
+      const modelId = resolveLocalModelId(preloadOptions?.localModelId);
+      // A session warmed for another revision is not readiness for this one.
+      if (warm !== null && !readyFor(modelId)) clearWarm();
+      // Bounded join: each pass waits on work that is already running — a
+      // warm-up, or a submit that owns the only download slot. Whoever is
+      // fetching owns that fetch: this never starts a rival download of the same
+      // artifacts, and never spins on work of its own.
+      for (let pass = 0; pass < 3; pass += 1) {
+        if (readyFor(modelId)) {
+          onStatus?.("local model ready");
+          return "warmed";
+        }
+        if (owner) {
+          const joined = await owner.promise;
+          if (readyFor(modelId)) {
+            onStatus?.("local model ready");
+            return "warmed";
+          }
+          if (!owner && !submitSettled) return joined.outcome;
+          continue;
+        }
+        if (submitSettled) {
+          await submitSettled;
+          continue;
+        }
+        break;
+      }
+      // A warm-up never rejects: `page.tsx` calls this with `void` on mount, and
+      // an unobservable rejection would be a silent dead end for the learner.
+      const result = await startWarmup(onStatus, { ...preloadOptions, localModelId: modelId });
+      return result.outcome;
+    },
+    resetPreload() {
+      // The whole ready lifecycle, not just a flag: the in-flight promise and its
+      // controller, the published session, and the epoch every publisher is
+      // compared against afterwards.
+      clearOwner("cancelled");
+      clearWarm();
+    },
+    async infer(
+      question: string,
+      onChunk?: (chunk: string) => void,
+      onStatus?: StatusCallback,
+      submitOptions?: AutoSubmitOptions | string,
+    ): Promise<InferenceResult> {
+      const options: AutoSubmitOptions = typeof submitOptions === "string"
+        ? { localModelId: submitOptions, rawPrompt: true }
+        : { ...submitOptions, rawPrompt: true };
+      const raw = await this.submit(buildInferencePrompt(question), onChunk ?? (() => {}), onStatus, options);
+      return parseInferenceResponse(raw);
     },
     async submit(
       question: string,
       onChunk: (chunk: string) => void,
       onStatus?: StatusCallback,
-      submitOptions?: { localModelId?: string; timeoutMs?: number; downloadTimeoutMs?: number; forceLocalModel?: boolean } | string,
+      submitOptions?: AutoSubmitOptions | string,
     ) {
       if (controller) throw new ChromeAiError("AI 回答處理中，請稍候。");
+      // The single submit slot is claimed before the first await, so a second
+      // click cannot slip past the guard while this one waits for the warm-up.
       controller = new AbortController();
+      const activeController = controller;
+      // A2/B2: claiming the submit slot also claims the download slot. A mount
+      // warm-up that starts while this answer is loading a model joins it here
+      // instead of fetching the same artifacts a second time.
+      let settleSubmit!: () => void;
+      submitSettled = new Promise<void>((settled) => { settleSubmit = settled; });
       const userActivation = env?.navigator?.userActivation?.isActive
         ?? (typeof navigator !== "undefined" ? navigator.userActivation?.isActive : true);
       const localModelId =
         typeof submitOptions === "string"
           ? submitOptions
           : submitOptions?.localModelId;
+      const modelId = resolveLocalModelId(localModelId);
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let downloadTimeout: ReturnType<typeof setTimeout> | undefined;
       let timedOut = false;
       let downloadTimedOut = false;
       let downloadPhaseDone = false;
-      if (typeof submitOptions !== "string" && submitOptions?.downloadTimeoutMs) {
-        downloadTimeout = setTimeout(() => { downloadTimedOut = true; controller?.abort(); }, submitOptions.downloadTimeoutMs);
-      }
+      const armDownloadWindow = () => {
+        if (typeof submitOptions === "string" || !submitOptions?.downloadTimeoutMs) return false;
+        downloadPhaseDone = false;
+        downloadTimeout = setTimeout(() => { downloadTimedOut = true; activeController.abort(); }, submitOptions.downloadTimeoutMs);
+        return true;
+      };
       const startGenerationTimeout = () => {
         if (downloadPhaseDone) return;
         downloadPhaseDone = true;
         if (downloadTimeout) clearTimeout(downloadTimeout);
         if (typeof submitOptions !== "string" && submitOptions?.timeoutMs) {
-          timeout = setTimeout(() => { timedOut = true; controller?.abort(); }, submitOptions.timeoutMs);
+          timeout = setTimeout(() => { timedOut = true; activeController.abort(); }, submitOptions.timeoutMs);
         }
       };
-      if (typeof submitOptions !== "string" && !submitOptions?.downloadTimeoutMs && submitOptions?.timeoutMs) {
-        timeout = setTimeout(() => { timedOut = true; controller?.abort(); }, submitOptions.timeoutMs);
-      }
       const internalStatus: StatusCallback = (status, progress, bytes) => {
         if (!downloadStatuses.has(status)) startGenerationTimeout();
         onStatus?.(status, progress, bytes);
       };
+      const ask = (reuse: LanguageModelSession | null, adoptEpoch: number) => askWithChromeBuiltInAi(question, onChunk, {
+        env,
+        signal: activeController.signal,
+        onStatus: internalStatus,
+        loadPolyfill: loader,
+        userActivation,
+        localModelId,
+        forceLocalModel: typeof submitOptions === "string" ? false : submitOptions?.forceLocalModel,
+        rawPrompt: typeof submitOptions === "string" ? false : submitOptions?.rawPrompt,
+        session: reuse ?? undefined,
+        preserveSession: reuse !== null,
+        // A2/B2: a model this submit loaded answers later submits too, so one
+        // download cannot be paid for once per question. A2/B4: if the ready
+        // state moved while the download ran, the learner cleared it — the
+        // session is then destroyed by the generator instead of being published.
+        onLocalSession: (session) => {
+          if (adoptEpoch !== epoch) return false;
+          const dying = warm;
+          warm = { session, modelId };
+          dropSession(dying?.session);
+          return true;
+        },
+      });
       try {
-        return await askWithChromeBuiltInAi(question, onChunk, {
-          env,
-          signal: controller.signal,
-          onStatus: internalStatus,
-          loadPolyfill: loader,
-          userActivation,
-          localModelId,
-          forceLocalModel: typeof submitOptions === "string" ? false : submitOptions?.forceLocalModel,
-        });
+        // A2/B2: the mount warm-up owns the only download. A submit that arrives
+        // while it runs joins that same promise and answers from the session it
+        // published — never a second download, never a second session.
+        while (owner) await owner.promise;
+        const hasDownloadWindow = armDownloadWindow();
+        if (!hasDownloadWindow && typeof submitOptions !== "string" && submitOptions?.timeoutMs) {
+          timeout = setTimeout(() => { timedOut = true; activeController.abort(); }, submitOptions.timeoutMs);
+        }
+        // A warm session answers only its own model: a different revision must
+        // not be reused, and must not be destroyed either (the preload owns it).
+        const reuse = warm !== null && warm.modelId === modelId ? warm.session : null;
+        if (reuse) {
+          const borrowEpoch = epoch;
+          borrowed = reuse;
+          try {
+            return await ask(reuse, borrowEpoch);
+          } catch (error) {
+            // A2/B4: a reused session that failed to answer is stale. Dispose it
+            // and rebuild exactly once, then let the failure stand — there is no
+            // third attempt, so a dead model can never spin the learner.
+            const stale = error instanceof ChromeAiError && error.warmSessionStale;
+            if (!stale || activeController.signal.aborted) throw error;
+            clearWarm();
+            if (armDownloadWindow() && timeout) {
+              // The rebuild reloads artifacts from Cache Storage, so it gets the
+              // cold-start download window again instead of inheriting the
+              // nearly-expired generation window of the attempt that just died.
+              clearTimeout(timeout);
+              timeout = undefined;
+            }
+          } finally {
+            borrowed = null;
+            // The dead (or discarded) session leaves no reference behind once this
+            // submit stops generating with it; a still-published one stays ready.
+            if (warm?.session !== reuse) releaseSession(reuse);
+          }
+        }
+        return await ask(null, epoch);
       } catch (error) {
         if (downloadTimedOut) throw new ChromeAiError("本機模型下載逾時，請檢查網路後重試；未使用任何雲端服務。");
         if (timedOut) throw new ChromeAiError("本機 AI 回答逾時。");
@@ -890,6 +1441,10 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
         if (timeout) clearTimeout(timeout);
         if (downloadTimeout) clearTimeout(downloadTimeout);
         controller = null;
+        // Release the download slot before waking whoever waited on it, so a
+        // joined warm-up re-checks readiness instead of blocking on a dead slot.
+        submitSettled = null;
+        settleSubmit();
       }
     },
   };

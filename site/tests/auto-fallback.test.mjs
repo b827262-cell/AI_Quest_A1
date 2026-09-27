@@ -61,6 +61,19 @@ test("COLD_START: download timeout is separate from the 45s generation window", 
 test("COLD_START: the submit abort signal reaches the browser model-artifact fetch", async () => {
   const artifactUrl = "https://huggingface.co/onnx-community/Qwen3-0.6B-ONNX/resolve/main/onnx/model_quantized.onnx";
   const observed = [];
+  // B1: the cleanup handles are hoisted so the finally can always abort and
+  // drain, even when an assertion throws before the in-try abort. An
+  // un-aborted artifact fetch or an un-awaited rejecting submit either stalls
+  // node:test with a still-pending promise or surfaces later as an unrelated
+  // unhandled rejection.
+  let controller = null;
+  let fetchPromise = null;
+  let pending = null;
+  const drain = [];
+  const track = (promise) => {
+    if (promise) drain.push(Promise.resolve(promise).catch(() => {}));
+    return promise;
+  };
   const env = {
     WebAssembly: { instantiate: () => ({}) },
     window: {
@@ -69,20 +82,23 @@ test("COLD_START: the submit abort signal reaches the browser model-artifact fet
         async create() {
           const cfg = env.window.TRANSFORMERS_CONFIG;
           assert.equal(typeof cfg.env.fetch, "function");
-          fetchPromise = cfg.env.fetch(artifactUrl, {});
+          fetchPromise = track(cfg.env.fetch(artifactUrl, {}));
           await fetchPromise;
           return { async prompt() { return "x"; } };
         },
       },
     },
   };
-  let fetchPromise = null;
   const originalFetch = globalThis.fetch;
   // The durable-cache adapter may hand the merged signal on the Request or on
   // init; observe both so a regression that drops either one fails here.
   globalThis.fetch = (input, init) => {
     const signal = init?.signal ?? (typeof Request !== "undefined" && input instanceof Request ? input.signal : null);
-    observed.push({ url: input instanceof Request ? input.url : String(input), hasSignal: Boolean(signal) });
+    // Keep the actual cloned/merged Request signal strongly reachable while
+    // this fake network request is parked. Node's Request signal-following
+    // implementation may otherwise be collected because a boolean snapshot
+    // alone does not retain the signal that must receive the later abort.
+    observed.push({ url: input instanceof Request ? input.url : String(input), signal });
     return new Promise((_resolve, reject) => {
       if (!signal) return reject(new Error("artifact fetch lost the abort signal"));
       signal.addEventListener("abort", () => reject(new Error("artifact download aborted")));
@@ -92,21 +108,23 @@ test("COLD_START: the submit abort signal reaches the browser model-artifact fet
     // The signal-merging fetch wrapper is the browser branch; force it by
     // defining window (Node otherwise takes the isolated nodeRuntime path).
     globalThis.window = env.window;
-    const controller = new AbortController();
-    const pending = askWithChromeBuiltInAi("什麼是恐龍？", () => {}, {
+    controller = new AbortController();
+    pending = track(askWithChromeBuiltInAi("什麼是恐龍？", () => {}, {
       env,
       signal: controller.signal,
       forceLocalModel: true,
       userActivation: true,
       loadPolyfill: async () => {},
-    });
+    }));
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(fetchPromise instanceof Promise, true, "model fetch must be in flight");
-    assert.equal(observed.at(-1).hasSignal, true, "the submit signal must be merged into the artifact fetch");
+    assert.equal(Boolean(observed.at(-1).signal), true, "the submit signal must be merged into the artifact fetch");
     controller.abort();
     await assert.rejects(fetchPromise, /artifact download aborted/);
     await assert.rejects(pending, /已取消/);
   } finally {
+    controller?.abort();
+    await Promise.allSettled(drain);
     globalThis.fetch = originalFetch;
     delete globalThis.window;
   }
@@ -357,12 +375,17 @@ test("IT and ACCOUNTING stay tutor-only while OTHER/UNKNOWN and 完整解題 go 
   assert.equal(shouldUseLocalTutor("IT", "完整解題（Google）"), false);
 });
 
-test("Google handoff remains explicit, new-tab-only, and cannot bypass consent through its fallback link", () => {
+test("A1: Auto label is simplified and old consent and manual-route UI are removed (DOM=0)", () => {
   const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /if \(!googleConsent \|\| !googleUrl \|\| googleOpened\) return/);
-  assert.match(page, /window\.open\(googleUrl, "_blank", "noopener,noreferrer"\)/);
-  assert.match(page, /googleConsent \? <a className="v2-gesture-button" href=\{googleUrl\} target="_blank" rel="noopener noreferrer"/);
-  assert.doesNotMatch(page, /window\.location\.(?:assign|href)/);
+  assert.match(page, /<option value="Auto">Auto<\/option>/);
+  assert.doesNotMatch(page, /Auto \(Qwen3-0\.6B\)/);
+  assert.doesNotMatch(page, /googleConsent/);
+  assert.doesNotMatch(page, /我同意將原題送往 Google AI/);
+  assert.doesNotMatch(page, /先同意後提供備援連結/);
+  assert.doesNotMatch(page, /改以資訊科試解/);
+  assert.doesNotMatch(page, /改以會計科試解/);
+  assert.doesNotMatch(page, /改以本機模型試解/);
+  assert.doesNotMatch(page, /明確同意並點擊後/);
 });
 
 test("cold-start UI keeps byte progress, the stall escape hatch and the NEEDS_GUARD notice", () => {
@@ -451,5 +474,113 @@ test("COLD_START: a genuine model load failure still evicts for a clean retry", 
   } finally {
     globalThis.caches = originalCaches;
     delete globalThis.window;
+  }
+});
+
+test("A2: page mount preload warms up local model; submit waits for inflight preload and never initiates duplicate download", async () => {
+  let createCount = 0;
+  let destroyCount = 0;
+  const TOTAL = 617687575;
+  const HALF = 308843787;
+
+  // B1: every create parks on its own deferred, and each release handle is
+  // registered here so the finally can settle it even when an assertion fails
+  // midway. A deferred nobody releases is a promise that outlives the test:
+  // node:test then cancels the whole file with "Promise resolution is still
+  // pending but the event loop has already resolved" and a non-zero exit.
+  const pendingDownloads = new Set();
+  const releaseAllDownloads = () => {
+    const releases = [...pendingDownloads];
+    pendingDownloads.clear();
+    for (const release of releases) release();
+  };
+  // Anything still running when an assertion throws must be drained, not
+  // abandoned: late rejections would surface as unhandled rejections.
+  const background = [];
+  const track = (promise) => {
+    const sink = Promise.resolve(promise).catch(() => {});
+    background.push(sink);
+    return promise;
+  };
+
+  const env = {
+    WebAssembly: { instantiate: () => ({}) },
+    window: {
+      LanguageModel: {
+        __isPolyfill: true,
+        async availability() { return "available"; },
+        async create(options) {
+          createCount += 1;
+          if (options?.monitor) {
+            const target = new EventTarget();
+            options.monitor(target);
+            target.dispatchEvent(Object.assign(new Event("downloadprogress"), { loaded: HALF, total: TOTAL }));
+          }
+          await new Promise((release) => { pendingDownloads.add(release); });
+          return {
+            promptStreaming: () => (async function* () { yield "13"; })(),
+            destroy() { destroyCount += 1; },
+          };
+        },
+      },
+    },
+  };
+
+  const submitter = createAutoSubmitter(env, async () => {});
+  try {
+    assert.equal(submitter.isPreloaded, false);
+    assert.equal(submitter.isPreloading, false);
+
+    const seenStatuses = [];
+    // 1. Page mount starts preload (cache miss background download)
+    const preloadPromise = track(submitter.preload(
+      (status, progress, bytes) => seenStatuses.push({ status, bytes }),
+      { localModelId: "test-model", forceLocalModel: true },
+    ));
+    assert.equal(submitter.isPreloading, true);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(createCount, 1, "preload must trigger model creation/download");
+
+    // 2. Submit while preload is in flight: submit waits for preload and does NOT start a second download
+    const submitPromise = track(submitter.submit("十三加五等於多少？", () => {}, undefined, {
+      localModelId: "test-model",
+      forceLocalModel: true,
+    }));
+
+    // Ensure no second create was triggered by submit
+    assert.equal(createCount, 1, "submit must wait for inflight preload and never start a second download");
+
+    // Release the download
+    releaseAllDownloads();
+    assert.equal(await preloadPromise, "warmed");
+    assert.equal(submitter.isPreloaded, true);
+    assert.equal(submitter.isPreloading, false);
+    assert.ok(
+      seenStatuses.some((entry) => entry.status === "local model download" && entry.bytes?.loaded === HALF),
+      "preload must surface byte progress while the download is in flight",
+    );
+    assert.ok(seenStatuses.some((entry) => entry.status === "local model ready"), "preload must publish 'local model ready'");
+
+    const answer = await submitPromise;
+    assert.equal(answer, "13");
+    assert.equal(createCount, 1, "total create calls must be exactly 1");
+    assert.equal(destroyCount, 0, "the shared warm session stays alive for the next answer");
+
+    // 3. Cache hit for the SAME model: readiness answers without a new download
+    const repeatStatuses = [];
+    const repeat = await submitter.preload((st) => repeatStatuses.push(st), { localModelId: "test-model" });
+    assert.equal(repeat, "warmed", "an already-ready model returns immediately");
+    assert.equal(createCount, 1, "cache hit / ready must not trigger additional download");
+    assert.ok(repeatStatuses.includes("local model ready"), "the join path still tells the learner the model is ready");
+
+    // 4. Reset lifecycle: deleting readiness destroys the published session exactly once
+    submitter.resetPreload();
+    assert.equal(submitter.isPreloaded, false);
+    assert.equal(submitter.isPreloading, false);
+    assert.equal(destroyCount, 1, "resetPreload must destroy the ready session exactly once");
+    assert.equal(createCount, 1);
+  } finally {
+    releaseAllDownloads();
+    await Promise.allSettled(background);
   }
 });
