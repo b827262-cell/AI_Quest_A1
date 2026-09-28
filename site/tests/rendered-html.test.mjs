@@ -29,7 +29,9 @@ test("renders the AI-SmartBook learning homepage", async () => {
   assert.match(html, /Chrome Built-in AI/);
   assert.match(html, /id="auto-answer"/);
   assert.match(html, /auto-question/);
-  assert.match(html, /送出問題/);
+  assert.match(html, /跳頁 Google AI 解答/);
+  assert.match(html, /AI 助手出題/);
+  assert.match(html, /練習題主要提供學員練題；詳解答案請使用 Google AI/);
   assert.match(html, /快速題型/);
   assert.match(html, /class="v2-hero-art v2-reveal v2-delay-1" role="img" aria-label="AI-SmartBook 學習介面示意"/);
   assert.match(html, /aria-pressed="false"/);
@@ -40,7 +42,7 @@ test("renders the AI-SmartBook learning homepage", async () => {
   assert.doesNotMatch(html, /\/admin\/login\b/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview|react-loading-skeleton/);
 
-  // A1: Auto (Qwen3-0.6B) -> Auto, unclassified copy, consent checkbox, Google full-solve/fallback, manual buttons removed
+  // A1: Auto label, old consent checkbox and manual subject routes remain removed.
   assert.match(html, /<option value="Auto"[^>]*>Auto<\/option>/);
   assert.doesNotMatch(html, /Auto \(Qwen3-0\.6B\)/);
   assert.doesNotMatch(html, /模型只在 IT／會計題目啟用/);

@@ -10,14 +10,17 @@ import {
 } from "../app/chrome-built-in-ai.ts";
 import {
   AUTO_ROUTE_WITHHELD_COPY,
+  buildPracticeQuestionPrompt,
   LOCAL_ANSWER_MIN_CONFIDENCE,
   localAnswerWithholdReason,
   runAutoRouteInference,
   shouldDisplayLocalAnswer,
+  validatePracticeQuestion,
 } from "../app/auto-route.ts";
 import {
   closePreopenedGoogleAiTab,
   handoffToGoogleAi,
+  openGoogleAiAfterLocalFailure,
   preopenGoogleAiTab,
 } from "../app/auto-handoff.ts";
 
@@ -666,7 +669,7 @@ test("A4: withheld copy covers every path and leaks neither contract JSON nor na
   }
 });
 
-test("A4+A5 UI wiring: page.tsx paints only a gate-passed answer; all other outcomes hand off", () => {
+test("A4 UI wiring: local trial stays on the page and paints only a gate-passed answer", () => {
   const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /await runAutoRouteInference\(/, "submit must route generation through the A4 gate");
   assert.match(
@@ -680,12 +683,28 @@ test("A4+A5 UI wiring: page.tsx paints only a gate-passed answer; all other outc
     "only the gate-passed answer text may reach setAnswer",
   );
   assert.match(page, /if \(result\.outcome === "shown"\)/, "page must branch on the gate outcome");
-  assert.match(page, /const googleAiTab = preopenGoogleAiTab\(window\)/, "submit must pre-open a blank tab synchronously");
-  assert.match(page, /closePreopenedGoogleAiTab\(googleAiTab\)/, "a local pass must close the blank tab");
-  assert.match(page, /handoffToGoogleAi\(prompt, googleAiTab, window\)/, "every non-local outcome must hand off using the original prompt");
+  assert.doesNotMatch(page, /preopenGoogleAiTab\(window\)|handoffToGoogleAi\(/, "local trial must never open or navigate a tab");
+  assert.match(page, /cause\.message\.includes\("本機 AI 模型無法完成回答"\) && fallbackGuard\.navigateOnce\(\)/,
+    "only a failed local model answer triggers the automatic handoff");
+  assert.match(page, /openGoogleAiAfterLocalFailure\(prompt, window\)/,
+    "the automatic handoff carries the original question");
+  assert.match(page, /setError\(AUTO_ROUTE_WITHHELD_COPY\[result\.withhold/, "withheld answers must show a local message");
+  assert.match(page, /target="_blank" rel="noopener noreferrer">跳頁 Google AI 解答/, "Google navigation remains a separate explicit action");
+  assert.match(page, /buildPracticeQuestionPrompt\(prompt, mode\)/, "local AI receives the exercise prompt");
+  assert.match(page, /validatePracticeQuestion,/, "exercise gate must reject revealed answers");
+  assert.match(page, /buildGoogleAiModeUrl\(`請用繁體中文詳解以下練習題/, "the explanation link must pass the generated exercise to Google AI");
   assert.doesNotMatch(page, /\bchunk\b[^\n]*setAnswer/, "raw model chunks must never be wired to answer state");
   const strayAnswerWrites = page.match(/setAnswer\((?!\s*(?:""|faq\[1\]|text)\s*\))/g) || [];
   assert.deepEqual(strayAnswerWrites, [], "setAnswer may only be called with '', FAQ copy, or the gated text");
+});
+
+test("AI 助手出題: prompt asks for one exercise without an answer, and disclosed solutions are withheld", () => {
+  const prompt = buildPracticeQuestionPrompt("二元搜尋樹", "可選提示");
+  assert.match(prompt, /只出一題/);
+  assert.match(prompt, /不要提供答案、詳解/);
+  assert.match(prompt, /二元搜尋樹/);
+  assert.equal(validatePracticeQuestion("二元搜尋樹", "請說明二元搜尋樹的搜尋時間複雜度？").status, "VALID");
+  assert.equal(validatePracticeQuestion("二元搜尋樹", "二元搜尋樹搜尋複雜度為何？答案：O(log n)").status, "INVALID");
 });
 
 // ====================================================================
@@ -693,7 +712,7 @@ test("A4+A5 UI wiring: page.tsx paints only a gate-passed answer; all other outc
 // ====================================================================
 
 function makeHandoffBrowser({ popupBlocked = false } = {}) {
-  const calls = { open: [], tabReplace: [], currentReplace: [], close: 0, opener: [] };
+  const calls = { open: [], tabReplace: [], currentReplace: [], currentAssign: [], close: 0, opener: [] };
   const tab = {
     closed: false,
     opener: { parent: true },
@@ -702,10 +721,29 @@ function makeHandoffBrowser({ popupBlocked = false } = {}) {
   };
   const browser = {
     open(...args) { calls.open.push(args); return popupBlocked ? null : tab; },
-    location: { replace(url) { calls.currentReplace.push(url); } },
+    location: { replace(url) { calls.currentReplace.push(url); }, assign(url) { calls.currentAssign.push(url); } },
   };
   return { browser, calls, tab };
 }
+
+test("local answer failure opens Google AI only after failure, using the original question", () => {
+  const { browser, calls, tab } = makeHandoffBrowser();
+  assert.deepEqual(calls.open, [], "no blank tab is opened during local inference");
+  const outcome = openGoogleAiAfterLocalFailure("二元搜尋樹 a & b", browser);
+  assert.equal(outcome, "new-tab");
+  assert.deepEqual(calls.open, [["about:blank", "_blank"]]);
+  assert.equal(tab.opener, null);
+  assert.equal(calls.tabReplace[0], "https://www.google.com/search?q=%E4%BA%8C%E5%85%83%E6%90%9C%E5%B0%8B%E6%A8%B9%20a%20%26%20b&udm=50&aep=11&hl=zh-TW");
+  assert.deepEqual(calls.currentAssign, []);
+});
+
+test("popup-blocked local answer failure navigates the current tab once", () => {
+  const { browser, calls } = makeHandoffBrowser({ popupBlocked: true });
+  assert.equal(openGoogleAiAfterLocalFailure("會計分錄", browser), "current-tab");
+  assert.equal(calls.open.length, 1);
+  assert.deepEqual(calls.tabReplace, []);
+  assert.deepEqual(calls.currentAssign, ["https://www.google.com/search?q=%E6%9C%83%E8%A8%88%E5%88%86%E9%8C%84&udm=50&aep=11&hl=zh-TW"]);
+});
 
 test("A5: submit gesture pre-opens one blank tab; local PASS closes it without Google navigation", () => {
   const { browser, calls, tab } = makeHandoffBrowser();

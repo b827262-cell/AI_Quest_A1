@@ -388,13 +388,13 @@ test("A1: Auto label is simplified and old consent and manual-route UI are remov
   assert.doesNotMatch(page, /明確同意並點擊後/);
 });
 
-test("cold-start UI keeps byte progress, the stall escape hatch and the NEEDS_GUARD notice", () => {
+test("cold-start UI keeps byte progress, the stall escape hatch and the practice answer notice", () => {
   const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /DOWNLOAD_STALL_MS = 90_000/);
   assert.match(page, /下載停滯（連續 90 秒無新資料）/);
   assert.match(page, /onClick=\{retryDownload\}>重新下載</);
   assert.match(page, /if \(bytes\?\.loaded\) lastProgressAt\.current = Date\.now\(\);/);
-  assert.match(page, /未經外部事實查證（NEEDS_GUARD）/);
+  assert.match(page, /先自行作答，詳解答案請由 Google AI 查看。/);
 });
 
 function fakeCacheStorage() {

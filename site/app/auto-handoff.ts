@@ -21,8 +21,27 @@ export type HandoffTab = {
 
 export type HandoffWindow = {
   open(url?: string, target?: string): HandoffTab | null;
-  location: { replace(url: string): void };
+  location: { replace(url: string): void; assign?(url: string): void };
 };
+
+/** Open only after a failed local answer, avoiding a blank tab during inference. */
+export function openGoogleAiAfterLocalFailure(
+  originalQuestion: string,
+  browser: HandoffWindow,
+): "new-tab" | "current-tab" {
+  const googleAiUrl = buildGoogleAiModeUrl(originalQuestion);
+  // An asynchronous model failure may lose user activation. Try a new tab,
+  // then navigate this tab if the browser blocks the popup.
+  const tab = browser.open("about:blank", "_blank");
+  if (tab) {
+    tab.opener = null;
+    tab.location.replace(googleAiUrl);
+    return "new-tab";
+  }
+  if (browser.location.assign) browser.location.assign(googleAiUrl);
+  else browser.location.replace(googleAiUrl);
+  return "current-tab";
+}
 
 /** Call directly from the submit event, before the first await. */
 export function preopenGoogleAiTab(browser: HandoffWindow): HandoffTab | null {

@@ -24,3 +24,4 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .v2-nav nav a:hover,.v2-nav-login:hover{color:#3d5ed1}
 .v2-footer-bottom>a:last-child:hover{color:#b8c8ff}
 .v2-button-primary{color:#ffffff;background:linear-gradient(125deg,#4569e0,#644ee0)}
+.v2-google-action{display:flex;flex-wrap:wrap;align-items:center;gap:10px 15px;margin-top:12px}.v2-google-action .v2-button{border:0}.v2-google-action span:not([aria-hidden]){color:#51617e;font-size:14px;line-height:1.5}.v2-google-action button:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;transform:none}.v2-auto-controls .v2-button-secondary{border:1px solid #d1d9e9}
