@@ -2,18 +2,14 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PrimaryButton } from "../components/ui/Buttons";
 import { useStudentAuth } from "../student-auth";
-
-function safeNext(value: unknown): string {
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/books";
-  return value;
-}
+import { safeStudentReturnTo } from "@ai-smartbook/auth/browser";
 
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { status } = useStudentAuth();
   const [error, setError] = useState("");
-  const from = safeNext((location.state as { from?: unknown } | null)?.from);
+  const from = safeStudentReturnTo((location.state as { from?: string } | null)?.from);
   const reason = (location.state as { reason?: string } | null)?.reason;
 
   useEffect(() => {
@@ -38,6 +34,8 @@ export function LoginPage() {
           <p>智能學習書本入口</p>
         </div>
         {reason === "session_expired" ? <p className="login-error">登入狀態已到期，請重新登入。</p> : null}
+        {reason === "oauth_cancelled" ? <p className="login-error">已取消登入，尚未建立登入狀態。</p> : null}
+        {reason === "oauth_failed" ? <p className="login-error">登入驗證失敗，請重新嘗試。</p> : null}
         {error ? <p className="login-error">{error}</p> : null}
         <PrimaryButton type="button" onClick={beginGoogleLogin} disabled={status === "loading"}>
           使用 Google 登入

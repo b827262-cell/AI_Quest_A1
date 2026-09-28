@@ -10,6 +10,7 @@ import {
   type StudentAuthUserRecord,
   type GoogleIdentity
 } from "../src/server";
+import { safeStudentReturnTo } from "../src/shared";
 
 function buildFakeAuth(now: () => number, exchangeIdentity: (code: string, verifier: string) => Promise<GoogleIdentity>) {
   const users = new Map<string, StudentAuthUserRecord>();
@@ -169,5 +170,25 @@ describe("Student Auth Foundation", () => {
     expect(studentSessionCookieOptions(config)).toMatchObject({ httpOnly: true, secure: true, sameSite: "strict" });
     expect(digestStudentSecret("raw-token")).not.toBe("raw-token");
     clock += 1;
+  });
+
+  it("uses one shared learning return contract and consumes cancelled OAuth transactions", async () => {
+    let clock = Date.parse("2026-08-05T00:00:00.000Z");
+    const { service, stats } = buildFakeAuth(() => clock, async () => ({ subject: "sub", email: "s@example.test", displayName: "S", avatarUrl: null }));
+    expect(safeStudentReturnTo("/books/unit-1?tab=notes")).toBe("/books/unit-1?tab=notes");
+    expect(safeStudentReturnTo("//attacker.example")).toBe("/books");
+    expect(safeStudentReturnTo("/books\\attacker")).toBe("/books");
+    expect(safeStudentReturnTo("/books\r\nLocation: https://attacker.example")).toBe("/books");
+
+    const start = service.beginGoogleLogin("//attacker.example");
+    const state = new URL(start.authorizationUrl).searchParams.get("state")!;
+    expect(service.cancelOAuthLogin(state)).toEqual({ returnTo: "/books" });
+    await expect(service.completeGoogleLogin({ state, code: "late-code" })).rejects.toThrow("oauth state is invalid");
+    expect(stats.sessionCreates()).toBe(0);
+
+    const expiredStart = service.beginGoogleLogin("/books");
+    const expiredState = new URL(expiredStart.authorizationUrl).searchParams.get("state")!;
+    clock += 61_000;
+    expect(service.cancelOAuthLogin(expiredState)).toBeUndefined();
   });
 });

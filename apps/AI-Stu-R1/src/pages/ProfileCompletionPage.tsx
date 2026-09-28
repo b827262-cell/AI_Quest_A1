@@ -2,17 +2,13 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PrimaryButton } from "../components/ui/Buttons";
 import { useStudentAuth } from "../student-auth";
-
-function safeNext(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/books";
-  return value;
-}
+import { safeStudentReturnTo } from "@ai-smartbook/auth/browser";
 
 export function ProfileCompletionPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { status, profile, updateProfile, logout } = useStudentAuth();
-  const next = safeNext(new URLSearchParams(location.search).get("next"));
+  const next = safeStudentReturnTo(new URLSearchParams(location.search).get("next"));
   const [displayName, setDisplayName] = useState(profile?.displayName || "");
   const [schoolName, setSchoolName] = useState(profile?.schoolName || "");
   const [gradeLevel, setGradeLevel] = useState(profile?.gradeLevel || "");

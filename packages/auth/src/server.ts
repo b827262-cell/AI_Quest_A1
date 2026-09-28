@@ -12,6 +12,7 @@ import type {
   StudentSession,
   StudentUser
 } from "./shared";
+import { safeStudentReturnTo } from "./shared";
 
 export const STUDENT_SESSION_COOKIE = "ai_student_session";
 export const DEFAULT_STUDENT_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
@@ -189,12 +190,6 @@ function decryptShortLivedSecret(value: string, secret: string): string {
   ]).toString("utf8");
 }
 
-function safeReturnTo(value: string | undefined): string {
-  const candidate = value?.trim() || "/books";
-  if (!candidate.startsWith("/") || candidate.startsWith("//") || candidate.includes("\\")) return "/books";
-  return candidate;
-}
-
 export function buildGoogleAuthorizationUrl(
   config: StudentAuthConfig,
   state: string,
@@ -283,7 +278,7 @@ export class StudentAuthService {
     }
     const state = createOAuthState();
     const verifier = createPkceVerifier();
-    const safeTarget = safeReturnTo(returnTo);
+    const safeTarget = safeStudentReturnTo(returnTo);
     this.repositories.oauthStates.create({
       stateDigest: digestStudentSecret(state),
       verifierCiphertext: encryptShortLivedSecret(verifier, this.config.sessionSecret),
@@ -335,6 +330,20 @@ export class StudentAuthService {
       profile: toStudentProfile(user),
       returnTo: state.returnTo
     };
+  }
+
+  /**
+   * A provider cancellation/error is terminal for its transaction too. Consume
+   * state so a later success callback cannot reuse it; no provider call or
+   * local session is made on this path.
+   */
+  cancelOAuthLogin(state: string): { returnTo: string } | undefined {
+    if (!state) return undefined;
+    const pending = this.repositories.oauthStates.consume(
+      digestStudentSecret(state),
+      new Date(this.now()).toISOString()
+    );
+    return pending ? { returnTo: safeStudentReturnTo(pending.returnTo) } : undefined;
   }
 
   restoreSession(rawToken: string | undefined): { session: StudentSession; user: StudentUser; profile: StudentProfile } | undefined {
@@ -404,7 +413,7 @@ export function studentSessionCookieOptions(config: StudentAuthConfig): {
   path: string;
   maxAge: number;
 } {
-  return { httpOnly: true, secure: config.secureCookies, sameSite: "strict", path: "/", maxAge: config.sessionTtlMs };
+  return { httpOnly: true, secure: config.secureCookies, sameSite: "strict", path: "/", maxAge: Math.floor(config.sessionTtlMs / 1000) };
 }
 
 export function clearStudentSessionCookieOptions(config: StudentAuthConfig) {

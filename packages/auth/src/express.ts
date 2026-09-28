@@ -10,6 +10,7 @@ import {
   type StudentAuthService
 } from "./server";
 import type { StudentAuthMeResponse } from "./index";
+import { safeStudentReturnTo } from "./shared";
 
 export interface StudentRequestAuth {
   session: { id: string; userId: string; expiresAt: string };
@@ -102,6 +103,20 @@ export function createStudentAuthRouter(
   router.get("/google/callback", async (req, res) => {
     const state = typeof req.query.state === "string" ? req.query.state : "";
     const code = typeof req.query.code === "string" ? req.query.code : "";
+    const providerError = typeof req.query.error === "string" ? req.query.error : "";
+    if (providerError) {
+      const cancelled = auth.cancelOAuthLogin(state);
+      if (!cancelled) {
+        res.status(400).json({ error: "OAUTH_STATE_INVALID" });
+        return;
+      }
+      // Keep the actual provider message out of the browser URL/logs. The SPA
+      // gets a stable reason and the same validated return-to contract.
+      const reason = providerError === "access_denied" ? "oauth_cancelled" : "oauth_failed";
+      res.setHeader("Cache-Control", "no-store");
+      res.redirect(302, `/auth/callback?error=${reason}&next=${encodeURIComponent(safeStudentReturnTo(cancelled.returnTo))}`);
+      return;
+    }
     if (!state || !code) {
       res.status(400).json({ error: "OAUTH_STATE_INVALID" });
       return;

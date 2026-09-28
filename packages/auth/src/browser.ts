@@ -7,3 +7,4 @@ export type {
   StudentSession,
   StudentUser
 } from "./shared";
+export { safeStudentReturnTo } from "./shared";

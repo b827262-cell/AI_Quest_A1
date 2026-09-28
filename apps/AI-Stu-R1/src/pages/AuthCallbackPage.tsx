@@ -1,11 +1,7 @@
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useStudentAuth } from "../student-auth";
-
-function safeNext(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/dashboard";
-  return value;
-}
+import { safeStudentReturnTo } from "@ai-smartbook/auth/browser";
 
 /**
  * OAuth landing page. The authoritative exchange happens server-side at
@@ -17,12 +13,12 @@ export function AuthCallbackPage() {
   const location = useLocation();
   const { status, profile } = useStudentAuth();
   const params = new URLSearchParams(location.search);
-  const next = safeNext(params.get("next"));
+  const next = safeStudentReturnTo(params.get("next"));
   const error = params.get("error");
 
   useEffect(() => {
     if (error) {
-      navigate("/login", { replace: true, state: { reason: "oauth_failed" } });
+      navigate("/login", { replace: true, state: { from: next, reason: error === "oauth_cancelled" ? "oauth_cancelled" : "oauth_failed" } });
       return;
     }
     if (status === "anonymous") {
