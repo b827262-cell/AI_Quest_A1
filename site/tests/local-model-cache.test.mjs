@@ -4,6 +4,7 @@ import {
   cacheKey,
   createModelCacheFetch,
   deleteLocalModelCache,
+  LOCAL_MODEL_CACHE_CAP,
   markLocalModelCacheReady,
   probeLocalModelCache,
   requestLocalModelPersistence,
@@ -43,6 +44,8 @@ function storageFor(cache = new MemoryCache()) {
   return { cache, storage: { open: async () => cache } };
 }
 
+const roomyStorage = { estimate: async () => ({ usage: 11, quota: 1024 * 1024 }) };
+
 function modelResponse(body = "model-bytes") {
   return new Response(body, { headers: { "content-length": String(new TextEncoder().encode(body).length) } });
 }
@@ -71,6 +74,41 @@ test("a warm reload serves the cached full artifact without another network GET"
   assert.equal(requests.length, 1);
   assert.match(requests[0], new RegExp(`/resolve/${identity.revision}/`));
   assert.equal((await probeLocalModelCache(identity, { storage })).complete, true);
+});
+
+test("a newly-ready model keeps the cache at one model revision and removes the replaced artifacts", async () => {
+  const { cache, storage } = storageFor();
+  const replacement = { ...identity, revision: "replacement-revision" };
+  const replacementArtifact = artifact.replace("/resolve/main/", "/resolve/main/tokenizer.json");
+  const network = async () => modelResponse();
+
+  await createModelCacheFetch(identity, network, { storage })(artifact);
+  assert.equal(await markLocalModelCacheReady(identity, { storage }), true);
+  await createModelCacheFetch(replacement, network, { storage, storageManager: roomyStorage })(replacementArtifact);
+  assert.equal(await markLocalModelCacheReady(replacement, { storage }), true);
+
+  assert.equal(LOCAL_MODEL_CACHE_CAP, 1);
+  assert.equal(cache.entries.has(cacheKey(identity, artifact)), false);
+  assert.equal((await probeLocalModelCache(identity, { storage })).artifactCount, 0);
+  assert.equal((await probeLocalModelCache(replacement, { storage })).complete, true);
+
+  const warmReplacement = createModelCacheFetch(replacement, async () => {
+    throw new Error("the retained model must not refetch its artifact");
+  }, { storage });
+  assert.equal(await (await warmReplacement(replacementArtifact)).text(), "model-bytes");
+});
+
+test("selected-revision deletion leaves another revision's entries untouched", async () => {
+  const { cache, storage } = storageFor();
+  const otherIdentity = { ...identity, revision: "selected-delete-isolation" };
+  const otherArtifact = artifact.replace("model_q4f16.onnx", "tokenizer.json");
+  await (await createModelCacheFetch(identity, async () => modelResponse(), { storage })(artifact)).arrayBuffer();
+  assert.equal(await markLocalModelCacheReady(identity, { storage }), true);
+  cache.entries.set(cacheKey(otherIdentity, otherArtifact), modelResponse("other-model"));
+
+  assert.equal(await deleteLocalModelCache(identity, { storage }), 1);
+  assert.equal(cache.entries.has(cacheKey(identity, artifact)), false);
+  assert.equal(cache.entries.has(cacheKey(otherIdentity, otherArtifact)), true);
 });
 
 test("cold model response streams to inference while Cache.put writes concurrently", async () => {
@@ -207,17 +245,154 @@ test("quota failures preserve the live model response and never mark the cache c
   assert.equal(state.issue, "quota");
 });
 
-test("model deletion removes only the selected revision's cache entries", async () => {
+test("orphan artifacts without a manifest are swept before a new model is cached", async () => {
+  const { cache, storage } = storageFor();
+  const orphanIdentity = { ...identity, revision: "orphan-without-manifest" };
+  const replacement = { ...identity, revision: "replacement-after-orphan" };
+  const replacementArtifact = artifact.replace("model_q4f16.onnx", "tokenizer.json");
+  cache.entries.set(cacheKey(orphanIdentity, artifact), modelResponse("orphan-model"));
+
+  assert.equal(await (await createModelCacheFetch(replacement, async () => modelResponse("replacement-model"), {
+    storage,
+    storageManager: roomyStorage,
+  })(replacementArtifact)).text(), "replacement-model");
+  assert.equal(await markLocalModelCacheReady(replacement, { storage }), true);
+  assert.equal(cache.entries.has(cacheKey(orphanIdentity, artifact)), false);
+  assert.equal((await probeLocalModelCache(replacement, { storage })).complete, true);
+});
+
+test("cross-identity quota preflight failure preserves the complete old model", async () => {
+  const { cache, storage } = storageFor();
+  const replacement = { ...identity, revision: "quota-replacement" };
+  const replacementArtifact = artifact.replace("model_q4f16.onnx", "tokenizer.json");
+  await (await createModelCacheFetch(identity, async () => modelResponse(), { storage })(artifact)).arrayBuffer();
+  assert.equal(await markLocalModelCacheReady(identity, { storage }), true);
+
+  const fetcher = createModelCacheFetch(replacement, async () => modelResponse(), {
+    storage,
+    storageManager: { estimate: async () => ({ usage: 11, quota: 10 }) },
+  });
+  assert.equal(await (await fetcher(replacementArtifact)).text(), "model-bytes");
+  assert.equal((await probeLocalModelCache(identity, { storage })).complete, true);
+  assert.equal(await (await createModelCacheFetch(identity, async () => {
+    throw new Error("preserved model must be readable without network");
+  }, { storage })(artifact)).text(), "model-bytes");
+  assert.equal((await probeLocalModelCache(replacement, { storage })).complete, false);
+  assert.equal((await probeLocalModelCache(replacement, { storage })).issue, "quota");
+  const identities = new Set([...cache.entries.keys()].filter((key) => key.includes("/asset/")).map((key) => key.split("/asset/")[1].split("/")[0]));
+  assert.ok(identities.size <= 1);
+});
+
+test("an unknown replacement size preserves the complete old model", async () => {
+  const { cache, storage } = storageFor();
+  const replacement = { ...identity, revision: "unknown-size-replacement" };
+  await (await createModelCacheFetch(identity, async () => modelResponse(), { storage })(artifact)).arrayBuffer();
+  assert.equal(await markLocalModelCacheReady(identity, { storage }), true);
+
+  const replacementResponse = await createModelCacheFetch(replacement, async () => new Response("new-model"), {
+    storage,
+    storageManager: roomyStorage,
+  })(artifact);
+  assert.equal(await replacementResponse.text(), "new-model");
+  assert.equal((await probeLocalModelCache(identity, { storage })).complete, true);
+  assert.equal([...cache.entries.keys()].some((key) => key.includes(encodeURIComponent("unknown-size-replacement"))), false);
+});
+
+test("a non-200 replacement preserves the complete old model", async () => {
+  const { cache, storage } = storageFor();
+  const replacement = { ...identity, revision: "failed-replacement" };
+  await (await createModelCacheFetch(identity, async () => modelResponse(), { storage })(artifact)).arrayBuffer();
+  assert.equal(await markLocalModelCacheReady(identity, { storage }), true);
+
+  const replacementResponse = await createModelCacheFetch(replacement, async () => new Response("unavailable", { status: 503 }), {
+    storage,
+    storageManager: roomyStorage,
+  })(artifact);
+  assert.equal(replacementResponse.status, 503);
+  assert.equal((await probeLocalModelCache(identity, { storage })).complete, true);
+  assert.equal([...cache.entries.keys()].some((key) => key.includes(encodeURIComponent("failed-replacement"))), false);
+});
+
+test("two identities downloading concurrently leave one complete model and no orphan artifacts", async () => {
+  const { cache, storage } = storageFor();
+  const otherIdentity = { ...identity, revision: "concurrent-revision" };
+  const otherArtifact = artifact.replace("model_q4f16.onnx", "tokenizer.json");
+  const firstFetch = createModelCacheFetch(identity, async () => modelResponse("first"), { storage });
+  const secondFetch = createModelCacheFetch(otherIdentity, async () => modelResponse("second"), {
+    storage,
+    storageManager: roomyStorage,
+  });
+
+  const firstResponse = await firstFetch(artifact);
+  const pendingSecond = secondFetch(otherArtifact);
+  assert.equal(await firstResponse.text(), "first");
+  const secondResponse = await pendingSecond;
+  assert.equal(await secondResponse.text(), "second");
+  assert.equal(await markLocalModelCacheReady(identity, { storage }), false);
+  assert.equal(await markLocalModelCacheReady(otherIdentity, { storage }), true);
+
+  const localEntries = [...cache.entries.keys()].filter((key) => key.includes("local-cache.invalid"));
+  const artifactIdentities = new Set(localEntries.filter((key) => key.includes("/asset/")).map((key) => key.split("/asset/")[1].split("/")[0]));
+  assert.equal(artifactIdentities.size, 1);
+  assert.ok(localEntries.every((key) => !key.includes(encodeURIComponent(identity.revision))));
+});
+
+test("a new model revision evicts the prior identity so only one local model remains", async () => {
   const { cache, storage } = storageFor();
   const otherIdentity = { modelId: identity.modelId, revision: "another-revision" };
   await (await createModelCacheFetch(identity, async () => modelResponse(), { storage })(artifact)).arrayBuffer();
   await markLocalModelCacheReady(identity, { storage });
   const otherUrl = artifact.replace("resolve/main", "resolve/another-revision");
-  await (await createModelCacheFetch(otherIdentity, async () => modelResponse(), { storage })(otherUrl)).arrayBuffer();
+  await (await createModelCacheFetch(otherIdentity, async () => modelResponse(), { storage, storageManager: roomyStorage })(otherUrl)).arrayBuffer();
   await markLocalModelCacheReady(otherIdentity, { storage });
-  const removed = await deleteLocalModelCache(identity, { storage });
-  assert.equal(removed, 1);
+  assert.equal(cache.entries.has(cacheKey(identity, artifact)), false);
   assert.equal(cache.entries.has(cacheKey(otherIdentity, otherUrl)), true);
+  assert.equal((await probeLocalModelCache(identity, { storage })).artifactCount, 0);
+  assert.equal((await probeLocalModelCache(otherIdentity, { storage })).complete, true);
+  const removed = await deleteLocalModelCache(otherIdentity, { storage });
+  assert.equal(removed, 1);
+  assert.equal([...cache.entries.keys()].filter((key) => key.includes("local-cache.invalid")).length, 0);
+});
+
+test("cache progress and model limit use streamed artifact bytes, not origin storage quota", async () => {
+  const { storage } = storageFor();
+  const progress = [];
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2]));
+      controller.enqueue(new Uint8Array([3, 4, 5]));
+      controller.close();
+    },
+  });
+  const fetcher = createModelCacheFetch(identity, async () => new Response(body, {
+    headers: { "content-length": "5" },
+  }), { storage, onDownloadProgress: (value) => progress.push(value) });
+  await (await fetcher(artifact)).arrayBuffer();
+  await markLocalModelCacheReady(identity, { storage });
+  assert.deepEqual(progress.at(-1), { loaded: 5, total: 5 });
+  const state = await probeLocalModelCache(identity, { storage });
+  assert.equal(state.cachedBytes, 5);
+  assert.equal(state.safeLimit, 700 * 1024 * 1024);
+});
+
+test("an interrupted incomplete download removes its artifact and manifest", async () => {
+  const { cache, storage } = storageFor();
+  const controller = new AbortController();
+  const body = new ReadableStream({
+    start(stream) { stream.enqueue(new Uint8Array([1])); },
+    pull() { return new Promise(() => {}); },
+  });
+  const fetcher = createModelCacheFetch(identity, async () => new Response(body, {
+    headers: { "content-length": "2" },
+  }), { storage, signal: controller.signal });
+  const response = await fetcher(artifact);
+  const reader = response.body.getReader();
+  await reader.read();
+  controller.abort();
+  await assert.rejects(reader.read(), { name: "AbortError" });
+  // Wait for the adapter's background Cache.put branch to settle its cleanup.
+  assert.equal(await markLocalModelCacheReady(identity, { storage }), false);
+  assert.equal(cache.entries.has(cacheKey(identity, artifact)), false);
   assert.equal((await probeLocalModelCache(identity, { storage })).artifactCount, 0);
 });
 

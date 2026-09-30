@@ -60,6 +60,12 @@ export default async function SignInWithChatGPTPage({
           </ul>
         </div>
       </section>
+      <footer className="signin-footer">
+        <p>讓工具退到背景</p>
+        <h2>把注意力留給 真正想理解的事。</h2>
+        <p>你不需要為了學習拼湊一套流程；閱讀、整理與回顧，應該自然地發生在同一個地方。</p>
+        <a href="https://ai-quest-a1-backend.b827262.chatgpt.site/">進入學習工作台 →</a>
+      </footer>
     </main>
   );
 }

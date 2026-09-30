@@ -176,7 +176,7 @@ export default function Home() {
     const state = await probeLocalModelCache(localModel);
     const bytes = (value?: number) => value === undefined ? "未知" : `${(value / 1024 / 1024).toFixed(1)} MB`;
     const issue = state.issue === "quota" ? "；快取空間不足，模型仍可重試下載" : state.issue === "corrupt" ? "；快取檔案受損，重試時會重新下載" : state.issue === "incomplete" ? "；下載未完整保存，可重試" : "";
-    setCacheStatus(state.supported ? `快取：${state.complete ? "完整可用" : "尚未完整"}（${state.artifactCount} 個檔案）${issue}；使用 ${bytes(state.usage)} / ${bytes(state.quota)}；持久化 ${state.persisted === true ? "已允許" : state.persisted === false ? "未允許" : "未知"}` : "此瀏覽器不支援 Cache Storage。");
+    setCacheStatus(state.supported ? `快取：${state.complete ? "完整可用" : "尚未完整"}（${state.artifactCount} 個檔案）${issue}；本模型已快取 ${bytes(state.cachedBytes)}${state.safeLimit === undefined ? "" : `／安全上限 ${bytes(state.safeLimit)}`}；持久化 ${state.persisted === true ? "已允許" : state.persisted === false ? "未允許" : "未知"}` : "此瀏覽器不支援 Cache Storage。");
   }
 
   return <main className="v2-page"><span className="sr-only">Chrome Built-in AI</span>

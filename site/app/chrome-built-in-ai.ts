@@ -751,7 +751,14 @@ export async function askWithChromeBuiltInAi(
             : createModelCacheFetch(
                 { modelId: chosenModelId, revision: LOCAL_FALLBACK_MODEL_REVISION },
                 globalThis.fetch.bind(globalThis),
-                { signal: options.signal },
+                {
+                  signal: options.signal,
+                  onDownloadProgress: ({ loaded, total }) => options.onStatus?.(
+                    "local model download",
+                    total === null ? null : Math.min(1, loaded / total),
+                    { loaded, total },
+                  ),
+                },
               ) }
           : {}),
         backends: {
@@ -1017,7 +1024,14 @@ export async function preloadLocalModel(options: PreloadOptions = {}): Promise<P
                 : createModelCacheFetch(
                     { modelId: chosenModelId, revision: LOCAL_FALLBACK_MODEL_REVISION },
                     globalThis.fetch.bind(globalThis),
-                    { signal: options.signal },
+                    {
+                      signal: options.signal,
+                      onDownloadProgress: ({ loaded, total }) => options.onStatus?.(
+                        "local model download",
+                        total === null ? null : Math.min(1, loaded / total),
+                        { loaded, total },
+                      ),
+                    },
                   ),
             }
           : {}),
