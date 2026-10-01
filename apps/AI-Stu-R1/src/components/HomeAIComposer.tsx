@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import type { AnswerStrategy } from "../learningHistory";
 import type { GuestQuestionCategory, GuestProviderPreference } from "../studentClient";
 
 export interface HomeAIComposerProps {
@@ -8,6 +9,8 @@ export interface HomeAIComposerProps {
   placeholder: string;
   category: GuestQuestionCategory;
   onCategoryChange: (category: GuestQuestionCategory) => void;
+  strategy: AnswerStrategy;
+  onStrategyChange: (strategy: AnswerStrategy) => void;
   providerPreference: GuestProviderPreference;
   onProviderPreferenceChange: (provider: GuestProviderPreference) => void;
   disabled?: boolean;
@@ -31,6 +34,8 @@ export function HomeAIComposer({
   placeholder,
   category,
   onCategoryChange,
+  strategy,
+  onStrategyChange,
   providerPreference,
   onProviderPreferenceChange,
   disabled = false,
@@ -98,14 +103,23 @@ export function HomeAIComposer({
       </div>
 
       <div className="home-ai-composer-actions">
-        <label className="composer-mode-select">
-          <span className="sr-only">AI 模型</span>
-          <select value={providerPreference} onChange={(event) => onProviderPreferenceChange(event.target.value as GuestProviderPreference)} disabled={disabled || busy} aria-label="AI 模型">
-            <option value="auto">Auto</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="kimi">Kimi</option><option value="qwen">Qwen</option>
+        <label className="composer-mode-select composer-strategy-select">
+          <span>解答方式</span>
+          <select value={strategy} onChange={(event) => onStrategyChange(event.target.value as AnswerStrategy)} disabled={disabled || busy} aria-label="解答方式">
+            <option value="google-ai">Google AI（目前主線）</option>
+            <option value="api">API 模式（保留）</option>
           </select>
         </label>
+        {strategy === "api" ? (
+          <label className="composer-mode-select">
+            <span>AI 模型</span>
+            <select value={providerPreference} onChange={(event) => onProviderPreferenceChange(event.target.value as GuestProviderPreference)} disabled={disabled || busy} aria-label="API AI 模型">
+              <option value="auto">Auto</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="kimi">Kimi</option><option value="qwen">Qwen</option>
+            </select>
+          </label>
+        ) : null}
         <label className="composer-mode-select">
-          <span className="sr-only">解題模式</span>
+          <span>題型</span>
           <select
             value={category}
             onChange={(event) => onCategoryChange(event.target.value as GuestQuestionCategory)}

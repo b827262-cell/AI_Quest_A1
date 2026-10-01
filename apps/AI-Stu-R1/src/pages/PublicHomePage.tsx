@@ -3,6 +3,17 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { HomeAIComposer } from "../components/HomeAIComposer";
 import { StudentAnswerRenderer } from "../components/GuestAnswerRenderer";
 import {
+  addLearningHistoryEntry,
+  clearLearningHistory,
+  googleAiSearchUrl,
+  readLearningHistory,
+  removeLearningHistoryEntry,
+  updateLearningHistoryAnswer,
+  type AnswerStrategy,
+  type LearningHistoryEntry,
+  type LearningSourceType
+} from "../learningHistory";
+import {
   clearGuestAnswerCredential,
   publicGuestAnswerForHistory,
   readGuestAnswerCredential,
@@ -136,6 +147,88 @@ function GuestAnswer({
   );
 }
 
+const SOURCE_LABELS: Record<LearningSourceType, string> = {
+  manual: "手動輸入",
+  image: "圖片",
+  file: "文件"
+};
+
+function LearningHistoryPanel({
+  entries,
+  onEntriesChange,
+  onStatusChange,
+  statuses
+}: {
+  entries: LearningHistoryEntry[];
+  onEntriesChange: (entries: LearningHistoryEntry[]) => void;
+  onStatusChange: (id: string, message: string) => void;
+  statuses: Record<string, string>;
+}) {
+  async function pasteGoogleAnswer(entry: LearningHistoryEntry) {
+    try {
+      if (!navigator.clipboard?.readText) throw new Error("clipboard unavailable");
+      const answer = await navigator.clipboard.readText();
+      if (!answer.trim()) throw new Error("clipboard empty");
+      onEntriesChange(updateLearningHistoryAnswer(entry.id, answer));
+      onStatusChange(entry.id, "已從剪貼簿儲存 Google AI 解答。");
+    } catch {
+      onStatusChange(entry.id, "無法讀取剪貼簿；請允許權限，或在下方手動貼上 Google AI 解答。");
+    }
+  }
+
+  return (
+    <section className="learning-history" aria-labelledby="learning-history-heading">
+      <div className="learning-history-heading">
+        <div>
+          <span className="public-eyebrow">我的學習</span>
+          <h2 id="learning-history-heading">學習紀錄</h2>
+          <p>只儲存在這台裝置的瀏覽器，最多保留 50 筆。</p>
+        </div>
+        <button type="button" className="learning-history-clear" onClick={() => onEntriesChange(clearLearningHistory())} disabled={!entries.length}>
+          清除全部
+        </button>
+      </div>
+      {!entries.length ? <p className="learning-history-empty">尚無提問紀錄。送出問題後會顯示在這裡。</p> : (
+        <ol className="learning-history-list">
+          {entries.map((entry) => (
+            <li key={entry.id} className="learning-history-entry">
+              <div className="learning-history-entry-topline">
+                <div>
+                  <span className={`learning-history-strategy ${entry.strategy}`}>{entry.strategy === "google-ai" ? "Google AI" : "API 模式"}</span>
+                  <span>{entry.category === "auto" ? "自動判斷" : entry.category} · {SOURCE_LABELS[entry.sourceType]}</span>
+                </div>
+                <button type="button" className="learning-history-delete" onClick={() => onEntriesChange(removeLearningHistoryEntry(entry.id))} aria-label={`刪除問題：${entry.question}`}>
+                  刪除
+                </button>
+              </div>
+              <p className="learning-history-question">{entry.question}</p>
+              <time dateTime={entry.askedAt}>{new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.askedAt))}</time>
+              {entry.strategy === "google-ai" ? (
+                <div className="learning-history-google-workflow">
+                  <div className="learning-history-actions">
+                    <a href={googleAiSearchUrl(entry.question)} target="_blank" rel="noopener noreferrer">重新開啟 Google AI</a>
+                    <button type="button" onClick={() => void pasteGoogleAnswer(entry)}>從剪貼簿貼上 Google AI 解答</button>
+                  </div>
+                  <label>
+                    <span className="sr-only">Google AI 解答</span>
+                    <textarea
+                      value={entry.answer ?? ""}
+                      onChange={(event) => onEntriesChange(updateLearningHistoryAnswer(entry.id, event.target.value))}
+                      placeholder="將 Google AI 解答貼在這裡…"
+                      rows={4}
+                    />
+                  </label>
+                  {statuses[entry.id] ? <p className="learning-history-status" role="status" aria-live="polite">{statuses[entry.id]}</p> : null}
+                </div>
+              ) : entry.answer ? <p className="learning-history-answer">{entry.answer}</p> : <p className="learning-history-pending">API 解答會在成功取得後儲存在這裡。</p>}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 export function PublicHomePage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -143,6 +236,7 @@ export function PublicHomePage() {
   const [config, setConfig] = useState<PublicSiteConfig>(DEFAULT_CONFIG);
   const [question, setQuestion] = useState("");
   const [category, setCategory] = useState<GuestQuestionCategory>("auto");
+  const [strategy, setStrategy] = useState<AnswerStrategy>("google-ai");
   const [providerPreference, setProviderPreference] = useState<GuestProviderPreference>("auto");
   const [response, setResponse] = useState<GuestAskResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -150,6 +244,9 @@ export function PublicHomePage() {
   const [feedback, setFeedback] = useState("");
   const [lastSourceType, setLastSourceType] = useState<"manual" | "image" | "file">("manual");
   const [restoringAnswer, setRestoringAnswer] = useState(isAnswerRoute);
+  const [learningHistory, setLearningHistory] = useState<LearningHistoryEntry[]>(() => readLearningHistory());
+  const [googleStatus, setGoogleStatus] = useState("");
+  const [historyStatuses, setHistoryStatuses] = useState<Record<string, string>>({});
   const requestAbortRef = useRef<AbortController | null>(null);
   const { user } = useStudentAuth();
   const studentName = user?.displayName || "";
@@ -236,6 +333,13 @@ export function PublicHomePage() {
       setError("問題太長，請縮短到 2,000 字以內。" );
       return;
     }
+    const historyRecord = addLearningHistoryEntry({
+      question: trimmed,
+      category,
+      sourceType: nextSourceType,
+      strategy: "api"
+    });
+    setLearningHistory(historyRecord.entries);
     if (!config.guestAiEnabled) {
       setError("目前暫停開放訪客問答，請登入後繼續使用。" );
       return;
@@ -253,6 +357,9 @@ export function PublicHomePage() {
       }, controller.signal);
       if (controller.signal.aborted) return;
       setResponse(result);
+      if (result.status === "success" && result.answer) {
+        setLearningHistory(updateLearningHistoryAnswer(historyRecord.entry.id, result.answer));
+      }
       // Persist the one-time recovery token so the answer can survive a
       // refresh. Only the token + requestId are stored; never log the token.
       if (result.requestId && result.recoveryToken) {
@@ -273,6 +380,31 @@ export function PublicHomePage() {
         setBusy(false);
       }
     }
+  }
+
+  function submitGoogleAiQuestion(nextSourceType: "manual" | "image" | "file") {
+    const trimmed = question.trim();
+    setError("");
+    setFeedback("");
+    setGoogleStatus("");
+    if (!trimmed) {
+      setError("請先輸入問題。這裡最多接受 2,000 字。");
+      return;
+    }
+    if (trimmed.length > 2000) {
+      setError("問題太長，請縮短到 2,000 字以內。");
+      return;
+    }
+    const historyRecord = addLearningHistoryEntry({
+      question: trimmed,
+      category,
+      sourceType: nextSourceType,
+      strategy: "google-ai"
+    });
+    setLearningHistory(historyRecord.entries);
+    window.open(googleAiSearchUrl(trimmed), "_blank", "noopener,noreferrer");
+    setQuestion("");
+    setGoogleStatus("已將問題送往 Google AI；若新分頁未自動開啟，請使用下方紀錄中的「重新開啟 Google AI」。返回後可將解答貼回學習紀錄。");
   }
 
   async function submitFeedback(helpful: boolean) {
@@ -330,21 +462,25 @@ export function PublicHomePage() {
                 value={question}
                 onChange={setQuestion}
                 onSubmit={(nextSourceType) => {
-                  void submitGuestQuestion(nextSourceType);
+                  if (strategy === "google-ai") submitGoogleAiQuestion(nextSourceType);
+                  else void submitGuestQuestion(nextSourceType);
                 }}
                 placeholder={config.homeInputPlaceholder}
                 category={category}
                 onCategoryChange={setCategory}
+                strategy={strategy}
+                onStrategyChange={setStrategy}
                 providerPreference={providerPreference}
                 onProviderPreferenceChange={setProviderPreference}
                 busy={busy}
                 autoFocus={!busy}
               />
               <div className="public-composer-meta">
-                <span>訪客每日可體驗 {config.guestDailyLimit} 題 · 每題最多 2,000 字</span>
+                <span>{strategy === "google-ai" ? "Google AI 不需 API 金鑰 · 每題最多 2,000 字" : `訪客每日可體驗 ${config.guestDailyLimit} 題 · 每題最多 2,000 字`}</span>
                 <span>目前模式：{category === "auto" ? "自動判斷" : category}</span>
               </div>
               {error ? <p className="public-form-error" role="alert">{error}</p> : null}
+              {googleStatus ? <p className="public-google-status" role="status" aria-live="polite">{googleStatus}</p> : null}
               {feedback ? <p className="public-feedback-text" role="status">{feedback}</p> : null}
               {busy ? (
                 <button type="button" className="public-back-button public-cancel-question-button" onClick={resetQuestion}>
@@ -365,6 +501,12 @@ export function PublicHomePage() {
                   </button>
                 ))}
               </div>
+              <LearningHistoryPanel
+                entries={learningHistory}
+                onEntriesChange={setLearningHistory}
+                onStatusChange={(id, message) => setHistoryStatuses((current) => ({ ...current, [id]: message }))}
+                statuses={historyStatuses}
+              />
             </>
         ) : restoringAnswer ? (
           <p className="public-answer-loading" role="status">正在載入回答…</p>
