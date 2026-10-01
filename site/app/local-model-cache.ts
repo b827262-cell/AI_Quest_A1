@@ -6,8 +6,6 @@
  * Cache keys include the model ID and immutable revision, never the app build.
  */
 export const LOCAL_MODEL_CACHE_NAME = "ai-smartbook-local-model-v1";
-/** Keep one complete local model revision; a newly-ready model replaces stale revisions. */
-export const LOCAL_MODEL_CACHE_CAP = 1;
 const META_PREFIX = "https://local-cache.invalid/meta/";
 const ASSET_PREFIX = "https://local-cache.invalid/asset/";
 
@@ -16,10 +14,6 @@ export type LocalModelCacheState = {
   supported: boolean;
   complete: boolean;
   artifactCount: number;
-  /** Bytes belonging to this model identity, never the origin-wide quota. */
-  cachedBytes?: number;
-  /** A model-specific safety allowance, derived from actual artifact bytes. */
-  safeLimit?: number;
   usage?: number;
   quota?: number;
   persisted?: boolean;
@@ -30,10 +24,13 @@ export type ModelCacheIdentity = { modelId: string; revision: string };
 type CacheStore = Pick<CacheStorage, "open">;
 export type ModelCacheOptions = {
   storage?: CacheStore;
-  /** Injectable only so callers/tests can use the browser's actual quota estimate. */
-  storageManager?: Pick<StorageManager, "estimate">;
   signal?: AbortSignal;
-  /** Counts bytes read from real response bodies; total is unknown without Content-Length. */
+  /**
+   * Bytes actually consumed from network response bodies.  This deliberately
+   * does not use the polyfill's synthetic progress events: when a server does
+   * not send Content-Length, `total` stays null and callers must be
+   * indeterminate.
+   */
   onDownloadProgress?: (progress: { loaded: number; total: number | null }) => void;
 };
 type AssetRecord = { url: string; byteLength: number | null; stored: boolean };
@@ -49,9 +46,6 @@ type CacheManifest = {
 const manifestQueues = new Map<string, Promise<void>>();
 const transientIssues = new Map<string, ModelCacheIssue>();
 const pendingCacheWrites = new Map<string, Set<Promise<void>>>();
-let localModelNamespaceTail: Promise<void> = Promise.resolve();
-const MODEL_SAFE_LIMIT_FLOOR = 700 * 1024 * 1024;
-const MODEL_SAFE_LIMIT_HEADROOM = 0.12;
 
 function trackCacheWrite(identityKeyText: string, write: Promise<void>) {
   let writes = pendingCacheWrites.get(identityKeyText);
@@ -74,20 +68,6 @@ async function waitForCacheWrites(identity: ModelCacheIdentity) {
   }
 }
 
-/**
- * Cache Storage has one model namespace and a one-model cap. Keep the
- * replacement decision, eviction, first write, and manifest update together
- * so two identities cannot both decide that the slot is empty.
- */
-async function lockLocalModelNamespace() {
-  const previous = localModelNamespaceTail.catch(() => undefined);
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => { release = resolve; });
-  localModelNamespaceTail = previous.then(() => held);
-  await previous;
-  return release;
-}
-
 function identityKey(identity: ModelCacheIdentity) {
   return encodeURIComponent(`${identity.modelId}@${identity.revision}`);
 }
@@ -103,119 +83,6 @@ function assetPrefix(identity: ModelCacheIdentity) {
 
 function manifestKey(identity: ModelCacheIdentity) {
   return `${META_PREFIX}${identityKey(identity)}.json`;
-}
-
-function isLocalModelEntry(url: string) {
-  return url.startsWith(ASSET_PREFIX) || (url.startsWith(META_PREFIX) && url.endsWith(".json"));
-}
-
-/**
- * The namespace has one active model slot. Before a cold download begins,
- * remove every other revision/model (including metadata left by old builds).
- */
-async function evictOtherLocalModels(cache: Cache, identity: ModelCacheIdentity) {
-  if (LOCAL_MODEL_CACHE_CAP !== 1) return 0;
-  if (typeof cache.keys !== "function") return 0;
-  const currentAssetPrefix = assetPrefix(identity);
-  const currentManifestKey = manifestKey(identity);
-  const keys = await cache.keys();
-  const stale = keys.filter((request) => isLocalModelEntry(request.url) &&
-    !request.url.startsWith(currentAssetPrefix) && request.url !== currentManifestKey);
-  await Promise.all(stale.map((request) => cache.delete(request)));
-  for (const request of stale) {
-    const staleIdentity = manifestIdentityKey(request.url);
-    if (staleIdentity) transientIssues.delete(staleIdentity);
-  }
-  return stale.length;
-}
-
-type OtherModelBytes = { found: boolean; bytes: number | null };
-
-/**
- * Returns the exact byte total only when every stale local-model entry is
- * described by a complete manifest. An unknown total must never authorize
- * replacement of a ready model.
- */
-async function otherLocalModelBytes(cache: Cache, identity: ModelCacheIdentity): Promise<OtherModelBytes> {
-  if (LOCAL_MODEL_CACHE_CAP !== 1 || typeof cache.keys !== "function") return { found: false, bytes: 0 };
-  const currentAssetPrefix = assetPrefix(identity);
-  const currentManifestKey = manifestKey(identity);
-  const keys = await cache.keys();
-  const stale = keys.filter((request) => isLocalModelEntry(request.url) &&
-    !request.url.startsWith(currentAssetPrefix) && request.url !== currentManifestKey);
-  if (!stale.length) return { found: false, bytes: 0 };
-
-  const manifests = stale.filter((request) => request.url.startsWith(META_PREFIX) && request.url.endsWith(".json"));
-  const staleAssets = stale.filter((request) => request.url.startsWith(ASSET_PREFIX));
-  let bytes = 0;
-  const describedAssets = new Set<string>();
-  let hasReadyModel = false;
-  for (const request of manifests) {
-    try {
-      const value = await (await cache.match(request))?.json() as Partial<CacheManifest> | undefined;
-      // Incomplete manifests and manifest-less artifacts are orphaned work,
-      // not a model worth preserving. A ready manifest remains fail-closed.
-      if (!value?.ready) continue;
-      hasReadyModel = true;
-      if (!Array.isArray(value.assets)) return { found: true, bytes: null };
-      for (const asset of value.assets) {
-        if (!asset || !asset.stored || typeof asset.byteLength !== "number" || !Number.isSafeInteger(asset.byteLength) || asset.byteLength < 0) return { found: true, bytes: null };
-        const url = cacheKey({ modelId: value.modelId ?? "", revision: value.revision ?? "" }, asset.url ?? "");
-        describedAssets.add(url);
-        bytes += asset.byteLength;
-      }
-    } catch {
-      // A malformed stale manifest is not ready and can be swept. A malformed
-      // ready manifest would already have set hasReadyModel before validation.
-      continue;
-    }
-  }
-  if (!hasReadyModel) return { found: false, bytes: 0 };
-  return staleAssets.every((request) => describedAssets.has(request.url))
-    ? { found: true, bytes }
-    : { found: true, bytes: null };
-}
-
-/**
- * A cross-identity replacement may evict only with an actual storage estimate,
- * exact old-cache bytes, and a real identity-encoded Content-Length. Unknown
- * data is deliberately treated as insufficient: preserve the ready model.
- */
-async function mayEvictForReplacement(cache: Cache, identity: ModelCacheIdentity, incomingBytes: number | null, options: ModelCacheOptions) {
-  const other = await otherLocalModelBytes(cache, identity);
-  if (!other.found) return true;
-  if (incomingBytes === null || other.bytes === null) return false;
-  const storageManager = options.storageManager ?? (typeof navigator !== "undefined" ? navigator.storage : undefined);
-  let estimate: StorageEstimate | undefined;
-  try { estimate = await storageManager?.estimate?.(); } catch { return false; }
-  const usage = estimate?.usage;
-  const quota = estimate?.quota;
-  if (typeof usage !== "number" || typeof quota !== "number" || !Number.isFinite(usage) || !Number.isFinite(quota)) return false;
-  // `usage - old bytes` is the known post-eviction usage; do not invent a model total.
-  return usage - other.bytes + incomingBytes <= quota;
-}
-
-/** Failed/cancelled downloads must not leave partial artifacts or a manifest behind. */
-async function cleanupIncompleteLocalModel(cache: Cache, identity: ModelCacheIdentity) {
-  const read = await readManifest(cache, identity);
-  // A ready model can share the same identity with a later failed request.
-  if (read.manifest?.ready) return 0;
-  const prefix = assetPrefix(identity);
-  const metaKey = manifestKey(identity);
-  const keys = typeof cache.keys === "function" ? await cache.keys() : [];
-  const entries = keys.filter((request) => request.url.startsWith(prefix));
-  await Promise.all([...entries.map((request) => cache.delete(request)), cache.delete(metaKey)]);
-  return entries.length;
-}
-
-function modelSafeLimit(bytes: number | undefined) {
-  return bytes === undefined ? undefined : Math.max(MODEL_SAFE_LIMIT_FLOOR, Math.ceil(bytes * (1 + MODEL_SAFE_LIMIT_HEADROOM)));
-}
-
-function manifestIdentityKey(url: string) {
-  if (!url.startsWith(META_PREFIX) || !url.endsWith(".json")) return null;
-  const key = url.slice(META_PREFIX.length, -".json".length);
-  return key ? key : null;
 }
 
 async function openCache(storage?: CacheStore) {
@@ -276,6 +143,31 @@ async function updateManifest(cache: Cache, identity: ModelCacheIdentity, update
   try {
     await current;
     transientIssues.delete(identityKey(identity));
+  } finally {
+    if (manifestQueues.get(key) === current) manifestQueues.delete(key);
+  }
+}
+
+/** Update an existing manifest without recreating one removed by cancellation. */
+async function updateExistingManifest(
+  cache: Cache,
+  identity: ModelCacheIdentity,
+  update: (manifest: CacheManifest) => CacheManifest,
+) {
+  const key = manifestKey(identity);
+  const previous = manifestQueues.get(key) ?? Promise.resolve();
+  let result: CacheManifest | null = null;
+  const current = previous.catch(() => undefined).then(async () => {
+    const read = await readManifest(cache, identity);
+    if (!read.manifest) return;
+    result = update(read.manifest);
+    await writeManifest(cache, result);
+  });
+  manifestQueues.set(key, current);
+  try {
+    await current;
+    if (result) transientIssues.delete(identityKey(identity));
+    return result;
   } finally {
     if (manifestQueues.get(key) === current) manifestQueues.delete(key);
   }
@@ -405,6 +297,33 @@ function withAsset(manifest: CacheManifest, record: AssetRecord, issue?: ModelCa
   return { ...manifest, ready: false, assets, ...(issue ? { issue } : { issue: undefined }) };
 }
 
+/** Abort never leaves an incomplete artifact or manifest behind.  A complete
+ * ready revision is explicitly retained, so cancelling a later request cannot
+ * evict a model that was already usable. */
+async function cleanupAbortedModelDownload(cache: Cache, identity: ModelCacheIdentity) {
+  await cleanupIncompleteLocalModelCache(identity, { storage: { open: async () => cache } });
+}
+
+/**
+ * Remove a cancelled revision only when it is not already usable. This is also
+ * safe to call from the page after a worker has been terminated: unlike the
+ * worker's abort handler, the page is still alive to await this cleanup before
+ * it re-enables a retry.
+ */
+export async function cleanupIncompleteLocalModelCache(identity: ModelCacheIdentity, options: ModelCacheOptions = {}) {
+  await waitForCacheWrites(identity);
+  const cache = await openCache(options.storage);
+  if (!cache) return 0;
+  const read = await readManifest(cache, identity);
+  if (read.manifest?.ready) return 0;
+  const prefix = assetPrefix(identity);
+  const keys = typeof cache.keys === "function" ? await cache.keys() : [];
+  const assets = keys.filter((request) => request.url.startsWith(prefix));
+  await Promise.all([...assets.map((request) => cache.delete(request)), cache.delete(manifestKey(identity))]);
+  transientIssues.delete(identityKey(identity));
+  return assets.length;
+}
+
 /**
  * Fetch adapter for Transformers.js. Successful full GETs are stored in the
  * origin's Cache API. Invalid entries are evicted and retried from the pinned
@@ -415,26 +334,35 @@ export function createModelCacheFetch(
   networkFetch: typeof fetch = fetch,
   options: ModelCacheOptions = {},
 ): typeof fetch {
-  const download = new Map<string, { loaded: number; total: number | null }>();
-  const reportDownload = () => {
-    if (!options.onDownloadProgress) return;
+  // A model load fetches several artifacts concurrently.  Aggregate only the
+  // files that have genuinely started network transfer; a single unknown total
+  // makes the aggregate total unknown rather than inventing a percentage.
+  const transfers = new Map<string, { loaded: number; total: number | null }>();
+  const reportProgress = () => {
+    if (!options.onDownloadProgress || !transfers.size) return;
     let loaded = 0;
     let total = 0;
-    let hasUnknownTotal = false;
-    for (const item of download.values()) {
-      loaded += item.loaded;
-      if (item.total === null) hasUnknownTotal = true;
-      else total += item.total;
+    let unknown = false;
+    for (const transfer of transfers.values()) {
+      loaded += transfer.loaded;
+      if (transfer.total === null) unknown = true;
+      else total += transfer.total;
     }
-    options.onDownloadProgress({ loaded, total: hasUnknownTotal ? null : total });
+    options.onDownloadProgress({ loaded, total: unknown ? null : total });
   };
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const originalUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const pinnedUrl = pinModelRevision(originalUrl, identity);
     const method = (init?.method ?? (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET")).toUpperCase();
+    const requestObject = typeof Request !== "undefined" && input instanceof Request ? input : undefined;
+    const hasRange = Boolean(requestObject?.headers.has("range")) || (init?.headers !== undefined && new Headers(init.headers).has("range"));
+    const cacheMode = init?.cache ?? requestObject?.cache;
+    // Transformers.js issues 206 Range probes before requesting some full
+    // artifacts. A byte probe is neither a complete cache entry nor evidence
+    // that an artifact is required, so it must not enter the manifest.
+    const cacheable = method === "GET" && !hasRange && cacheMode !== "no-store";
     const merged = mergeSignals([requestSignal(input), init?.signal, options.signal]);
     const signal = merged.signal;
-    const cacheable = method === "GET";
     let cache: Cache | null = null;
     const key = cacheKey(identity, originalUrl);
     let record: AssetRecord | undefined;
@@ -489,19 +417,6 @@ export function createModelCacheFetch(
             } catch { transientIssues.set(identityKeyText, "quota"); }
             transientIssues.set(identityKeyText, "corrupt");
           }
-          // Do not create a placeholder manifest before a response has passed
-          // preflight: an unknown-size/non-200 replacement must leave no
-          // partial identity behind. Existing manifests still record a stale
-          // artifact so a retry can repair that identity.
-          if (read.manifest) {
-            try {
-              await updateManifest(cache, identity, (manifest) => withAsset(manifest, {
-                url: originalUrl,
-                byteLength: null,
-                stored: false,
-              }, transientIssues.get(identityKeyText)));
-            } catch { transientIssues.set(identityKeyText, "quota"); }
-          }
         }
       }
 
@@ -520,99 +435,101 @@ export function createModelCacheFetch(
         const length = responseLength(response);
         const fullResponse = response.ok && response.status === 200;
         if (fullResponse && response.body) {
-          const releaseNamespace = await lockLocalModelNamespace();
-          let namespaceHeld = true;
-          // Do not destroy a ready revision for an error response, an unknown
-          // size, or a measured quota shortfall. The live response remains
-          // usable; only its persistent cache is declined.
-          try {
-            if (!await mayEvictForReplacement(cache, identity, length, options)) {
-              transientIssues.set(identityKeyText, "quota");
-              return returnResponse(response);
-            }
-            // A replacement is only allowed after the response was confirmed as
-            // a full 200 response with a readable body and its quota guard passed.
-            await evictOtherLocalModels(cache, identity).catch(() => undefined);
-            const activeCache = cache;
-            const [modelBody, cacheBody] = response.body.tee();
-            let downloadedBytes = 0;
-            download.set(originalUrl, { loaded: 0, total: length });
-            const countedCacheBody = cacheBody.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-              transform(chunk, controller) {
-                downloadedBytes += chunk.byteLength;
-                download.set(originalUrl, { loaded: downloadedBytes, total: length });
-                reportDownload();
-                controller.enqueue(chunk);
-              },
-            }));
-            const responseInit = { status: response.status, statusText: response.statusText, headers: response.headers };
-            const modelResponse = new Response(modelBody, responseInit);
-            const cacheResponse = responseWithAbort(new Response(countedCacheBody, responseInit), signal, () => {});
-            const cacheWrite = (async () => {
+          const activeCache = cache;
+          const [modelBody, cacheBody] = response.body.tee();
+          let downloadedBytes = 0;
+          const transferKey = `${originalUrl}#${Math.random()}`;
+          transfers.set(transferKey, { loaded: 0, total: length });
+          reportProgress();
+          const countedCacheBody = cacheBody.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, controller) {
+              downloadedBytes += chunk.byteLength;
+              const transfer = transfers.get(transferKey);
+              if (transfer) {
+                transfer.loaded = downloadedBytes;
+                reportProgress();
+              }
+              controller.enqueue(chunk);
+            },
+          }));
+          const responseInit = { status: response.status, statusText: response.statusText, headers: response.headers };
+          const modelResponse = new Response(modelBody, responseInit);
+          const cacheResponse = new Response(countedCacheBody, responseInit);
+          const cacheWrite = (async () => {
+            try {
+              await activeCache.put(key, cacheResponse);
+            } catch {
+              const issue = signal?.aborted ? "incomplete" : "quota";
+              transientIssues.set(identityKeyText, issue);
+              await cacheResponse.body?.cancel().catch(() => undefined);
+              await activeCache.delete(key).catch(() => false);
               try {
-                await activeCache.put(key, cacheResponse);
-              } catch {
-                const issue = signal?.aborted ? "incomplete" : "quota";
-                transientIssues.set(identityKeyText, issue);
-                await cacheResponse.body?.cancel().catch(() => undefined);
-                await activeCache.delete(key).catch(() => false);
-                try {
-                  await updateManifest(activeCache, identity, (manifest) => withAsset(manifest, {
-                    url: originalUrl,
-                    byteLength: downloadedBytes || length,
-                    stored: false,
-                  }, issue));
-                } catch { /* The model still receives and consumes its live response branch. */ }
-                await cleanupIncompleteLocalModel(activeCache, identity).catch(() => 0);
-                transientIssues.set(identityKeyText, issue);
-                return;
-              }
+                await updateManifest(activeCache, identity, (manifest) => withAsset(manifest, {
+                  url: originalUrl,
+                  byteLength: downloadedBytes || length,
+                  stored: false,
+                }, issue));
+              } catch { /* The model still receives and consumes its live response branch. */ }
+              return;
+            }
 
-              if (signal?.aborted) {
-                transientIssues.set(identityKeyText, "incomplete");
-                await cleanupIncompleteLocalModel(activeCache, identity).catch(() => 0);
-                return;
-              }
+            if (signal?.aborted) {
+              transientIssues.set(identityKeyText, "incomplete");
+              await activeCache.delete(key).catch(() => false);
+              await updateManifest(activeCache, identity, (manifest) => withAsset(manifest, {
+                url: originalUrl,
+                byteLength: downloadedBytes || length,
+                stored: false,
+              }, "incomplete")).catch(() => undefined);
+              return;
+            }
 
-              if (downloadedBytes <= 0 || (length !== null && downloadedBytes !== length)) {
-                transientIssues.set(identityKeyText, "corrupt");
-                await cleanupIncompleteLocalModel(activeCache, identity).catch(() => 0);
-                return;
-              }
+            if (downloadedBytes <= 0 || (length !== null && downloadedBytes !== length)) {
+              transientIssues.set(identityKeyText, "corrupt");
+              await activeCache.delete(key).catch(() => false);
+              await updateManifest(activeCache, identity, (manifest) => withAsset(manifest, {
+                url: originalUrl,
+                byteLength: downloadedBytes || length,
+                stored: false,
+              }, "corrupt")).catch(() => undefined);
+              return;
+            }
 
+            try {
+              await updateManifest(activeCache, identity, (manifest) => withAsset(manifest, {
+                url: originalUrl,
+                byteLength: downloadedBytes,
+                stored: true,
+              }));
+            } catch {
+              transientIssues.set(identityKeyText, "quota");
               try {
                 await updateManifest(activeCache, identity, (manifest) => withAsset(manifest, {
                   url: originalUrl,
                   byteLength: downloadedBytes,
-                  stored: true,
-                }));
-              } catch {
-                transientIssues.set(identityKeyText, "quota");
-                try {
-                  await updateManifest(activeCache, identity, (manifest) => withAsset(manifest, {
-                    url: originalUrl,
-                    byteLength: downloadedBytes,
-                    stored: false,
-                  }, "quota"));
-                } catch { /* Model inference succeeds even when its cache manifest cannot be saved. */ }
-              }
+                  stored: false,
+                }, "quota"));
+              } catch { /* Model inference succeeds even when its cache manifest cannot be saved. */ }
+            }
 
-              if (signal?.aborted) {
-                transientIssues.set(identityKeyText, "incomplete");
-                await cleanupIncompleteLocalModel(activeCache, identity).catch(() => 0);
-              }
-            })().finally(releaseNamespace);
-            namespaceHeld = false;
-            trackCacheWrite(identityKeyText, cacheWrite);
-            if (signal?.aborted) throw abortError();
-            return returnResponse(modelResponse);
-          } finally {
-            if (namespaceHeld) releaseNamespace();
-          }
-        } else {
-          const issue: ModelCacheIssue = "incomplete";
-          transientIssues.set(identityKeyText, issue);
-          await cleanupIncompleteLocalModel(cache, identity).catch(() => 0);
+            if (signal?.aborted) {
+              transientIssues.set(identityKeyText, "incomplete");
+              await activeCache.delete(key).catch(() => false);
+              await updateManifest(activeCache, identity, (manifest) => withAsset(manifest, {
+                url: originalUrl,
+                byteLength: downloadedBytes,
+                stored: false,
+              }, "incomplete")).catch(() => undefined);
+            }
+          })();
+          void cacheWrite.finally(() => {
+            transfers.delete(transferKey);
+            reportProgress();
+            if (signal?.aborted) void cleanupAbortedModelDownload(activeCache, identity).catch(() => undefined);
+          });
+          trackCacheWrite(identityKeyText, cacheWrite);
+          if (signal?.aborted) throw abortError();
+          return returnResponse(modelResponse);
         }
       }
       if (signal?.aborted) throw abortError();
@@ -681,14 +598,10 @@ export async function probeLocalModelCache(identity: ModelCacheIdentity, options
   try { persisted = await storageManager?.persisted?.(); } catch { /* Persistence state is unknown. */ }
   const complete = Boolean(manifest?.ready && allFilesMatch);
   if (!complete) issue ??= transientIssues.get(identityKey(identity)) ?? "incomplete";
-  const cachedBytes = manifest?.assets.every((asset) => asset.stored && asset.byteLength !== null)
-    ? manifest.assets.reduce((total, asset) => total + (asset.byteLength ?? 0), 0)
-    : undefined;
   return {
     supported: true,
     complete,
     artifactCount: manifest?.assets.length ?? 0,
-    ...(cachedBytes !== undefined ? { cachedBytes, safeLimit: modelSafeLimit(cachedBytes) } : {}),
     usage: estimate?.usage,
     quota: estimate?.quota,
     persisted,
@@ -701,17 +614,12 @@ export async function markLocalModelCacheReady(identity: ModelCacheIdentity, opt
   await waitForCacheWrites(identity);
   const cache = await openCache(options.storage);
   if (!cache) return false;
-  // Do not recreate a manifest after a cancellation/quota cleanup. The next
-  // real download will create it from its first artifact instead.
-  const existing = await readManifest(cache, identity);
-  if (!existing.manifest) return false;
   let ready = false;
-  const knownIssue = transientIssues.get(identityKey(identity));
-  await updateManifest(cache, identity, (manifest) => {
+  const manifest = await updateExistingManifest(cache, identity, (manifest) => {
     ready = manifest.assets.length > 0 && manifest.assets.every((asset) => asset.stored);
-    return { ...manifest, ready, ...(ready ? { issue: undefined } : { issue: knownIssue ?? manifest.issue ?? "incomplete" }) };
+    return { ...manifest, ready, ...(ready ? { issue: undefined } : { issue: manifest.issue ?? "incomplete" }) };
   });
-  return ready;
+  return Boolean(manifest && ready);
 }
 
 /** Ask for persistent storage only from a user gesture; never assume it was granted. */

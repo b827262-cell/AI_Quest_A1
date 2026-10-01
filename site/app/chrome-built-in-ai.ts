@@ -21,7 +21,7 @@ import {
   type AutoRoute,
   type AutoRouteDecision,
 } from "./auto-route";
-import { createModelCacheFetch, deleteLocalModelCache, markLocalModelCacheReady } from "./local-model-cache";
+import { cleanupIncompleteLocalModelCache, createModelCacheFetch, deleteLocalModelCache, markLocalModelCacheReady } from "./local-model-cache";
 
 export type AutoAiStatus =
   | "native ready"
@@ -35,6 +35,12 @@ export type AutoAiStatus =
 
 export type DownloadProgress = { loaded: number; total: number | null };
 export type StatusCallback = (status: AutoAiStatus, progress?: number | null, bytes?: DownloadProgress) => void;
+
+// Chrome/polyfill monitor events may use loaded=0..1,total=1 as normalized
+// progress. Keep that ratio for status text, but never present it as bytes.
+export function isTrustworthyDownloadProgressBytes(loaded: number, total: number) {
+  return Number.isFinite(loaded) && Number.isFinite(total) && Number.isInteger(loaded) && Number.isInteger(total) && loaded >= 0 && total > 1 && loaded <= total;
+}
 
 /**
  * Local-only failure evidence for mobile debugging. This deliberately excludes
@@ -433,6 +439,8 @@ export type AskOptions = {
   loadPolyfill?: () => Promise<void>;
   /** Test seam only; keeps fallback tests independent from a native API mock. */
   loadLocalLanguageModel?: () => Promise<ChromeAiEnvironment["LanguageModel"]>;
+  /** Test seam only; production imports Vite's `?worker` constructor on demand. */
+  createLocalInferenceWorker?: () => Worker | Promise<Worker>;
   /** Captured synchronously from the initiating UI gesture. */
   userActivation?: boolean;
   /** Preloaded session to reuse without downloading or re-creating. */
@@ -455,7 +463,33 @@ export type AskOptions = {
    * prose and makes its own echo trip the D-06 instruction-echo guard.
    */
   rawPrompt?: boolean;
+  /** Practice-only worker chat system message. Omitted for every other path. */
+  systemPrompt?: string;
+  /** Practice-only assistant continuation prefix. Omitted for every other path. */
+  assistantPrefix?: string;
 };
+
+type LocalInferenceWorkerClientModule = {
+  createLocalInferenceWorker(): Worker;
+};
+
+/**
+ * Vite's `?worker` factory creates a same-origin browser worker directly.
+ * Dynamic loading means SSR and Node/tsx tests never evaluate its browser-only
+ * wrapper (the latter deliberately provide a FakeWorker but no document).
+ */
+async function createIsolatedLocalInferenceWorker(
+  testFactory?: () => Worker | Promise<Worker>,
+): Promise<Worker> {
+  if (testFactory) return testFactory();
+  // Node tests provide a FakeWorker but no document. Preserve that test-only
+  // seam without making NODE_ENV part of the browser worker selection.
+  if (typeof document === "undefined" && typeof Worker !== "undefined") {
+    return new (Worker as unknown as { new(): Worker })();
+  }
+  const workerClient: LocalInferenceWorkerClientModule = await import("./local-inference-worker-client.ts");
+  return workerClient.createLocalInferenceWorker();
+}
 
 interface PolyfillHostWindow {
   TRANSFORMERS_CONFIG?: unknown;
@@ -520,6 +554,134 @@ export async function loadRealLocalLanguageModel(): Promise<NonNullable<ChromeAi
   return polyfill.LanguageModel as NonNullable<ChromeAiEnvironment["LanguageModel"]>;
 }
 
+/**
+ * The polyfill's token loop can synchronously monopolize the page renderer.
+ * Run the forced local fallback in a disposable module worker instead: Cache
+ * Storage remains shared by origin, while a deadline/cancel can terminate only
+ * this execution context even when the model ignores AbortSignal.
+ */
+async function askWithIsolatedLocalWorker(
+  question: string,
+  onChunk: (chunk: string) => void,
+  options: AskOptions,
+  device: "webgpu" | "wasm",
+): Promise<string> {
+  if (typeof Worker === "undefined") throw new ChromeAiError("此瀏覽器無法隔離本機 AI 執行作業。");
+  const modelId = options.localModelId || DEFAULT_LOCAL_FALLBACK_MODEL_ID;
+  const worker = await createIsolatedLocalInferenceWorker(options.createLocalInferenceWorker);
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const finish = (result: { text?: string; error?: Error }) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", abort);
+      worker.terminate();
+      if (result.error) reject(result.error);
+      else resolve(result.text ?? "");
+    };
+    const abort = () => finish({ error: new ChromeAiError("已取消 AI 回答。") });
+    if (options.signal?.aborted) return abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    worker.onerror = () => finish({ error: new ChromeAiError("本機 AI 模型無法完成回答，未使用任何雲端服務。") });
+    worker.onmessage = ({ data }: MessageEvent<{
+      type: "status" | "result" | "error";
+      status?: AutoAiStatus | "generating";
+      loaded?: number;
+      total?: number | null;
+      text?: string;
+    }>) => {
+      if (settled) return;
+      if (data.type === "status") {
+        if (data.status === "generating") {
+          // This is progress-only: the A3/A4 route buffers raw output and its
+          // callback reports a character count, so an empty chunk cannot paint
+          // unvalidated model text but does advance the truthful UI stage.
+          onChunk("");
+        } else if (data.status) {
+          options.onStatus?.(data.status, undefined, data.loaded === undefined ? undefined : { loaded: data.loaded, total: data.total ?? null });
+        }
+        return;
+      }
+      if (data.type === "result") {
+        finish({ text: postprocessTraditionalChinese(stripThinkingTags(data.text ?? "")) });
+        return;
+      }
+      finish({ error: new ChromeAiError("本機 AI 模型無法完成回答，未使用任何雲端服務。") });
+    };
+    worker.postMessage({
+      type: "run",
+      prompt: options.rawPrompt ? question : `${LOCAL_FALLBACK_PROMPT_INSTRUCTION}\n\n${question}`,
+      modelId,
+      revision: LOCAL_FALLBACK_MODEL_REVISION,
+      device,
+      dtypes: [...LOCAL_FALLBACK_DTYPE_CANDIDATES[device]],
+      wasmPaths: ORT_WASM_PATHS,
+      systemPrompt: options.systemPrompt,
+      assistantPrefix: options.assistantPrefix,
+    });
+  });
+}
+
+/**
+ * Production warm-up uses the same worker boundary as generation. It verifies
+ * and caches the pinned artifacts, then exits; the page never owns a decoded
+ * Transformers.js session that a later submit could accidentally reuse.
+ */
+async function preloadWithIsolatedLocalWorker(
+  options: PreloadOptions,
+  device: "webgpu" | "wasm",
+): Promise<void> {
+  if (typeof Worker === "undefined") throw new ChromeAiError("此瀏覽器無法隔離本機 AI 執行作業。");
+  const modelId = resolveLocalModelId(options.localModelId);
+  const worker = await createIsolatedLocalInferenceWorker(options.createLocalInferenceWorker);
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error, workerAlreadyTerminated = false) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", abort);
+      if (!workerAlreadyTerminated) worker.terminate();
+      if (error) reject(error);
+      else resolve();
+    };
+    const abort = () => {
+      if (settled) return;
+      // A terminated worker cannot be relied on to finish its own abort
+      // handler. Await page-owned cleanup before rejecting so the UI cannot
+      // expose retry while this revision still has stored:false records.
+      worker.terminate();
+      void cleanupIncompleteLocalModelCache({ modelId, revision: LOCAL_FALLBACK_MODEL_REVISION })
+        .catch(() => undefined)
+        .then(() => finish(new ChromeAiError("已取消 AI 回答。"), true));
+    };
+    if (options.signal?.aborted) return abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    worker.onerror = () => finish(new ChromeAiError("本機 AI 模型無法完成載入，未使用任何雲端服務。"));
+    worker.onmessage = ({ data }: MessageEvent<{
+      type: "status" | "preloaded" | "error";
+      status?: AutoAiStatus;
+      loaded?: number;
+      total?: number | null;
+    }>) => {
+      if (settled) return;
+      if (data.type === "status" && data.status) {
+        options.onStatus?.(data.status, undefined, data.loaded === undefined ? undefined : { loaded: data.loaded, total: data.total ?? null });
+        return;
+      }
+      if (data.type === "preloaded") return finish();
+      finish(new ChromeAiError("本機 AI 模型無法完成載入，未使用任何雲端服務。"));
+    };
+    worker.postMessage({
+      type: "preload",
+      modelId,
+      revision: LOCAL_FALLBACK_MODEL_REVISION,
+      device,
+      dtypes: [...LOCAL_FALLBACK_DTYPE_CANDIDATES[device]],
+      wasmPaths: ORT_WASM_PATHS,
+    });
+  });
+}
+
 export async function askWithChromeBuiltInAi(
   question: string,
   onChunk: (chunk: string) => void,
@@ -552,6 +714,15 @@ export async function askWithChromeBuiltInAi(
   }
 
   const env = options.env ?? environment();
+  // Production's explicit local route is the only path that executes the
+  // heavyweight Transformers.js generation. Keep injected environments and
+  // loader seams on the direct path so deterministic unit tests still model
+  // their supplied session behavior.
+  if (options.forceLocalModel && !options.env && !options.loadPolyfill && !options.loadLocalLanguageModel && typeof Worker !== "undefined" && typeof window !== "undefined") {
+    const device = await detectLocalDevice(env);
+    if (!device) throw new ChromeAiError("此瀏覽器/裝置目前不支援 Chrome 內建 AI，且硬體環境無法執行本機模型 (WebGPU/WASM 皆不支援)。");
+    return askWithIsolatedLocalWorker(question, onChunk, options, device);
+  }
   const win = (env.window ?? (typeof window !== "undefined" ? window : globalThis)) as PolyfillHostWindow;
   // Capture this before the native availability awaits. The polyfill requires
   // a gesture for a cold model download; a later async continuation may no
@@ -662,7 +833,7 @@ export async function askWithChromeBuiltInAi(
             const loaded = Number(pe.loaded) || 0;
             const total = Number(pe.total) || 0;
             const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
-            options.onStatus?.("native model download", progress, { loaded, total: total > 0 ? total : null });
+            options.onStatus?.("native model download", progress, isTrustworthyDownloadProgressBytes(loaded, total) ? { loaded, total } : undefined);
           });
         },
         signal: options.signal,
@@ -810,7 +981,7 @@ export async function askWithChromeBuiltInAi(
       const loaded = Number(pe.loaded) || 0;
       const total = Number(pe.total) || 0;
       const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
-      options.onStatus?.("local model download", progress, { loaded, total: total > 0 ? total : null });
+      options.onStatus?.("local model download", progress, isTrustworthyDownloadProgressBytes(loaded, total) ? { loaded, total } : undefined);
       reportLocalFallbackDiagnostic(options, {
         stage: "model-download-progress",
         modelId: chosenModelId,
@@ -946,6 +1117,10 @@ export type PreloadOptions = {
   forceLocalModel?: boolean;
   loadPolyfill?: () => Promise<void>;
   loadLocalLanguageModel?: () => Promise<ChromeAiEnvironment["LanguageModel"]>;
+  /** Test seam only; production always imports the real local backend. */
+  loadRealLocalLanguageModel?: () => Promise<ChromeAiEnvironment["LanguageModel"]>;
+  /** Test seam only; production imports Vite's `?worker` constructor on demand. */
+  createLocalInferenceWorker?: () => Worker | Promise<Worker>;
   signal?: AbortSignal;
 };
 
@@ -981,6 +1156,16 @@ export async function preloadLocalModel(options: PreloadOptions = {}): Promise<P
   if (!localDevice) {
     options.onStatus?.("unsupported after fallback");
     return unsupported;
+  }
+
+  // Do not create a page-owned polyfill session in the production forced-local
+  // route. A successful preload is an artifact-cache warm state only; submit
+  // always starts a fresh isolated worker for the actual generation.
+  if (options.forceLocalModel && !options.env && !options.loadPolyfill && !options.loadLocalLanguageModel && !options.loadRealLocalLanguageModel && typeof Worker !== "undefined" && typeof window !== "undefined") {
+    options.onStatus?.("local fallback loading");
+    await preloadWithIsolatedLocalWorker(options, localDevice);
+    options.onStatus?.("local model ready");
+    return { outcome: "warmed", session: null };
   }
 
   options.onStatus?.("local fallback loading");
@@ -1048,15 +1233,16 @@ export async function preloadLocalModel(options: PreloadOptions = {}): Promise<P
 
   let polyfillLM: ChromeAiEnvironment["LanguageModel"];
   try {
+    const loadRealLocalBackend = options.loadRealLocalLanguageModel ?? loadRealLocalLanguageModel;
     if (options.loadLocalLanguageModel) {
       polyfillLM = await options.loadLocalLanguageModel();
     } else if (options.loadPolyfill) {
       await options.loadPolyfill();
-      polyfillLM = win.LanguageModel;
-    } else if (win.LanguageModel) {
+      polyfillLM = win.LanguageModel?.__isPolyfill ? win.LanguageModel : await loadRealLocalBackend();
+    } else if (win.LanguageModel?.__isPolyfill) {
       polyfillLM = win.LanguageModel;
     } else {
-      polyfillLM = await loadRealLocalLanguageModel();
+      polyfillLM = await loadRealLocalBackend();
     }
   } catch (error) {
     // A warm-up can be refused before the engine even finishes loading: the
@@ -1082,7 +1268,7 @@ export async function preloadLocalModel(options: PreloadOptions = {}): Promise<P
       const loaded = Number(pe.loaded) || 0;
       const total = Number(pe.total) || 0;
       const progress = total > 0 ? Math.min(1, Math.max(0, loaded / total)) : null;
-      options.onStatus?.("local model download", progress, { loaded, total: total > 0 ? total : null });
+      options.onStatus?.("local model download", progress, isTrustworthyDownloadProgressBytes(loaded, total) ? { loaded, total } : undefined);
     });
   };
 
@@ -1132,6 +1318,10 @@ export type AutoSubmitOptions = {
   forceLocalModel?: boolean;
   /** Send the caller's instruction verbatim instead of adding the answer contract (A3). */
   rawPrompt?: boolean;
+  /** Practice-only worker chat system message. */
+  systemPrompt?: string;
+  /** Practice-only assistant continuation prefix. */
+  assistantPrefix?: string;
 };
 
 /**
@@ -1154,7 +1344,10 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
   // "local model ready" in the window before that session exists — closing that
   // gap is what stops a submit from starting a second download of one model.
   let owner: WarmOwner | null = null;
-  let warm: { session: LanguageModelSession; modelId: string } | null = null;
+  // Worker warm-up has no page session by design. Its ready marker means the
+  // pinned artifacts are cached, while a direct/injected warm-up may still own
+  // a reusable test/native session.
+  let warm: { session: LanguageModelSession | null; modelId: string; workerOwned: boolean } | null = null;
   // A2/B4: every clear/delete bumps the epoch, so a warm-up that finishes after
   // its state was wiped can never publish its session into fresh state.
   let epoch = 0;
@@ -1230,14 +1423,21 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
       epoch,
       modelId: resolveLocalModelId(preloadOptions?.localModelId),
     };
+    const workerOwned = Boolean(
+      preloadOptions?.forceLocalModel
+      && !env
+      && !loader
+      && typeof Worker !== "undefined"
+      && typeof window !== "undefined",
+    );
     // Published before the first await: a second preload (or a submit) that
     // starts during the download joins this promise instead of competing.
     owner = current;
     const finish = (result: PreloadResult) => {
       if (owner === current) owner = null;
-      const reusable = result.session !== null && current.epoch === epoch;
+      const reusable = (result.session !== null || workerOwned) && current.epoch === epoch;
       if (reusable) {
-        warm = { session: result.session as LanguageModelSession, modelId: current.modelId };
+        warm = { session: result.session, modelId: current.modelId, workerOwned };
       } else {
         releaseSession(result.session);
       }
@@ -1394,6 +1594,8 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
         localModelId,
         forceLocalModel: typeof submitOptions === "string" ? false : submitOptions?.forceLocalModel,
         rawPrompt: typeof submitOptions === "string" ? false : submitOptions?.rawPrompt,
+        systemPrompt: typeof submitOptions === "string" ? undefined : submitOptions?.systemPrompt,
+        assistantPrefix: typeof submitOptions === "string" ? undefined : submitOptions?.assistantPrefix,
         session: reuse ?? undefined,
         preserveSession: reuse !== null,
         // A2/B2: a model this submit loaded answers later submits too, so one
@@ -1403,7 +1605,7 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
         onLocalSession: (session) => {
           if (adoptEpoch !== epoch) return false;
           const dying = warm;
-          warm = { session, modelId };
+          warm = { session, modelId, workerOwned: false };
           dropSession(dying?.session);
           return true;
         },
@@ -1417,9 +1619,29 @@ export function createAutoSubmitter(env?: ChromeAiEnvironment, loader?: () => Pr
         if (!hasDownloadWindow && typeof submitOptions !== "string" && submitOptions?.timeoutMs) {
           timeout = setTimeout(() => { timedOut = true; activeController.abort(); }, submitOptions.timeoutMs);
         }
+        // The production forced-local route executes in its own worker. A
+        // preload is still a main-thread Prompt API session, so passing it to
+        // ask() would hit askWithChromeBuiltInAi's supplied-session fast path
+        // before worker selection and reintroduce renderer-bound generation.
+        // Retire that process-local session first. Its Cache Storage artifacts
+        // are origin-scoped and deliberately survive destroy(), letting the
+        // worker load the same pinned revision without a second network fetch
+        // or two resident model sessions. Keep injected env/loader seams on
+        // their existing direct-session behavior for deterministic tests.
+        const usesProductionForcedLocalWorker = Boolean(
+          typeof submitOptions !== "string"
+          && submitOptions?.forceLocalModel
+          && !env
+          && !loader
+          && typeof Worker !== "undefined"
+          && typeof window !== "undefined",
+        );
+        if (usesProductionForcedLocalWorker) clearWarm();
         // A warm session answers only its own model: a different revision must
         // not be reused, and must not be destroyed either (the preload owns it).
-        const reuse = warm !== null && warm.modelId === modelId ? warm.session : null;
+        const reuse = !usesProductionForcedLocalWorker && !warm?.workerOwned && warm !== null && warm.modelId === modelId
+          ? warm.session
+          : null;
         if (reuse) {
           const borrowEpoch = epoch;
           borrowed = reuse;

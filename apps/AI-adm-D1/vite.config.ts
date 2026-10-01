@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "0.0.0.0",
       port: 5174,
-      allowedHosts: ["admin.b827262.org"],
+      allowedHosts: ["admin.b827262.org", "100.76.46.86"],
       proxy: isDevelopment ? {
         "/api": {
           target: process.env.ADMIN_API_TARGET || "http://localhost:4300",

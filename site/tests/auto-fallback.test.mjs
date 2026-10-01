@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import {
   buildGoogleAiModeUrl,
@@ -12,6 +12,103 @@ import {
 } from "../app/auto-fallback.ts";
 import { SIMPLIFIED_ONLY } from "../app/hant-set.ts";
 import { askWithChromeBuiltInAi, createAutoSubmitter, LOCAL_FALLBACK_MODEL_REVISION } from "../app/chrome-built-in-ai.ts";
+import { createModelCacheFetch, markLocalModelCacheReady, probeLocalModelCache } from "../app/local-model-cache.ts";
+
+class MemoryCache {
+  entries = new Map();
+
+  async match(key) {
+    return this.entries.get(typeof key === "string" ? key : key.url)?.clone();
+  }
+
+  async put(key, response) {
+    const url = typeof key === "string" ? key : key.url;
+    this.entries.set(url, new Response(await response.arrayBuffer(), { status: response.status, headers: response.headers }));
+  }
+
+  async delete(key) { return this.entries.delete(typeof key === "string" ? key : key.url); }
+  async keys() { return [...this.entries.keys()].map((url) => new Request(url)); }
+}
+
+test("P0-FIX-3: actual local worker accepts preload, pins its revision, and exits before generation", () => {
+  const worker = readFileSync(new URL("../app/local-inference.worker.ts", import.meta.url), "utf8");
+
+  // This inspects the production worker protocol, rather than a FakeWorker
+  // implementation. In particular, changing the guard back to run-only
+  // makes a real page warm-up wait forever for `preloaded`.
+  assert.match(worker, /data\?\.type !== "run" && data\?\.type !== "preload"/);
+  assert.match(worker, /type: "preload"; prompt\?: never/);
+  assert.match(worker, /env\.useBrowserCache = false;/);
+  assert.match(worker, /env\.fetch = createModelCacheFetch\(\s*\{ modelId, revision \}/);
+  assert.match(worker, /pipeline\("text-generation", modelId, \{\s*revision,/);
+
+  const initialized = worker.indexOf('generator = await pipeline("text-generation", modelId, {');
+  const cacheReady = worker.indexOf("const cacheReady = await markLocalModelCacheReady");
+  const ready = worker.indexOf('send({ type: "status", status: "local model ready" })');
+  const preloaded = worker.indexOf('send({ type: "preloaded" })');
+  const generating = worker.indexOf('send({ type: "status", status: "generating" })');
+  assert.ok(initialized >= 0 && cacheReady > initialized && ready > cacheReady, "preload initializes and finalizes its cache manifest before reporting ready");
+  assert.ok(preloaded > ready && generating > preloaded, "preload reports completion and returns before the generation path");
+  assert.match(worker, /if \(!cacheReady\) \{\s*send\(\{ type: "error", message: "[^\"]*本機模型快取[^\"]*" \}\);\s*return;\s*\}/);
+  assert.match(worker, /catch \(error\) \{\s*send\(\{ type: "error", message: error instanceof Error \? error\.message : "Local model execution failed\." \}\);/);
+  assert.match(worker, /if \(data\.type === "preload"\) \{\s*send\(\{ type: "preloaded" \}\);\s*return;/);
+  const cacheFailure = worker.indexOf("if (!cacheReady)");
+  assert.ok(cacheFailure < ready && cacheFailure < preloaded,
+    "a failed cache-ready result returns with a controlled error before ready or preloaded can be advertised");
+});
+
+test("P0-FIX-5: worker installs the window compatibility guard before dynamically loading Transformers.js", () => {
+  const worker = readFileSync(new URL("../app/local-inference.worker.ts", import.meta.url), "utf8");
+
+  assert.doesNotMatch(worker, /^import\s+.*?\s+from\s+["']@huggingface\/transformers["'];/m);
+  assert.match(worker, /workerGlobal\.window \?\?= globalThis;/);
+  assert.match(worker, /const loadTransformers = \(\) => import\("@huggingface\/transformers"\);/);
+
+  const guard = worker.indexOf("workerGlobal.window ??= globalThis;");
+  const dynamicImport = worker.indexOf('import("@huggingface/transformers")');
+  const load = worker.indexOf("await loadTransformers()");
+  assert.ok(guard >= 0 && dynamicImport > guard && load > dynamicImport,
+    "the worker shim must exist before Transformers.js is dynamically evaluated");
+});
+
+test("T2: production worker disables Qwen thinking before its deterministic 64-token generation", () => {
+  const worker = readFileSync(new URL("../app/local-inference.worker.ts", import.meta.url), "utf8");
+
+  const template = worker.indexOf("tokenizer.apply_chat_template(");
+  const disableThinking = worker.indexOf("enable_thinking: false");
+  const generation = worker.indexOf("const output = await generator(chatPrompt, {");
+  assert.ok(template >= 0 && disableThinking > template && generation > disableThinking,
+    "the production chat template must disable Qwen thinking before generation");
+  assert.match(worker, /max_new_tokens:\s*64,/);
+  assert.doesNotMatch(worker, /max_new_tokens:\s*128,/);
+  assert.doesNotMatch(worker, /max_new_tokens:\s*512,/);
+  assert.match(worker, /max_new_tokens:\s*64,\s*do_sample:\s*false,/);
+});
+
+test("T2: practice worker transports the optional system turn and assistant prefix", () => {
+  const worker = readFileSync(new URL("../app/local-inference.worker.ts", import.meta.url), "utf8");
+  const bridge = readFileSync(new URL("../app/chrome-built-in-ai.ts", import.meta.url), "utf8");
+
+  assert.match(worker, /systemPrompt\?: string;/);
+  assert.match(worker, /assistantPrefix\?: string;/);
+  assert.match(worker, /\.\.\.\(data\.systemPrompt \? \[\{ role: "system", content: data\.systemPrompt \}\] : \[\]\),/);
+  assert.match(worker, /\{ role: "user", content: data.prompt \}/);
+  assert.match(worker, /\) \+ \(data.assistantPrefix \?\? ""\)/);
+  assert.match(bridge, /systemPrompt: options\.systemPrompt,/);
+  assert.match(bridge, /assistantPrefix: options\.assistantPrefix,/);
+});
+
+test("P0-FIX-4: built isolated-worker factory stays Vite-owned and emits its worker asset", () => {
+  const chunks = readdirSync(new URL("../dist/client/_next/static/chunks/", import.meta.url))
+    .filter((name) => name.endsWith(".js"));
+  const built = chunks.map((name) => readFileSync(new URL(`../dist/client/_next/static/chunks/${name}`, import.meta.url), "utf8")).join("\n");
+  const workerFactory = built.match(/local-inference-worker-client-[\w-]+\.js/);
+  assert.ok(workerFactory, "page lazy-loads the browser-only Vite worker factory");
+  const factory = readFileSync(new URL(`../dist/client/_next/static/chunks/${workerFactory[0]}`, import.meta.url), "utf8");
+  assert.match(factory, /new Worker\(/, "Vite emits a worker constructor factory");
+  assert.match(factory, /local-inference\.worker-[\w-]+\.js/, "factory references Vite's emitted worker asset");
+  assert.doesNotMatch(factory, /file:\/\/\/ROOT\//, "worker factory never derives a browser URL from a file URL");
+});
 
 test("Gate 5b: local submit timeout fails closed with a truthful timeout error", async () => {
   const env = {
@@ -32,6 +129,140 @@ test("Gate 5b: local submit timeout fails closed with a truthful timeout error",
     /逾時/,
   );
   assert.equal(submitter.inFlight, false);
+});
+
+test("P0-FIX-3: isolated worker survives a stalled local generation deadline, cancel, and retry", async () => {
+  const originalWorker = globalThis.Worker;
+  const originalWindow = globalThis.window;
+  const workers = [];
+  let behavior = "stall";
+  class FakeWorker {
+    constructor() { workers.push(this); }
+    terminate() { this.terminated = true; }
+    postMessage() {
+      queueMicrotask(() => {
+        this.onmessage?.({ data: { type: "status", status: "local model ready" } });
+        this.onmessage?.({ data: { type: "status", status: "generating" } });
+        if (behavior === "success") this.onmessage?.({ data: { type: "result", text: '{"route":"INFO","answer":"重試成功","confidence":0.9}' } });
+      });
+    }
+  }
+  try {
+    globalThis.window = {};
+    globalThis.Worker = FakeWorker;
+    const submitter = createAutoSubmitter();
+    await assert.rejects(
+      submitter.submit("逾時", () => {}, undefined, { forceLocalModel: true, timeoutMs: 20 }),
+      /逾時/,
+    );
+    assert.equal(workers[0].terminated, true, "deadline terminates only the stuck worker");
+    assert.equal(submitter.inFlight, false, "deadline restores the submit slot");
+
+    const pending = submitter.submit("取消", () => {}, undefined, { forceLocalModel: true, timeoutMs: 500 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    submitter.cancel();
+    await assert.rejects(pending, /取消/);
+    assert.equal(workers[1].terminated, true, "cancel terminates the active worker");
+    assert.equal(submitter.inFlight, false, "cancel restores retry eligibility");
+
+    behavior = "success";
+    const retry = await submitter.submit("重試", () => {}, undefined, { forceLocalModel: true, timeoutMs: 500 });
+    assert.match(retry, /重試成功/);
+    assert.equal(workers[2].terminated, true, "completed worker is released without touching cache");
+  } finally {
+    if (originalWorker === undefined) delete globalThis.Worker;
+    else globalThis.Worker = originalWorker;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+});
+
+test("P0-FIX-3: production forced-local preload and submit stay worker-owned", async () => {
+  const originalWorker = globalThis.Worker;
+  const originalWindow = globalThis.window;
+  const originalCaches = globalThis.caches;
+  const cache = new MemoryCache();
+  const storage = { open: async () => cache };
+  const identity = { modelId: "onnx-community/Qwen3-0.6B-ONNX", revision: LOCAL_FALLBACK_MODEL_REVISION };
+  const artifact = `https://huggingface.co/${identity.modelId}/resolve/main/onnx/model_q4f16.onnx`;
+  let networkFetches = 0;
+  let warmPromptCalls = 0;
+  let warmDestroyCalls = 0;
+  const workers = [];
+  class FakeWorker {
+    constructor() { workers.push(this); }
+    terminate() { this.terminated = true; }
+    postMessage(message) {
+      this.message = message;
+      queueMicrotask(() => {
+        this.onmessage?.({ data: { type: "status", status: "local model ready" } });
+        if (message.type === "preload") this.onmessage?.({ data: { type: "preloaded" } });
+        else this.onmessage?.({ data: { type: "result", text: '{"route":"information","confidence":0.9,"answer":"worker answer"}' } });
+      });
+    }
+  }
+  try {
+    // Seed a complete pinned artifact exactly as a prior warm-up would leave
+    // it. The worker is expected to use this origin-scoped cache, not a second
+    // model download, after the renderer session is retired.
+    await (await createModelCacheFetch(identity, async () => {
+      networkFetches += 1;
+      return new Response("model-bytes", { headers: { "content-length": "11" } });
+    }, { storage })(artifact)).arrayBuffer();
+    assert.equal(await markLocalModelCacheReady(identity, { storage }), true);
+
+    globalThis.caches = storage;
+    globalThis.window = {
+      LanguageModel: {
+        __isPolyfill: true,
+        async create() {
+          return {
+            promptStreaming: () => {
+              warmPromptCalls += 1;
+              return (async function* () { yield "renderer answer"; })();
+            },
+            destroy() { warmDestroyCalls += 1; },
+          };
+        },
+      },
+    };
+    globalThis.Worker = FakeWorker;
+    const submitter = createAutoSubmitter();
+    assert.equal(await submitter.preload(undefined, { localModelId: identity.modelId, forceLocalModel: true }), "warmed");
+    assert.equal(submitter.isPreloaded, true);
+
+    const answer = await submitter.submit("test", () => {}, undefined, {
+      forceLocalModel: true,
+      localModelId: identity.modelId,
+      systemPrompt: "structured practice system",
+      assistantPrefix: '{"route":"information","confidence":0.99,"answer":"如何',
+    });
+    assert.match(answer, /worker answer/);
+    assert.equal(warmPromptCalls, 0, "no renderer session may reach the generation path");
+    assert.equal(warmDestroyCalls, 0, "production preload must not create a renderer session to retire");
+    assert.equal(workers.length, 2, "preload and inference each use an isolated worker lifecycle");
+    assert.equal(workers[0].message.type, "preload", "warm state is prepared by the worker");
+    assert.equal(workers[1].message.type, "run", "forced production submit starts the worker generation route");
+    assert.equal(workers[1].message.systemPrompt, "structured practice system", "the worker receives the optional practice system turn");
+    assert.equal(workers[1].message.assistantPrefix, '{"route":"information","confidence":0.99,"answer":"如何', "the worker receives the exact assistant completion prefix");
+    assert.equal(workers[0].terminated, true, "preload worker is released after artifacts are ready");
+    assert.equal(workers[1].terminated, true, "generation worker is released after its answer");
+
+    const cachedReload = createModelCacheFetch(identity, async () => {
+      networkFetches += 1;
+      return new Response("unexpected network", { headers: { "content-length": "18" } });
+    }, { storage });
+    assert.equal(await (await cachedReload(artifact)).text(), "model-bytes");
+    assert.equal(networkFetches, 1, "retiring the renderer session preserves artifacts for the worker/cache reload");
+    assert.equal((await probeLocalModelCache(identity, { storage })).complete, true);
+  } finally {
+    if (originalWorker === undefined) delete globalThis.Worker;
+    else globalThis.Worker = originalWorker;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+  }
 });
 
 test("COLD_START: download timeout is separate from the 45s generation window", async () => {
@@ -393,7 +624,8 @@ test("cold-start UI keeps byte progress, the stall escape hatch and the practice
   assert.match(page, /DOWNLOAD_STALL_MS = 90_000/);
   assert.match(page, /下載停滯（連續 90 秒無新資料）/);
   assert.match(page, /onClick=\{retryDownload\}>重新下載</);
-  assert.match(page, /if \(bytes\?\.loaded\) lastProgressAt\.current = Date\.now\(\);/);
+  assert.match(page, /if \(isTrustworthyByteProgress\(bytes\)\) \{/);
+  assert.match(page, /\(bytes\.total as number\) > 1/);
   assert.match(page, /先自行作答，詳解答案請由 Google AI 查看。/);
 });
 

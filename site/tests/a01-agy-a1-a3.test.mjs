@@ -10,8 +10,11 @@ import {
 } from "../app/chrome-built-in-ai.ts";
 import {
   AUTO_ROUTE_WITHHELD_COPY,
+  buildPracticeAssistantPrefix,
   buildPracticeQuestionPrompt,
+  formatPracticeContinuation,
   LOCAL_ANSWER_MIN_CONFIDENCE,
+  PRACTICE_SYSTEM_PROMPT,
   localAnswerWithholdReason,
   runAutoRouteInference,
   shouldDisplayLocalAnswer,
@@ -23,6 +26,100 @@ import {
   openGoogleAiAfterLocalFailure,
   preopenGoogleAiTab,
 } from "../app/auto-handoff.ts";
+import { formatDownloadProgress, isModelScaleDownloadProgress, isTrustworthyByteProgress, isTrustworthyUnknownTotalByteProgress, MODEL_SCALE_DOWNLOAD_BYTES, resolveProgressPanel } from "../app/page.tsx";
+
+test("T2 progress panel gives inference stage and elapsed time precedence over local fallback initialization", () => {
+  assert.equal(
+    resolveProgressPanel({ isLoading: true, isPreloading: false, aiStatus: "local fallback loading" }),
+    "generation",
+    "a submitted local inference must show its action/stage/elapsed panel",
+  );
+  assert.equal(
+    resolveProgressPanel({ isLoading: false, isPreloading: true, aiStatus: "local fallback loading" }),
+    "download",
+    "background preload may show the preparation/download-resource panel",
+  );
+  assert.equal(
+    resolveProgressPanel({ isLoading: true, isPreloading: false, aiStatus: "local model download" }),
+    "download",
+    "real local-model artifact transfer overrides generation progress",
+  );
+  assert.equal(
+    resolveProgressPanel({ isLoading: true, isPreloading: true, aiStatus: "local fallback loading" }),
+    "generation",
+    "submit takes precedence even while a previously-started preload is settling",
+  );
+});
+
+test("P0 normalized or fractional monitor values never format as fake model bytes", () => {
+  for (const bytes of [{ loaded: 0.52, total: 1 }, { loaded: 1, total: 1 }, { loaded: 1, total: 1.5 }]) {
+    assert.equal(isTrustworthyByteProgress(bytes), false);
+    assert.notEqual(formatDownloadProgress(bytes), "正在下載本機 AI 模型：52% · 0.0 MB / 0.0 MB");
+    assert.notEqual(formatDownloadProgress(bytes), "正在下載本機 AI 模型：100% · 0.0 MB / 0.0 MB");
+    assert.notEqual(formatDownloadProgress(bytes), "正在下載本機 AI 模型：67% · 0.0 MB / 0.0 MB");
+    assert.match(formatDownloadProgress(bytes), /準備／下載模型資源/);
+  }
+});
+
+test("P0 tiny completed metadata stays indeterminate until the 589MB model transfer arrives", () => {
+  const metadata = { loaded: 1_024, total: 1_024 };
+  const model = { loaded: 86 * 1024 * 1024, total: 589 * 1024 * 1024 };
+
+  assert.equal(isTrustworthyByteProgress(metadata), true, "metadata bytes remain valid transport data");
+  assert.equal(isModelScaleDownloadProgress(metadata), false, "metadata must not become model progress");
+  assert.match(formatDownloadProgress(metadata), /準備／下載模型資源/);
+  assert.doesNotMatch(formatDownloadProgress(metadata), /100%|0\.0 MB \/ 0\.0 MB/);
+
+  assert.ok(model.total > MODEL_SCALE_DOWNLOAD_BYTES);
+  assert.equal(isModelScaleDownloadProgress(model), true);
+  assert.equal(formatDownloadProgress(model), "正在下載本機 AI 模型：15% · 86.0 MB / 589.0 MB");
+});
+
+test("P0 unknown total exposes only model-scale bytes without inventing completion", () => {
+  const metadata = { loaded: 1_024, total: null };
+  const model = { loaded: 32 * 1024 * 1024, total: null };
+  const normalizedRatio = { loaded: 1, total: 1 };
+
+  assert.equal(isTrustworthyUnknownTotalByteProgress(metadata), true);
+  assert.equal(isModelScaleDownloadProgress(metadata), false, "tiny unknown-total metadata is not model progress");
+  assert.match(formatDownloadProgress(metadata), /準備／下載模型資源/);
+  assert.doesNotMatch(formatDownloadProgress(metadata), /已下載|100%|0\.0 MB \/ 0\.0 MB/);
+
+  assert.equal(isTrustworthyByteProgress(model), true);
+  assert.equal(isModelScaleDownloadProgress(model), true);
+  assert.equal(formatDownloadProgress(model), "正在下載本機 AI 模型：已下載 32.0 MB；總大小未知");
+
+  assert.equal(isTrustworthyByteProgress(normalizedRatio), false, "normalized monitor ratios are never byte progress");
+});
+
+test("P0 progress UI is truthful, accessible, and guards duplicate generation", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(page, /role="progressbar"/, "progress uses the semantic progressbar role");
+  assert.match(page, /aria-valuenow=\{percent\}/, "only the determinate branch provides a value");
+  assert.match(page, /等待模型檔案大小資訊/, "small metadata transfers keep model progress indeterminate");
+  assert.doesNotMatch(page, /100%・0\.0 MB \/ 0\.0 MB/, "must never render the false 100% / 0.0 MB state");
+  assert.match(page, /AI 正在準備練習題…/, "generation has visible progress copy");
+  assert.match(page, /v2-progress-indeterminate/, "generation uses an indeterminate progress bar, not a fabricated percentage");
+  assert.match(page, /if \(!prompt \|\| isLoading\) return/, "loading state prevents a second inference submission");
+  assert.match(page, /✓ 本機 AI 模型已準備完成/, "ready state converges to a concise completion message");
+  assert.match(css, /prefers-reduced-motion:reduce/, "progress animation honours reduced-motion preference");
+});
+
+test("P0 inference progress names every local action, reports elapsed time, and never invents generation percent", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  for (const action of ["AI 助手出題", "可選提示", "教材解釋", "陪練", "錯題引導"]) {
+    assert.match(page, new RegExp(action), `${action} is represented in the local inference UI`);
+  }
+  assert.match(page, /已等待 \$\{elapsedSeconds\} 秒/, "elapsed seconds are visible and are not an ETA");
+  assert.match(page, /"載入模型"/, "only trustworthy coarse stages are shown");
+  assert.match(page, /"分析題目"/, "only trustworthy coarse stages are shown");
+  assert.match(page, /"生成內容"/, "only trustworthy coarse stages are shown");
+  assert.match(page, /setGenerationStage\("generating"\)/, "generation stage comes from a real stream event");
+  assert.match(page, /setIsLoading\(false\)/, "all settled paths restore the controls and hide progress");
+  assert.match(page, /await yieldForProgressPaint\(\)/, "the progress panel gets a paint yield before local inference");
+  assert.match(page, /Cache Storage，無法安全保存/, "unsupported Cache Storage has an explicit non-download state");
+});
 
 // ====================================================================
 // A1: UI Auto label 簡化 + 移除舊 consent/manual-route UI
@@ -674,8 +771,8 @@ test("A4 UI wiring: local trial stays on the page and paints only a gate-passed 
   assert.match(page, /await runAutoRouteInference\(/, "submit must route generation through the A4 gate");
   assert.match(
     page,
-    /onStream: \(\) => \{ lastProgressAt\.current = Date\.now\(\); \}/,
-    "the stream hook may only touch a timestamp, never display state",
+    /onStream: \(\) => \{ lastProgressAt\.current = Date\.now\(\); setGenerationStage\("generating"\); \}/,
+    "the stream hook may update only coarse progress state, never answer text",
   );
   assert.match(
     page,
@@ -690,7 +787,10 @@ test("A4 UI wiring: local trial stays on the page and paints only a gate-passed 
     "the automatic handoff carries the original question");
   assert.match(page, /setError\(AUTO_ROUTE_WITHHELD_COPY\[result\.withhold/, "withheld answers must show a local message");
   assert.match(page, /target="_blank" rel="noopener noreferrer">跳頁 Google AI 解答/, "Google navigation remains a separate explicit action");
-  assert.match(page, /buildPracticeQuestionPrompt\(prompt, mode\)/, "local AI receives the exercise prompt");
+  assert.match(page, /buildPracticeQuestionPrompt\(prompt, mode\)/, "local AI receives the concise exercise prompt");
+  assert.match(page, /systemPrompt: PRACTICE_SYSTEM_PROMPT/, "practice uses the worker system turn");
+  assert.match(page, /assistantPrefix: buildPracticeAssistantPrefix\(mode\)/, "practice uses a mode-specific assistant prefix");
+  assert.match(page, /formatPracticeContinuation\(/, "only the deterministic envelope reaches the unchanged parser");
   assert.match(page, /validatePracticeQuestion,/, "exercise gate must reject revealed answers");
   assert.match(page, /buildGoogleAiModeUrl\(`請用繁體中文詳解以下練習題/, "the explanation link must pass the generated exercise to Google AI");
   assert.doesNotMatch(page, /\bchunk\b[^\n]*setAnswer/, "raw model chunks must never be wired to answer state");
@@ -698,11 +798,29 @@ test("A4 UI wiring: local trial stays on the page and paints only a gate-passed 
   assert.deepEqual(strayAnswerWrites, [], "setAnswer may only be called with '', FAQ copy, or the gated text");
 });
 
-test("AI 助手出題: prompt asks for one exercise without an answer, and disclosed solutions are withheld", () => {
-  const prompt = buildPracticeQuestionPrompt("二元搜尋樹", "可選提示");
-  assert.match(prompt, /只出一題/);
-  assert.match(prompt, /不要提供答案、詳解/);
-  assert.match(prompt, /二元搜尋樹/);
+test("AI 助手出題: every mode uses a concise topic turn and mode seed", () => {
+  const modes = ["自動判斷", "可選提示", "教材解釋", "陪練", "錯題引導"];
+  const seeds = ["如何", "哪個", "為何", "如何", "哪裡"];
+  for (const mode of modes) {
+    const topic = "資料結構";
+    const prompt = buildPracticeQuestionPrompt(topic, mode);
+    assert.equal(prompt, `主題：${topic}\n模式：${mode}`);
+    assert.equal(buildPracticeAssistantPrefix(mode), `{"route":"information","confidence":0.99,"answer":"${seeds[modes.indexOf(mode)]}`);
+  }
+  assert.match(PRACTICE_SYSTEM_PROMPT, /繁體中文/);
+  assert.match(PRACTICE_SYSTEM_PROMPT, /不得提供答案/);
+});
+
+test("AI 助手出題: continuation formatting creates only the strict three-key envelope", () => {
+  const raw = formatPracticeContinuation("教材解釋", "資料結構中的堆疊適合用在哪些情境？\"},\n額外說明");
+  assert.equal(raw, '{"route":"information","confidence":0.99,"answer":"為何資料結構中的堆疊適合用在哪些情境？"}');
+  assert.deepEqual(Object.keys(JSON.parse(raw)), ["route", "confidence", "answer"]);
+  assert.equal(formatPracticeContinuation("錯題引導", "資料結構，\"extra\":true"), '{"route":"information","confidence":0.99,"answer":"哪裡資料結構？"}');
+  assert.equal(formatPracticeContinuation("陪練", ""), '{"route":"information","confidence":0.99,"answer":""}', "no continuation must not become a fixed cross-topic answer");
+  assert.equal(validatePracticeQuestion("堆疊", JSON.parse(raw).answer).status, "VALID");
+});
+
+test("AI 助手出題: existing no-answer validator still withholds disclosed solutions", () => {
   assert.equal(validatePracticeQuestion("二元搜尋樹", "請說明二元搜尋樹的搜尋時間複雜度？").status, "VALID");
   assert.equal(validatePracticeQuestion("二元搜尋樹", "二元搜尋樹搜尋複雜度為何？答案：O(log n)").status, "INVALID");
 });

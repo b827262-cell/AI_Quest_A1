@@ -32,6 +32,7 @@ import {
   createThinkingGuard,
   detectRepetitionLoop,
   isTraditionalChinese,
+  isTrustworthyDownloadProgressBytes,
   LOCAL_FALLBACK_DTYPE_CANDIDATES,
   LOCAL_FALLBACK_MODEL_ID,
   LOCAL_FALLBACK_MODEL_REVISION,
@@ -39,9 +40,23 @@ import {
   ORT_WASM_URL,
   QWEN25_BASELINE_MODEL_ID,
   QWEN3_TEST_MODEL_ID,
+  preloadLocalModel,
   stripThinkingTags,
   SUPPORTED_LOCAL_MODELS,
 } from "../app/chrome-built-in-ai.ts";
+
+test("normalized or fractional monitor progress never becomes byte progress", () => {
+  for (const [loaded, total] of [[0.52, 1], [1, 1], [1, 1.5]]) {
+    assert.equal(isTrustworthyDownloadProgressBytes(loaded, total), false);
+    const rendered = isTrustworthyDownloadProgressBytes(loaded, total)
+      ? `${Math.round(loaded / total * 100)}% · ${(loaded / 1024 / 1024).toFixed(1)} MB / ${(total / 1024 / 1024).toFixed(1)} MB`
+      : "正在下載本機 AI 模型：總大小未知";
+    assert.notEqual(rendered, "52% · 0.0 MB / 0.0 MB");
+    assert.notEqual(rendered, "100% · 0.0 MB / 0.0 MB");
+    assert.notEqual(rendered, "67% · 0.0 MB / 0.0 MB");
+    assert.equal(rendered, "正在下載本機 AI 模型：總大小未知");
+  }
+});
 
 function stream(chunks) {
   return (async function* () {
@@ -59,6 +74,68 @@ function mockTargetWindow(overrides = {}) {
 function f16Adapter() {
   return { features: { has: (feature) => feature === "shader-f16" } };
 }
+
+test("force-local preload never lets a native LanguageModel hijack the real local backend", async () => {
+  let nativeCreateCalls = 0;
+  let realLocalLoaderCalls = 0;
+  let realLocalCreateCalls = 0;
+  const mockWin = mockTargetWindow({
+    LanguageModel: {
+      async availability() { return "downloadable"; },
+      async create() {
+        nativeCreateCalls += 1;
+        return {};
+      },
+    },
+  });
+  const env = {
+    window: mockWin,
+    navigator: { gpu: { requestAdapter: async () => f16Adapter() } },
+  };
+
+  const result = await preloadLocalModel({
+    env,
+    localModelId: QWEN3_TEST_MODEL_ID,
+    forceLocalModel: true,
+    loadRealLocalLanguageModel: async () => {
+      realLocalLoaderCalls += 1;
+      return {
+        __isPolyfill: true,
+        async create() {
+          realLocalCreateCalls += 1;
+          return {};
+        },
+      };
+    },
+  });
+
+  assert.equal(result.outcome, "warmed");
+  assert.equal(nativeCreateCalls, 0);
+  assert.equal(realLocalLoaderCalls, 1);
+  assert.equal(realLocalCreateCalls, 1);
+});
+
+test("local preload reuses an existing marked polyfill", async () => {
+  let polyfillCreateCalls = 0;
+  const env = {
+    window: mockTargetWindow({
+      LanguageModel: {
+        __isPolyfill: true,
+        async availability() { return "available"; },
+        async create() {
+          polyfillCreateCalls += 1;
+          return {};
+        },
+      },
+    }),
+    navigator: { gpu: { requestAdapter: async () => f16Adapter() } },
+  };
+
+  const result = await preloadLocalModel({ env, localModelId: QWEN3_TEST_MODEL_ID, forceLocalModel: true });
+
+  assert.equal(result.outcome, "warmed");
+  assert.equal(polyfillCreateCalls, 1);
+});
 
 test("Gate 1: native LanguageModel available uses native without fallback and without network calls", async () => {
   const originalFetch = globalThis.fetch;

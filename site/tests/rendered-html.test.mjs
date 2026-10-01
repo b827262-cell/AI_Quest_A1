@@ -35,7 +35,7 @@ test("renders the AI-SmartBook learning homepage", async () => {
   assert.match(html, /快速題型/);
   assert.match(html, /class="v2-hero-art v2-reveal v2-delay-1" role="img" aria-label="AI-SmartBook 學習介面示意"/);
   assert.match(html, /aria-pressed="false"/);
-  assert.match(html, /\/signin-with-chatgpt/);
+  assert.doesNotMatch(html, /\/signin-with-chatgpt/);
   assert.match(html, /\/admin/);
   assert.doesNotMatch(html, /\/login\b/);
   assert.doesNotMatch(html, /\/guest-answer\b/);

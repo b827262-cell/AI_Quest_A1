@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const page = readFileSync(new URL("../app/signin-with-chatgpt/page.tsx", import.meta.url), "utf8");
-const homepage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 
 test("signin-with-chatgpt page provides the required learning, recovery, and auth-blocked affordances", () => {
   assert.match(page, /使用 ChatGPT 繼續/);
@@ -21,10 +20,4 @@ test("signin-with-chatgpt page provides the required learning, recovery, and aut
   assert.match(page, /AUTH_BLOCKED/);
   assert.doesNotMatch(page, /chatGPTSignInPath/);
   assert.doesNotMatch(page, /(?:client_secret|access_token|refresh_token|api[_-]?key)\s*[:=]/i);
-});
-
-test("homepage v2-value CTA retains the student signin route and never embeds a backend URL", () => {
-  assert.match(homepage, /const studentRoute = "\/signin-with-chatgpt"/);
-  assert.match(homepage, /<section className="v2-value shell">[\s\S]*?className="v2-button v2-button-primary" href=\{studentRoute\}>進入學習工作台/);
-  assert.doesNotMatch(homepage, /ai-quest-a1-backend/);
 });
