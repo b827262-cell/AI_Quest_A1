@@ -20,6 +20,7 @@ const quickModes = ["可選提示", "教材解釋", "陪練", "錯題引導"];
 const studentRoute = "https://b827262-e500-g9-ws760t.tailc359df.ts.net:8443";
 const localModel = { modelId: QWEN3_TEST_MODEL_ID, revision: LOCAL_FALLBACK_MODEL_REVISION };
 const DOWNLOAD_STALL_MS = 90_000;
+export const BRAND_MARK_ACTIVATION_WINDOW_MS = 2_000;
 // A config/tokenizer request is a real byte transfer, but not evidence that
 // the model itself is downloaded. Do not turn a completed tiny asset into a
 // completed model bar. The Qwen artifact is hundreds of MiB; 16 MiB leaves
@@ -27,6 +28,11 @@ const DOWNLOAD_STALL_MS = 90_000;
 export const MODEL_SCALE_DOWNLOAD_BYTES = 16 * 1024 * 1024;
 
 function BrandMark() { return <span className="v2-brand-mark" aria-hidden="true">✦</span>; }
+
+/** Keep only consecutive activations in the locked two-second discovery window. */
+export function recordBrandMarkActivation(activationTimes: number[], now: number) {
+  return [...activationTimes.filter((time) => now >= time && now - time <= BRAND_MARK_ACTIVATION_WINDOW_MS), now];
+}
 
 // Model artifacts cannot plausibly have a one-byte total. Polyfill monitor
 // events commonly use a 0..1 ratio with total=1, which is progress metadata,
@@ -137,6 +143,8 @@ export default function Home() {
   const preloadRunId = useRef(0);
   const lastProgressAt = useRef(0);
   const isLoadingRef = useRef(false);
+  const brandMarkActivations = useRef<number[]>([]);
+  const [showBrandMarkBadge, setShowBrandMarkBadge] = useState(false);
 
   const downloading = (isLoading || isPreloading) && (aiStatus === "local model download" || aiStatus === "native model download");
   const hasKnownDownloadTotal = isTrustworthyKnownTotalByteProgress(downloadProgress) && isModelScaleDownloadProgress(downloadProgress);
@@ -218,6 +226,37 @@ export default function Home() {
     const timer = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 1_000);
     return () => clearInterval(timer);
   }, [isLoading]);
+
+  useEffect(() => {
+    if (!showBrandMarkBadge) return;
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        brandMarkActivations.current = [];
+        setShowBrandMarkBadge(false);
+      }
+    };
+    window.addEventListener("keydown", dismissOnEscape);
+    return () => window.removeEventListener("keydown", dismissOnEscape);
+  }, [showBrandMarkBadge]);
+
+  function activateBrandMark() {
+    if (showBrandMarkBadge) {
+      brandMarkActivations.current = [];
+      setShowBrandMarkBadge(false);
+      return;
+    }
+    const activations = recordBrandMarkActivation(brandMarkActivations.current, Date.now());
+    brandMarkActivations.current = activations;
+    if (activations.length >= 3) {
+      brandMarkActivations.current = [];
+      setShowBrandMarkBadge(true);
+    }
+  }
+
+  function dismissBrandMarkBadge() {
+    brandMarkActivations.current = [];
+    setShowBrandMarkBadge(false);
+  }
 
   function retryDownload() {
     requestId.current += 1;
@@ -339,7 +378,7 @@ export default function Home() {
   }
 
   return <main className="v2-page"><span className="sr-only">Chrome Built-in AI</span>
-    <header className="v2-nav shell"><a className="v2-brand" href="#top" aria-label="AI-SmartBook 首頁"><BrandMark /><strong>AI-SmartBook</strong></a><nav aria-label="主要導覽"><a href="#features">功能</a><a href="#auto-answer">公開問答</a><a href="#workflow">使用方式</a><a href="#structure">系統架構</a></nav><a className="v2-nav-login" href={studentRoute}>學員登入 <span aria-hidden="true">↗</span></a></header>
+    <header className="v2-nav shell"><div className="v2-brand-area"><div className="v2-brand"><button className="v2-brand-trigger" type="button" aria-label="啟用 BrandMark Sparkle Quest Badge" onClick={activateBrandMark}><BrandMark /></button><a className="v2-brand-home" href="#top" aria-label="AI-SmartBook 首頁"><strong>AI-SmartBook</strong></a></div>{showBrandMarkBadge && <div className="v2-brand-badge" role="status" aria-live="polite"><span>✦ AI Quest A-01: Web AI Ready ✦</span><button type="button" aria-label="關閉 BrandMark Sparkle Quest Badge" onClick={dismissBrandMarkBadge}>×</button></div>}</div><nav aria-label="主要導覽"><a href="#features">功能</a><a href="#auto-answer">公開問答</a><a href="#workflow">使用方式</a><a href="#structure">系統架構</a></nav><a className="v2-nav-login" href={studentRoute}>學員登入 <span aria-hidden="true">↗</span></a></header>
     <section className="v2-hero shell" id="top"><div className="v2-hero-copy v2-reveal"><p className="v2-eyebrow"><span />學習，不必在工具之間來回切換</p><h1>把閱讀、提問與<br /><em>下一步</em>放在一起。</h1><p className="v2-lead">AI-SmartBook 是以教材閱讀為中心的學習工作台。從進入書庫，到理解內容與回顧進度，每一步都有清楚的位置。</p><div className="v2-actions"><a className="v2-button v2-button-primary" href={studentRoute}>開始學習 <span aria-hidden="true">→</span></a><a className="v2-button v2-button-secondary" href="#auto-answer">體驗公開問答 <span aria-hidden="true">↓</span></a></div><p className="v2-note">使用既有學員帳號登入即可進入個人學習工作台。</p></div><div className="v2-hero-art v2-reveal v2-delay-1" role="img" aria-label="AI-SmartBook 學習介面示意"><div className="v2-orbit v2-orbit-one" /><div className="v2-orbit v2-orbit-two" /><div className="v2-product-card"><div className="v2-product-top"><span className="v2-mini-brand">✦</span><span>我的學習工作台</span><i /></div><div className="v2-product-body"><aside><span className="active" /><span /><span /><span /></aside><div className="v2-product-content"><p>正在閱讀</p><h2>從教材開始整理你的理解</h2><div className="v2-reading-lines"><b /><b /><b /><b /></div><div className="v2-question"><span>✦</span><p>針對這一段提出問題</p><span aria-hidden="true">↑</span></div></div></div></div><div className="v2-float-card v2-float-progress"><span>◔</span><div><small>學習脈絡</small><b>接續上次閱讀</b></div></div><div className="v2-float-card v2-float-answer"><span>✦</span><div><small>閱讀輔助</small><b>把疑問留在此處</b></div></div></div></section>
     <section className="v2-trust shell" aria-label="產品重點"><span>READ</span><i /><span>ASK</span><i /><span>ORGANIZE</span><i /><span>CONTINUE</span></section>
     <section className="v2-auto shell" id="auto-answer" aria-labelledby="auto-heading">
