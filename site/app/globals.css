@@ -55,3 +55,13 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   .v2-answer-action-btn{min-height:40px;flex:1;justify-content:center}
   .v2-answer-actions .v2-button{width:100%;justify-content:center;min-height:44px}
 }
+/* A-01 Slot C: degraded-state notice and runtime diagnostics disclosure. */
+.v2-diagnostics{margin:14px 0 0;padding:10px 12px;border:1px solid #dbe3f1;border-radius:10px;background:#f7f9ff}
+.v2-diagnostics summary{min-height:24px;color:#33415c;font-size:13px;font-weight:800;cursor:pointer}
+.v2-diagnostics .v2-auto-status{margin:8px 0 0;overflow-wrap:anywhere}
+.v2-degraded{color:#8a2f2f;border-left:3px solid #c04a4a;padding-left:9px}
+.v2-diagnostics:focus-within,.v2-degraded:focus-visible{outline:3px solid #244fe5;outline-offset:3px}
+@media(max-width:480px){
+  .v2-diagnostics{padding:9px 10px}
+  .v2-diagnostics summary{min-height:32px}
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AutoAiRuntimeLayer, AutoAiStatus, createAutoSubmitter, DownloadProgress, LOCAL_FALLBACK_MODEL_REVISION, QWEN3_TEST_MODEL_ID, runtimeLayerForStatus } from "./chrome-built-in-ai";
 import { buildGoogleAiModeUrl, createAutoFallbackGuard } from "./auto-fallback";
 import { openGoogleAiAfterLocalFailure } from "./auto-handoff";
@@ -14,6 +14,30 @@ import {
   validatePracticeQuestion,
 } from "./auto-route";
 import { deleteLocalModelCache, probeLocalModelCache, requestLocalModelPersistence } from "./local-model-cache";
+import {
+  classifyRuntimeError,
+  frontendBuildIdentity,
+  OFFLINE_COPY,
+  readBrowserConnectivity,
+  resolveConnectivityState,
+} from "./runtime-diagnostics";
+
+// Resolved once per document. /api/health reads the same resolver, so the identity
+// shown here is the identity the runtime reports.
+const buildIdentity = frontendBuildIdentity();
+
+function subscribeConnectivity(handleChange: () => void) {
+  window.addEventListener("online", handleChange);
+  window.addEventListener("offline", handleChange);
+  return () => {
+    window.removeEventListener("online", handleChange);
+    window.removeEventListener("offline", handleChange);
+  };
+}
+
+function readConnectivity() {
+  return readBrowserConnectivity() !== false;
+}
 
 const features = [["01", "智慧書庫", "在同一個閱讀脈絡中整理教材、章節與你的學習入口。"], ["02", "閱讀輔助", "把問題留在正在閱讀的位置，讓理解和複習能接續進行。"], ["03", "學習進度", "回到個人工作台查看已閱讀的內容與下一步。"], ["04", "管理工作台", "管理端集中處理帳號、書籍內容與站台設定。"]] as const;
 const quickModes = ["可選提示", "教材解釋", "陪練", "錯題引導"];
@@ -149,6 +173,9 @@ export default function Home() {
   const [showBrandMarkBadge, setShowBrandMarkBadge] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
+  const online = useSyncExternalStore(subscribeConnectivity, readConnectivity, () => true);
+  const connectivity = resolveConnectivityState(online);
+  const diagnostic = error ? classifyRuntimeError(error, { online }) : null;
 
   function checkIsFavorite(text: string) {
     if (!text || typeof window === "undefined" || !window.localStorage) return false;
@@ -337,6 +364,10 @@ export default function Home() {
     event?.preventDefault();
     const prompt = question.trim();
     if (!prompt || isLoading) return;
+    if (!online) {
+      setError(OFFLINE_COPY);
+      return;
+    }
     const id = ++requestId.current;
     if (cacheSupported === false) {
       setError("此瀏覽器不支援 Cache Storage，無法安全執行本機模型下載；請改用支援的瀏覽器。");
@@ -451,7 +482,14 @@ export default function Home() {
         {downloading && <button className="v2-gesture-button" type="button" onClick={() => { requestId.current += 1; preloadRunId.current += 1; autoSubmitter.current.cancel(); setIsPreloading(false); setDownloadProgress(null); setNeedsGesture(true); setAiStatus("local model requires user activation"); setError("已取消模型下載，可再次按開始下載。"); }}>取消下載</button>}
         {isLoading && !downloading && <button className="v2-gesture-button" type="button" onClick={cancelInference}>取消本機 AI 回答</button>}
         {downloadStalled && (isLoading || isPreloading) && <span className="v2-gesture-button" role="alert">下載停滯（連續 90 秒無新資料）</span>}{downloadStalled && (isLoading || isPreloading) && <button className="v2-gesture-button" type="button" onClick={retryDownload}>重新下載</button>}
-        {error && <p className="v2-auto-status" role="alert">{aiStatus ? `[${aiStatus}] ` : ""}{error}</p>}
+        {connectivity === "offline" && <p className="v2-auto-status v2-degraded" role="alert">離線中：已快取的本機模型仍可回答，但模型下載與雲端導向暫時不可用，恢復網路後請重新送出。</p>}
+        {error && <p className="v2-auto-status" role="alert">{aiStatus ? `[${aiStatus}] ` : ""}{diagnostic ? `[${diagnostic.code}] ` : ""}{error}</p>}
+        {error && diagnostic && !diagnostic.retryable && <button className="v2-gesture-button" type="button" onClick={() => { void refreshCache(); }}>重新檢查本機模型狀態</button>}
+        <details className="v2-diagnostics" data-a01-version={buildIdentity.version} data-a01-build-id={buildIdentity.buildId} data-a01-git-sha={buildIdentity.gitSha} data-a01-identity-source={buildIdentity.source} data-a01-connectivity={connectivity}>
+          <summary>診斷資訊（版本 / 執行層 / 網路）</summary>
+          <p className="v2-auto-status">版本 {buildIdentity.version} · 建置 {buildIdentity.buildId} · Git {buildIdentity.gitSha} · 身分來源 {buildIdentity.source}</p>
+          <p className="v2-auto-status">網路狀態：{connectivity === "online" ? "線上" : connectivity === "offline" ? "離線" : "未知"} · 錯誤代碼：{diagnostic?.code ?? "無"} · 建議處理：{diagnostic ? diagnostic.recovery : "不適用"}</p>
+        </details>
         {needsGesture && !isLoading && <button className="v2-gesture-button" type="button" onClick={() => { void startModelDownload(); }}>開始下載本機模型</button>}
         {answer && <section className="v2-auto-answer" aria-label="AI 助手練習題">
           <div className="v2-answer-header">
