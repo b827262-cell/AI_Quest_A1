@@ -33,6 +33,9 @@ export function AdminSidebar({
         <NavLink end to="/admin/site-config" className={NAV_CLASS}>
           網站首頁設定
         </NavLink>
+        <NavLink end to="/admin/exam-snapshots" className={NAV_CLASS}>
+          高普考資料快照
+        </NavLink>
         <NavLink end to="/admin/ai-analytics" className={NAV_CLASS}>
           AI 執行分析
         </NavLink>

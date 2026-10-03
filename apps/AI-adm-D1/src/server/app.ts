@@ -42,6 +42,7 @@ import {
   setAdminSessionCookies
 } from "./ai/admin-auth";
 import { createAdminOriginMiddleware } from "./ai/admin-origin";
+import { createExamSnapshotRouter } from "./exam-snapshot/admin-router";
 import { EvaluationServiceError, makeEvaluationService } from "./ai/evaluation-service";
 import { LiveEvaluationServiceError, makeLiveEvaluationService } from "./ai/live-evaluation-service";
 import { EvaluationGovernanceError, makeEvaluationGovernanceService } from "./ai/evaluation-governance-service";
@@ -3465,6 +3466,10 @@ app.put("/api/admin/site-config", (req, res) => {
   repos.settings.set(SITE_CONFIG_KEY, JSON.stringify(merged));
   res.json({ config: merged, updatedAt: new Date().toISOString() });
 });
+
+// Slot D: 高普考資料快照. The router owns only HTTP; crawl/validate/upsert stay in
+// Slot B's modules and the connection string stays in the environment.
+app.use("/api/admin/exam-snapshots", createExamSnapshotRouter({ env, settings: repos.settings }));
 
 // ---- AI provider / credential administration ----------------------------
 // These endpoints deliberately map rows to a public shape; encryptedApiKey,

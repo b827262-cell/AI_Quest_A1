@@ -455,6 +455,7 @@ export function PublicHomePage() {
           </h1>
           <p className="public-hero-subtitle">{config.siteSubtitle}</p>
           <p className="public-hero-copy">輸入題目、選取教材內容，或上傳圖片開始智慧解題。</p>
+          <Link className="knowledge-ai-cta" to="/knowledge-ai">探索知識達 AI 學習問答 <span aria-hidden="true">→</span></Link>
 
         {!response && !restoringAnswer ? (
             <>

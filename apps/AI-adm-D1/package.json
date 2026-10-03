@@ -16,6 +16,7 @@
     "@ai-smartbook/auth": "workspace:*",
     "@ai-smartbook/ai": "workspace:*",
     "@ai-smartbook/book-core": "workspace:*",
+    "@ai-smartbook/contracts": "workspace:*",
     "@ai-smartbook/db": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
     "@ai-smartbook/ui": "workspace:*",

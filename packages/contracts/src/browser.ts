@@ -33,3 +33,29 @@ export type {
   StudentRagGroundingV1,
   StudentRagScopeV1
 } from "./student-rag";
+export {
+  EXAM_COURSE_CATEGORIES_V1,
+  EXAM_COURSE_SOURCE_HOSTS_V1,
+  EXAM_COURSE_YEARS_V1,
+  examCourseCategoryV1Schema,
+  examCourseRecordV1Schema,
+  examCourseSearchModeV1Schema,
+  examCourseSearchQueryV1Schema,
+  examCourseSearchResponseV1Schema,
+  examCourseSearchResultV1Schema,
+  examCourseYearV1Schema,
+  matchesExamCourseCode,
+  matchesExamCourseKeyword,
+  matchesExamCourseYear,
+  searchExamCourseRows
+} from "./exam-course";
+export type {
+  ExamCourseCategoryV1,
+  ExamCourseRecordV1,
+  ExamCourseSearchModeV1,
+  ExamCourseSearchQueryV1,
+  ExamCourseSearchResponseV1,
+  ExamCourseSearchResultV1,
+  ExamCourseSearchRow,
+  ExamCourseYearV1
+} from "./exam-course";

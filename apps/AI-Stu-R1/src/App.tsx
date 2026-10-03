@@ -8,13 +8,14 @@ import { LoginPage } from "./pages/LoginPage";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage";
 import { StudentHeader } from "./components/StudentHeader";
 import { PublicHomePage } from "./pages/PublicHomePage";
+import { KnowledgeAiPage } from "./pages/KnowledgeAiPage";
 import { ProfileCompletionPage } from "./pages/ProfileCompletionPage";
 import { StudentDashboardPage } from "./pages/StudentDashboardPage";
 import { RequireStudent, StudentAuthProvider } from "./student-auth";
 
 function StudentChrome() {
   const location = useLocation();
-  const isPublicRoute = location.pathname === "/" || location.pathname === "/guest-answer" || location.pathname === "/login" || location.pathname === "/auth/callback" || location.pathname === "/profile-completion";
+  const isPublicRoute = location.pathname === "/" || location.pathname === "/guest-answer" || location.pathname === "/knowledge-ai" || location.pathname === "/login" || location.pathname === "/auth/callback" || location.pathname === "/profile-completion";
   return isPublicRoute ? null : <StudentHeader />;
 }
 
@@ -40,6 +41,7 @@ export function StudentAppRoutes() {
               <Route path="/auth/callback" element={<AuthCallbackPage />} />
               <Route path="/" element={<PublicHomePage />} />
               <Route path="/guest-answer" element={<PublicHomePage />} />
+              <Route path="/knowledge-ai" element={<KnowledgeAiPage />} />
               <Route path="/profile-completion" element={<ProfileCompletionPage />} />
               <Route path="/dashboard" element={<RequireStudent><StudentDashboardPage /></RequireStudent>} />
               <Route path="/books" element={<RequireStudent><BooksPage /></RequireStudent>} />

@@ -49,6 +49,33 @@ export const CONTRACT_CATALOG: readonly ContractCatalogEntry[] = [
     schema: "studentRagAskResponseV1Schema"
   },
   {
+    id: "exam-course-search-query",
+    version: 1,
+    boundary: "browser-safe",
+    owner: "Contracts maintainer + exam data owner",
+    purpose: "Query parameters of the public 高普考 course search endpoint",
+    consumers: ["Student browser", "Admin browser", "Admin API server"],
+    schema: "examCourseSearchQueryV1Schema"
+  },
+  {
+    id: "exam-course-search-response",
+    version: 1,
+    boundary: "browser-safe",
+    owner: "Contracts maintainer + exam data owner",
+    purpose: "Public course rows (exam_year, course_code, course_name, course_content, source_url)",
+    consumers: ["Student browser", "Admin browser", "Admin API server"],
+    schema: "examCourseSearchResponseV1Schema"
+  },
+  {
+    id: "exam-course-record",
+    version: 1,
+    boundary: "browser-safe",
+    owner: "Exam data owner",
+    purpose: "One crawled course row with snapshot provenance (fetched_at, content_hash)",
+    consumers: ["Snapshot crawler", "Snapshot store", "PostgreSQL upsert adapter"],
+    schema: "examCourseRecordV1Schema"
+  },
+  {
     id: "audit-event",
     version: 1,
     boundary: "server-only",

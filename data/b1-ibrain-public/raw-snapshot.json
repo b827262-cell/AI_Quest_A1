@@ -1,0 +1,162 @@
+[
+  {
+    "exam_year": 115,
+    "category": "高普考",
+    "course_code": "IPKKW126262",
+    "course_name": "高普考 統計學 經典題庫班 (趙治勳) (115 行動版)",
+    "course_content": "重要關頭的題庫班課程；以考古題與經典題型訓練為主，公開頁面說明本課可適用於115高普考。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/WWW/Book.asp?BKID=18064",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "e5f35e77def48c69591d312e510be55967df61d75f511b16bdf1ce3537b00850"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPPP3727011",
+    "course_name": "116高上 普考 一般民政 全修課程",
+    "course_content": "適用116與117年高普考及一般民政類考試；約117堂，含行政法概要、行政學概要、地方自治概要等。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18142",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "668048d7cb8b780a114063762e37664bd4fe952cf12c2b8e4708586696320319"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPPP0327011",
+    "course_name": "116高上 普考 會計 全修課程",
+    "course_content": "公開頁面列為高普考適用的116年普考會計全修課程。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18127",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "f2737ac10754ce793f5e85c6cf7ba2bb698f42e91c6fea4ebd165db4e0d335fb"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPPP2327021",
+    "course_name": "116高上 普考 統計 (專業科目)",
+    "course_content": "適用116與117年高普考及統計類考試；約102堂，含經濟學概要、統計學概要、資料處理概要。",
+    "source_url": "https://ec.ibrain.com.tw/publish/www/book.asp?bkid=18222",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "c6d893fd1a0dfda62bcbba8fe9ae9365187f2bd4906fbb5a6f39f1c2c3a32de6"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK3227021",
+    "course_name": "116高上 高考 一般行政 (專業科目)",
+    "course_content": "適用116與117年高普考及一般行政類考試；約116堂。",
+    "source_url": "https://ec.ibrain.com.tw/publish/www/book.asp?bkid=18181",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "e562fdf5922c7b9ea747fd30b65adca1bcfd14ef6bbb3860145987346498db40"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK3227011",
+    "course_name": "116高上 高考 一般行政 全修課程",
+    "course_content": "適用116與117年高普考及一般行政類考試；約151堂，含行政法、行政學、政治學及公共政策。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18187",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "9e576fea5cb93bc43a18ba648b674996f764c4e874e62a168c226686c0bbdcf3"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK3727011",
+    "course_name": "116高上 高考 一般民政 全修課程",
+    "course_content": "適用116與117年高普考及一般民政類考試。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18146",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "7d70188415dfa1a1533b9d897c5cde73df6412ca179a8c1d163d22fcf09cd166"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK4227021",
+    "course_name": "116高上 高考 地政 (專業科目)",
+    "course_content": "適用116與117年高普考及地政類考試；約111堂。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18130",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "fbd2ece0f2a6ffec8f6230c549af1293b63b196a538a1290ad37815264dafc9f"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK5227011",
+    "course_name": "116高上 高考 司法行政 全修課程",
+    "course_content": "適用116與117年高考司法行政考試；約182堂，含民法、刑法、刑事訴訟法、民事訴訟法與行政法。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18171",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "d8bd0523744b53a665bc4a9e29d5486032d041f775cd95d062d0473164e2ed43"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK4827021",
+    "course_name": "116高上 高考 商業行政 (專業科目)",
+    "course_content": "建議適用116與117年高普考及商業行政類考試。",
+    "source_url": "https://ec.ibrain.com.tw/publish/www/book.asp?bkid=18133",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "d4e073eaff5dff7a4370364f0447f4c01190bdbca3fa182fc97625882ebd9abf"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPPP3927021",
+    "course_name": "116高上 普考 社會行政 (專業科目)",
+    "course_content": "公開頁面列為高普考適用的116年普考社會行政專業科目課程。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18224",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "679e72b3044b35cee720e13efe41fc49ead2b9368fbe3c8e84fa51cd15feae5e"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK0427021",
+    "course_name": "116高上 高考 財稅行政 (專業科目)",
+    "course_content": "適用116與117年高普考及稅務類考試；約129堂，含會計學、財政學、民法與稅務法規。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18185",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "a3022b97a1d9a86c73711756fecfbf72bd9ab694a165d5fcf5e1a00d5ed6c02b"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK0927011",
+    "course_name": "116高上 高考 審計 全修課程",
+    "course_content": "適用116與117年高普考及審計類考試；約167堂。",
+    "source_url": "https://ec.ibrain.com.tw/publish/www/book.asp?bkid=18154",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "1ded953b27f5dee54c5eccd5d11e4486d51e3a74d26670851a69d6534161a3ad"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPKK4627011",
+    "course_name": "116高上 高考 戶政 全修課程",
+    "course_content": "適用116與117年高普考及戶政類考試；約106堂，含行政法、民法總則、親屬與繼承編、人口政策與人口統計。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18143",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "75ee76806d29618b2dcacd05f71ed961a54a9302428f88b57c626cd706cba617"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPPP0527011",
+    "course_name": "116高上 普考 經建行政 全修課程",
+    "course_content": "適用116與117年高普考及經建類考試；約144堂，含經濟學概要、統計學概要與貨幣銀行學概要。",
+    "source_url": "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18160",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "032b594ba58b1330020c850e3d78737750f3c6bac205d15f278c3e8c36f70bd7"
+  },
+  {
+    "exam_year": 116,
+    "category": "高普考",
+    "course_code": "IPPP3127011",
+    "course_name": "116高上 普考 人事行政 全修課程",
+    "course_content": "適用116與117年高普考及人事行政類考試；約132堂，含行政法、行政學與公共人力資源管理。",
+    "source_url": "https://ec.ibrain.com.tw/publish/www/book.asp?bkid=18200",
+    "fetched_at": "2026-10-03T14:42:59Z",
+    "content_hash": "64dc1bfba16558f86d109cc0c9532244b1709d414f3600d9bc5f06caf7c8c548"
+  }
+]
