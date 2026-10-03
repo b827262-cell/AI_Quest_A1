@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { AutoAiStatus, createAutoSubmitter, DownloadProgress, LOCAL_FALLBACK_MODEL_REVISION, QWEN3_TEST_MODEL_ID } from "./chrome-built-in-ai";
+import { AutoAiRuntimeLayer, AutoAiStatus, createAutoSubmitter, DownloadProgress, LOCAL_FALLBACK_MODEL_REVISION, QWEN3_TEST_MODEL_ID, runtimeLayerForStatus } from "./chrome-built-in-ai";
 import { buildGoogleAiModeUrl, createAutoFallbackGuard } from "./auto-fallback";
 import { openGoogleAiAfterLocalFailure } from "./auto-handoff";
 import {
@@ -131,6 +131,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [isPreloading, setIsPreloading] = useState(false);
   const [aiStatus, setAiStatus] = useState<AutoAiStatus | "">("");
+  const [runtimeLayer, setRuntimeLayer] = useState<AutoAiRuntimeLayer>("none");
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [needsGesture, setNeedsGesture] = useState(false);
   const [cacheStatus, setCacheStatus] = useState("");
@@ -143,8 +144,24 @@ export default function Home() {
   const preloadRunId = useRef(0);
   const lastProgressAt = useRef(0);
   const isLoadingRef = useRef(false);
+  const lastSubmittedPrompt = useRef("");
   const brandMarkActivations = useRef<number[]>([]);
   const [showBrandMarkBadge, setShowBrandMarkBadge] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(false);
+
+  useEffect(() => {
+    if (!answer || typeof window === "undefined" || !window.localStorage) {
+      setIsFavorite(false);
+      return;
+    }
+    try {
+      const list = JSON.parse(window.localStorage.getItem("ai_smartbook_favorites") || "[]");
+      setIsFavorite(list.some((item: { text?: string }) => item.text === answer));
+    } catch {
+      setIsFavorite(false);
+    }
+  }, [answer]);
 
   const downloading = (isLoading || isPreloading) && (aiStatus === "local model download" || aiStatus === "native model download");
   const hasKnownDownloadTotal = isTrustworthyKnownTotalByteProgress(downloadProgress) && isModelScaleDownloadProgress(downloadProgress);
@@ -155,6 +172,7 @@ export default function Home() {
 
   function observeAiStatus(status: AutoAiStatus, bytes?: DownloadProgress) {
     setAiStatus(status);
+    setRuntimeLayer(runtimeLayerForStatus(status));
     // Polyfill monitor events often start with 0/0. They are not evidence of
     // a real transfer, so only body-counted/native positive values replace the
     // last truthful byte reading.
@@ -294,7 +312,7 @@ export default function Home() {
       setError("此瀏覽器不支援 Cache Storage，無法安全執行本機模型下載；請改用支援的瀏覽器。");
       return;
     }
-    setAnswer(""); setError(""); setAiStatus(""); setDownloadProgress(null); setNeedsGesture(false); setDownloadStalled(false); setGenerationStage("loading"); setElapsedSeconds(0);
+    setAnswer(""); setError(""); setAiStatus(""); setRuntimeLayer("none"); setDownloadProgress(null); setNeedsGesture(false); setDownloadStalled(false); setGenerationStage("loading"); setElapsedSeconds(0);
     lastProgressAt.current = Date.now();
     if (model !== "Auto" && model !== "Qwen3-0.6B") {
       setError("公開體驗目前僅支援 Auto 與 Qwen3-0.6B（本機測試選項）回答。");
@@ -358,6 +376,7 @@ export default function Home() {
         return;
       }
       if (cause instanceof Error && cause.message.includes("本機 AI 模型無法完成回答") && fallbackGuard.navigateOnce()) {
+        setRuntimeLayer("cloud-handoff");
         openGoogleAiAfterLocalFailure(prompt, window);
         return;
       }
@@ -388,6 +407,7 @@ export default function Home() {
         <textarea id="auto-question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：資料結構的二元搜尋樹，或會計分錄……" disabled={isLoading} />
         <div className="v2-google-action">{question.trim() ? <a className="v2-button v2-button-primary" href={buildGoogleAiModeUrl(question.trim())} target="_blank" rel="noopener noreferrer">跳頁 Google AI 解答 <span aria-hidden="true">↗</span></a> : <button className="v2-button v2-button-primary" type="button" disabled>跳頁 Google AI 解答 <span aria-hidden="true">↗</span></button>}<span>將原題送往 Google；請在新分頁查看解答。</span></div>
         <div className="v2-auto-controls"><select value={model} onChange={(event) => setModel(event.target.value)} aria-label="AI 模型" disabled={isLoading}><option value="Auto">Auto</option><option value="Qwen3-0.6B">Qwen3-0.6B</option></select><select value={mode} onChange={(event) => setMode(event.target.value)} aria-label="助教模式" disabled={isLoading}><option>自動判斷</option><option>可選提示</option><option>教材解釋</option><option>陪練</option><option>錯題引導</option></select><button className="v2-button v2-button-secondary" type="submit" disabled={!question.trim() || isLoading}>{isLoading ? "AI 正在準備練習題…" : "AI 助手出題"}</button></div>
+        <p className="v2-auto-status" role="status">目前 AI 執行層：{runtimeLayer === "chrome-built-in" ? "Chrome Built-in AI" : runtimeLayer === "local-model" ? "本機模型" : runtimeLayer === "cloud-handoff" ? "雲端導向（Google AI）" : "尚未選擇"}</p>
         <p className="v2-auto-status">練習題主要提供學員練題；詳解答案請使用 Google AI。</p>
         <div className="v2-quick-modes" aria-label="快速題型">{quickModes.map((item) => <button key={item} type="button" aria-pressed={mode === item} onClick={() => setMode(item)} disabled={isLoading}>{item}</button>)}</div>
         <div className="v2-quick-modes" aria-label="本機模型快取"><button type="button" onClick={() => { void refreshCache(); }}>檢查模型快取</button><button type="button" onClick={() => { void requestLocalModelPersistence().then(refreshCache); }}>申請長期保存</button><button type="button" onClick={() => { if (window.confirm("確定刪除此模型版本的本機快取？")) { autoSubmitter.current.resetPreload(); void deleteLocalModelCache(localModel).then(refreshCache); } }}>刪除本機模型</button></div>

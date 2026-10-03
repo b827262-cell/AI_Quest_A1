@@ -121,6 +121,15 @@ test("P0 inference progress names every local action, reports elapsed time, and 
   assert.match(page, /Cache Storage，無法安全保存/, "unsupported Cache Storage has an explicit non-download state");
 });
 
+test("A runtime routing exposes the selected layer and records a cloud handoff before navigation", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /目前 AI 執行層：/);
+  assert.match(page, /runtimeLayerForStatus\(status\)/);
+  const handoff = page.indexOf('setRuntimeLayer("cloud-handoff")');
+  const navigate = page.indexOf("openGoogleAiAfterLocalFailure(prompt, window)");
+  assert.ok(handoff >= 0 && navigate > handoff, "runtime must record the handoff before leaving this page");
+});
+
 // ====================================================================
 // A1: UI Auto label 簡化 + 移除舊 consent/manual-route UI
 // ====================================================================

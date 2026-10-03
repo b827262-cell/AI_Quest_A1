@@ -41,9 +41,19 @@ import {
   QWEN25_BASELINE_MODEL_ID,
   QWEN3_TEST_MODEL_ID,
   preloadLocalModel,
+  runtimeLayerForStatus,
   stripThinkingTags,
   SUPPORTED_LOCAL_MODELS,
 } from "../app/chrome-built-in-ai.ts";
+
+test("runtime state identifies the actual native or local execution layer without claiming cloud inference", () => {
+  assert.equal(runtimeLayerForStatus("native ready"), "chrome-built-in");
+  assert.equal(runtimeLayerForStatus("native model download"), "chrome-built-in");
+  assert.equal(runtimeLayerForStatus("local fallback loading"), "local-model");
+  assert.equal(runtimeLayerForStatus("local model ready"), "local-model");
+  assert.equal(runtimeLayerForStatus("unsupported after fallback"), "none");
+  assert.equal(runtimeLayerForStatus(""), "none");
+});
 
 test("normalized or fractional monitor progress never becomes byte progress", () => {
   for (const [loaded, total] of [[0.52, 1], [1, 1], [1, 1.5]]) {
@@ -974,4 +984,110 @@ test("local model download reports actual byte progress and pins its revision", 
   assert.ok(seen.some((entry) => entry.status === "local model ready"));
   assert.match(LOCAL_FALLBACK_MODEL_REVISION, /^[a-f0-9]{40}$/);
   assert.equal(mockWin.TRANSFORMERS_CONFIG.revision, LOCAL_FALLBACK_MODEL_REVISION);
+});
+
+test("Regression: native window.LanguageModel present + local preload requested must NOT call native create; local polyfill loader is used", async () => {
+  let nativeCreateCalls = 0;
+  let polyfillCreateCalls = 0;
+
+  const mockWin = mockTargetWindow({
+    LanguageModel: {
+      async availability() { return "downloadable"; },
+      async create() {
+        nativeCreateCalls += 1;
+        return { destroy() {} };
+      },
+    },
+  });
+
+  const env = {
+    window: mockWin,
+    LanguageModel: mockWin.LanguageModel,
+    WebAssembly: { instantiate: async () => ({}) },
+  };
+
+  const result = await preloadLocalModel({
+    env,
+    forceLocalModel: true,
+    loadPolyfill: async () => {
+      mockWin.LanguageModel = {
+        __isPolyfill: true,
+        async create() {
+          polyfillCreateCalls += 1;
+          return { destroy() {} };
+        },
+      };
+    },
+  });
+
+  assert.equal(nativeCreateCalls, 0, "Native LanguageModel.create must NOT be called when local preload is requested");
+  assert.equal(polyfillCreateCalls, 1, "Local polyfill create must be used");
+  assert.equal(result.outcome, "warmed");
+});
+
+test("Regression: existing window.LanguageModel may be reused ONLY if it is explicitly __isPolyfill", async () => {
+  let polyfillCreateCalls = 0;
+
+  const mockWin = mockTargetWindow({
+    LanguageModel: {
+      __isPolyfill: true,
+      async create() {
+        polyfillCreateCalls += 1;
+        return { destroy() {} };
+      },
+    },
+  });
+
+  const env = {
+    window: mockWin,
+    LanguageModel: mockWin.LanguageModel,
+    WebAssembly: { instantiate: async () => ({}) },
+  };
+
+  const result = await preloadLocalModel({
+    env,
+    forceLocalModel: true,
+  });
+
+  assert.equal(polyfillCreateCalls, 1, "Existing __isPolyfill LanguageModel must be reused");
+  assert.equal(result.outcome, "warmed");
+});
+
+test("Regression: native window.LanguageModel without __isPolyfill is never adopted as local model", async () => {
+  let nativeCreateCalls = 0;
+  let localLoaderCalled = 0;
+
+  const mockWin = mockTargetWindow({
+    LanguageModel: {
+      async availability() { return "downloadable"; },
+      async create() {
+        nativeCreateCalls += 1;
+        return { destroy() {} };
+      },
+    },
+  });
+
+  const env = {
+    window: mockWin,
+    LanguageModel: mockWin.LanguageModel,
+    WebAssembly: { instantiate: async () => ({}) },
+  };
+
+  const result = await preloadLocalModel({
+    env,
+    forceLocalModel: true,
+    loadLocalLanguageModel: async () => {
+      localLoaderCalled += 1;
+      return {
+        __isPolyfill: true,
+        async create() {
+          return { destroy() {} };
+        },
+      };
+    },
+  });
+
+  assert.equal(nativeCreateCalls, 0, "Native LanguageModel must NOT be adopted even if present on window");
+  assert.equal(localLoaderCalled, 1, "Must call local LanguageModel loader instead of native LanguageModel");
+  assert.equal(result.outcome, "warmed");
 });

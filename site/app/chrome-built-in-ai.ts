@@ -33,6 +33,28 @@ export type AutoAiStatus =
   | "local model ready"
   | "unsupported after fallback";
 
+/**
+ * The execution layer that has actually been selected for an Auto request.
+ * `cloud-handoff` is deliberately not a claim that this page received a cloud
+ * answer: the product's final fallback navigates the browser to Google AI.
+ */
+export type AutoAiRuntimeLayer = "none" | "chrome-built-in" | "local-model" | "cloud-handoff";
+
+export function runtimeLayerForStatus(status: AutoAiStatus | ""): AutoAiRuntimeLayer {
+  if (status === "native ready" || status === "native model download" || status === "native translation buffering") {
+    return "chrome-built-in";
+  }
+  if (
+    status === "local fallback loading"
+    || status === "local model requires user activation"
+    || status === "local model download"
+    || status === "local model ready"
+  ) {
+    return "local-model";
+  }
+  return "none";
+}
+
 export type DownloadProgress = { loaded: number; total: number | null };
 export type StatusCallback = (status: AutoAiStatus, progress?: number | null, bytes?: DownloadProgress) => void;
 
@@ -949,8 +971,12 @@ export async function askWithChromeBuiltInAi(
     if (options.loadLocalLanguageModel) {
       polyfillLM = await options.loadLocalLanguageModel();
     } else if (options.loadPolyfill) {
-      await options.loadPolyfill();
+      const injected = await (options.loadPolyfill as () => Promise<unknown>)();
+      polyfillLM = (injected as ChromeAiEnvironment["LanguageModel"]) || win.LanguageModel || env.LanguageModel;
+    } else if (win.LanguageModel?.__isPolyfill) {
       polyfillLM = win.LanguageModel;
+    } else if (env.LanguageModel?.__isPolyfill) {
+      polyfillLM = env.LanguageModel;
     } else {
       polyfillLM = await loadRealLocalLanguageModel();
     }
