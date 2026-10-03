@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS exam_courses (
   CONSTRAINT exam_courses_exam_year_allowed
     CHECK (exam_year IN (115, 116)),
   CONSTRAINT exam_courses_category_allowed
-    CHECK (category IN ('高普考', '高考', '普考')),
+    CHECK (category = '高普考'),
   -- Uppercase-only identifiers are what let the query layer upper-case the
   -- *parameter* instead of wrapping the column, keeping exact code lookups on
   -- the primary key while still matching case-insensitively on input.
