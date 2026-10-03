@@ -32,3 +32,26 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .v2-progress-panel{width:100%;margin:14px 0;padding:13px 14px;border:1px solid #dfe6f5;border-radius:10px;background:#f8faff;color:#44516c}.v2-progress-panel p{margin:0 0 9px;font-size:13px;font-weight:700;line-height:1.45}.v2-progress{width:100%;height:9px;overflow:hidden;border-radius:999px;background:#dfe6f5}.v2-progress-fill{display:block;height:100%;border-radius:inherit;background:#617cf4;transition:width .2s ease}.v2-progress-indeterminate .v2-progress-fill{width:35%;animation:v2-progress-slide 1.15s ease-in-out infinite}@keyframes v2-progress-slide{from{transform:translateX(-115%)}to{transform:translateX(315%)}}.v2-model-ready{color:#16734a;font-weight:800}@media (prefers-reduced-motion:reduce){.v2-progress-fill{transition:none}.v2-progress-indeterminate .v2-progress-fill{animation:none;transform:translateX(95%)}}@media(max-width:620px){.v2-progress-panel{box-sizing:border-box;padding:12px}.v2-progress-panel p{font-size:12px;overflow-wrap:anywhere}.v2-auto-form,.v2-progress{min-width:0}}
 /* Egg A: a deliberately local, inline brand acknowledgement. */
 .v2-brand-area{position:relative;min-width:0}.v2-brand-trigger{display:grid;width:44px;height:44px;place-items:center;padding:0;border:0;border-radius:13px;background:transparent;cursor:pointer}.v2-brand-trigger .v2-brand-mark{width:34px;height:34px}.v2-brand-home{display:inline-flex;align-items:center;min-height:44px}.v2-brand-badge{position:absolute;z-index:3;top:calc(100% + 5px);left:0;display:flex;align-items:center;gap:7px;width:max-content;max-width:min(320px,calc(100vw - 32px));padding:6px 7px 6px 10px;border:1px solid #bfcdfc;border-radius:999px;color:#354ba0;background:#f5f7ff;box-shadow:0 0 16px #657df04a;font-size:12px;font-weight:800;line-height:1.35}.v2-brand-badge span{min-width:0;overflow-wrap:anywhere}.v2-brand-badge button{display:grid;width:44px;height:44px;flex:0 0 44px;place-items:center;padding:0;border:0;border-radius:50%;color:#354ba0;background:transparent;font-size:19px;line-height:1;cursor:pointer}.v2-brand-badge button:hover{background:#dfe6ff}.v2-brand-trigger:focus-visible,.v2-brand-badge button:focus-visible{outline:3px solid #244fe5;outline-offset:3px}@media (prefers-reduced-motion:reduce){.v2-brand-badge{box-shadow:none}}@media(max-width:620px){.v2-brand-area{flex:1}.v2-brand-badge{max-width:calc(100vw - 32px);font-size:11px}}
+/* A-01 vNext: answer tools, favorites/copy UX, and mobile RWD (360/390/412px) */
+.v2-answer-header{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.v2-answer-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.v2-answer-action-btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:36px;padding:6px 12px;border:1px solid #c7d4ea;border-radius:8px;color:#2a4cb8;background:#fff;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s}
+.v2-answer-action-btn:hover{background:#edf3ff;border-color:#b4c5e6}
+.v2-answer-action-btn.v2-favorited{color:#8c5e00;border-color:#e8c977;background:#fffcf0}
+.v2-answer-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+@media(max-width:480px){
+  .v2-auto-form{padding:16px 14px}
+  .v2-auto-form textarea{min-height:100px;font-size:14px}
+  .v2-auto-controls{grid-template-columns:1fr;gap:10px}
+  .v2-auto-controls select{min-height:44px;font-size:14px}
+  .v2-auto-controls .v2-button{min-height:44px;width:100%;font-size:14px}
+  .v2-google-action{flex-direction:column;align-items:stretch;gap:8px}
+  .v2-google-action .v2-button{min-height:44px;width:100%;justify-content:center}
+  .v2-google-action span:not([aria-hidden]){font-size:13px}
+  .v2-quick-modes{gap:6px}
+  .v2-quick-modes button,.v2-gesture-button{min-height:38px;padding:8px 12px;font-size:12px}
+  .v2-answer-header{flex-direction:column;align-items:flex-start;gap:8px}
+  .v2-answer-tools{width:100%;justify-content:flex-start}
+  .v2-answer-action-btn{min-height:40px;flex:1;justify-content:center}
+  .v2-answer-actions .v2-button{width:100%;justify-content:center;min-height:44px}
+}

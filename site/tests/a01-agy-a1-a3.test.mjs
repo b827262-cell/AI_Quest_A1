@@ -1178,3 +1178,16 @@ test("A2/B4: cancelling an answer on a warm session is not stale evidence — no
     await tick();
   }
 });
+
+test("B: Frontend UX provides accessible copy and favorite controls with mobile RWD", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(page, /v2-answer-action-btn/, "page provides answer action buttons");
+  assert.match(page, /aria-label=\{copied \? "已複製題目至剪貼簿" : "複製題目文字"\}/, "copy button has accessible aria-label");
+  assert.match(page, /aria-pressed=\{isFavorite\}/, "favorite button indicates state with aria-pressed");
+  assert.match(page, /aria-label=\{isFavorite \? "已收藏此題目" : "收藏此題目"\}/, "favorite button has accessible aria-label");
+  assert.match(css, /\.v2-answer-header/, "CSS styles answer header");
+  assert.match(css, /\.v2-answer-action-btn/, "CSS styles answer action buttons");
+  assert.match(css, /@media\(max-width:480px\)/, "CSS supports mobile viewports (360px, 390px, 412px)");
+});

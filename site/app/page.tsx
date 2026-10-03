@@ -150,18 +150,48 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
 
-  useEffect(() => {
-    if (!answer || typeof window === "undefined" || !window.localStorage) {
-      setIsFavorite(false);
-      return;
-    }
+  function checkIsFavorite(text: string) {
+    if (!text || typeof window === "undefined" || !window.localStorage) return false;
     try {
-      const list = JSON.parse(window.localStorage.getItem("ai_smartbook_favorites") || "[]");
-      setIsFavorite(list.some((item: { text?: string }) => item.text === answer));
+      const raw = window.localStorage.getItem("ai_smartbook_favorites");
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) && list.some((item: { text?: string }) => item.text === text);
     } catch {
-      setIsFavorite(false);
+      return false;
     }
-  }, [answer]);
+  }
+
+  function toggleFavorite() {
+    if (!answer || typeof window === "undefined" || !window.localStorage) return;
+    try {
+      const raw = window.localStorage.getItem("ai_smartbook_favorites");
+      const list = raw ? JSON.parse(raw) : [];
+      const currentList = Array.isArray(list) ? list : [];
+      const exists = currentList.some((item: { text?: string }) => item.text === answer);
+      let updated;
+      if (exists) {
+        updated = currentList.filter((item: { text?: string }) => item.text !== answer);
+        setIsFavorite(false);
+      } else {
+        updated = [...currentList, { text: answer, prompt: lastSubmittedPrompt.current || question, savedAt: Date.now() }];
+        setIsFavorite(true);
+      }
+      window.localStorage.setItem("ai_smartbook_favorites", JSON.stringify(updated));
+    } catch {
+      // Local storage failure handled gracefully
+    }
+  }
+
+  async function copyAnswer() {
+    if (!answer || typeof navigator === "undefined" || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(answer);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard write failure handled gracefully
+    }
+  }
 
   const downloading = (isLoading || isPreloading) && (aiStatus === "local model download" || aiStatus === "native model download");
   const hasKnownDownloadTotal = isTrustworthyKnownTotalByteProgress(downloadProgress) && isModelScaleDownloadProgress(downloadProgress);
@@ -312,7 +342,8 @@ export default function Home() {
       setError("此瀏覽器不支援 Cache Storage，無法安全執行本機模型下載；請改用支援的瀏覽器。");
       return;
     }
-    setAnswer(""); setError(""); setAiStatus(""); setRuntimeLayer("none"); setDownloadProgress(null); setNeedsGesture(false); setDownloadStalled(false); setGenerationStage("loading"); setElapsedSeconds(0);
+    lastSubmittedPrompt.current = prompt;
+    setAnswer(""); setIsFavorite(false); setCopied(false); setError(""); setAiStatus(""); setRuntimeLayer("none"); setDownloadProgress(null); setNeedsGesture(false); setDownloadStalled(false); setGenerationStage("loading"); setElapsedSeconds(0);
     lastProgressAt.current = Date.now();
     if (model !== "Auto" && model !== "Qwen3-0.6B") {
       setError("公開體驗目前僅支援 Auto 與 Qwen3-0.6B（本機測試選項）回答。");
@@ -367,6 +398,8 @@ export default function Home() {
       }
       if (result.outcome === "shown") {
         fallbackGuard.done();
+        setIsFavorite(checkIsFavorite(result.display));
+        setCopied(false);
         return;
       }
       fallbackGuard.done();
@@ -420,7 +453,35 @@ export default function Home() {
         {downloadStalled && (isLoading || isPreloading) && <span className="v2-gesture-button" role="alert">下載停滯（連續 90 秒無新資料）</span>}{downloadStalled && (isLoading || isPreloading) && <button className="v2-gesture-button" type="button" onClick={retryDownload}>重新下載</button>}
         {error && <p className="v2-auto-status" role="alert">{aiStatus ? `[${aiStatus}] ` : ""}{error}</p>}
         {needsGesture && !isLoading && <button className="v2-gesture-button" type="button" onClick={() => { void startModelDownload(); }}>開始下載本機模型</button>}
-        {answer && <section className="v2-auto-answer" aria-label="AI 助手練習題"><p role="status">AI 助手練習題</p><pre>{answer}</pre><p className="v2-auto-status">先自行作答，詳解答案請由 Google AI 查看。</p><a className="v2-button v2-button-primary" href={buildGoogleAiModeUrl(`請用繁體中文詳解以下練習題，列出答案與解題步驟：\n${answer}`)} target="_blank" rel="noopener noreferrer">查看 Google AI 詳解 <span aria-hidden="true">↗</span></a></section>}
+        {answer && <section className="v2-auto-answer" aria-label="AI 助手練習題">
+          <div className="v2-answer-header">
+            <p role="status">AI 助手練習題</p>
+            <div className="v2-answer-tools">
+              <button
+                type="button"
+                className="v2-answer-action-btn"
+                onClick={() => { void copyAnswer(); }}
+                aria-label={copied ? "已複製題目至剪貼簿" : "複製題目文字"}
+              >
+                {copied ? "已複製 ✓" : "複製題目"}
+              </button>
+              <button
+                type="button"
+                className={`v2-answer-action-btn ${isFavorite ? "v2-favorited" : ""}`}
+                onClick={toggleFavorite}
+                aria-pressed={isFavorite}
+                aria-label={isFavorite ? "已收藏此題目" : "收藏此題目"}
+              >
+                {isFavorite ? "已收藏 ★" : "收藏題目 ☆"}
+              </button>
+            </div>
+          </div>
+          <pre>{answer}</pre>
+          <p className="v2-auto-status">先自行作答，詳解答案請由 Google AI 查看。</p>
+          <div className="v2-answer-actions">
+            <a className="v2-button v2-button-primary" href={buildGoogleAiModeUrl(`請用繁體中文詳解以下練習題，列出答案與解題步驟：\n${answer}`)} target="_blank" rel="noopener noreferrer">查看 Google AI 詳解 <span aria-hidden="true">↗</span></a>
+          </div>
+        </section>}
       </form>
     </section>
     <section className="v2-section shell" id="features"><div className="v2-section-heading v2-reveal"><p className="v2-eyebrow"><span />為學習流程而設計</p><h2>不只回答問題，<br />更讓學習能夠接續。</h2></div><div className="v2-feature-grid">{features.map(([number, title, description], index) => <article className={`v2-feature-card v2-reveal v2-delay-${index + 1}`} key={title}><span>{number}</span><div className="v2-feature-icon" aria-hidden="true">{["▤", "✦", "◒", "⌘"][index]}</div><h3>{title}</h3><p>{description}</p><a href={index === 3 ? "/admin" : studentRoute}>前往{index === 3 ? "管理入口" : "學員入口"} <b aria-hidden="true">→</b></a></article>)}</div></section>
