@@ -80,6 +80,9 @@ export function createSearchServer({ store }) {
         const result = await searchCourses(store, {
           exam_year: url.searchParams.get("exam_year") ?? undefined,
           course_code: url.searchParams.get("course_code") ?? undefined,
+          search_mode: url.searchParams.get("search_mode") ?? url.searchParams.get("mode") ?? undefined,
+          teacher: url.searchParams.get("teacher") ?? undefined,
+          scope: url.searchParams.get("scope") ?? url.searchParams.get("applicable_scope") ?? undefined,
           keyword: url.searchParams.get("keyword") ?? undefined,
           q: url.searchParams.get("q") ?? undefined,
           limit: url.searchParams.get("limit") ?? undefined,

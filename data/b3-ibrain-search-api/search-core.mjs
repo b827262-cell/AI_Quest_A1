@@ -7,6 +7,8 @@
 //   - exactly the five public fields are returned;
 //   - `source_url` may only point at the approved host `ec.ibrain.com.tw`.
 
+import { resolvePublicSourceUrl } from "./public-source-url.mjs";
+
 export const ALLOWED_EXAM_YEARS = Object.freeze([115, 116]);
 export const ALLOWED_SOURCE_HOSTS = Object.freeze(["ec.ibrain.com.tw"]);
 export const ALLOWED_SOURCE_PROTOCOLS = Object.freeze(["http:", "https:"]);
@@ -16,8 +18,19 @@ export const RESULT_FIELDS = Object.freeze([
   "course_name",
   "course_content",
   "source_url",
+  "teacher",
+  "applicable_scope",
+  "source_search_mode",
+  "matched_field",
 ]);
-export const SEARCH_MODES = Object.freeze(["course_code", "keyword"]);
+export const SEARCH_MODES = Object.freeze([
+  "product_name",
+  "product_code",
+  "teacher",
+  "scope",
+  "course_code",
+  "keyword",
+]);
 export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 100;
 export const MAX_TERM_LENGTH = 200;
@@ -94,22 +107,76 @@ function normalizeLimit(raw) {
  */
 export function parseSearchParams(input = {}) {
   const examYear = normalizeExamYear(input.exam_year);
-  const courseCode = normalizeTerm(input.course_code, "course_code");
-  const keyword = normalizeTerm(firstDefined(input.keyword, input.q), "keyword");
   const limit = normalizeLimit(input.limit);
 
-  if (courseCode && keyword) {
-    throw new SearchInputError(
-      "ambiguous_query",
-      "provide either course_code (exact) or keyword (name/content), not both",
-    );
-  }
-  if (!courseCode && !keyword) {
-    throw new SearchInputError("missing_query", "provide course_code or keyword");
+  const requestedMode = normalizeTerm(input.search_mode ?? input.mode, "search_mode");
+  const courseCode = normalizeTerm(input.course_code, "course_code");
+  const teacher = normalizeTerm(firstDefined(input.teacher, input.instructor), "teacher");
+  const scope = normalizeTerm(firstDefined(input.scope, input.applicable_scope), "scope");
+  const genericKeyword = normalizeTerm(firstDefined(input.keyword, input.q), "keyword");
+
+  let mode = requestedMode;
+  let term = genericKeyword;
+
+  if (mode) {
+    if (!SEARCH_MODES.includes(mode)) {
+      throw new SearchInputError(
+        "invalid_search_mode",
+        `search_mode must be one of ${SEARCH_MODES.join(", ")}`,
+      );
+    }
+
+    if (mode === "course_code" || mode === "product_code") {
+      term = firstDefined(courseCode, genericKeyword);
+    } else if (mode === "teacher") {
+      term = firstDefined(teacher, genericKeyword);
+    } else if (mode === "scope") {
+      term = firstDefined(scope, genericKeyword);
+    } else {
+      term = genericKeyword;
+    }
+
+    if (!term) {
+      throw new SearchInputError("missing_query", `provide keyword for search_mode ${mode}`);
+    }
+  } else {
+    // Legacy dual-mode inference
+    if (courseCode && genericKeyword) {
+      throw new SearchInputError(
+        "ambiguous_query",
+        "provide either course_code (exact) or keyword (name/content), not both",
+      );
+    }
+    if (!courseCode && !genericKeyword && !teacher && !scope) {
+      throw new SearchInputError("missing_query", "provide course_code or keyword");
+    }
+
+    if (courseCode) {
+      mode = "course_code";
+      term = courseCode;
+    } else if (teacher) {
+      mode = "teacher";
+      term = teacher;
+    } else if (scope) {
+      mode = "scope";
+      term = scope;
+    } else {
+      mode = "keyword";
+      term = genericKeyword;
+    }
   }
 
-  const mode = courseCode ? "course_code" : "keyword";
-  return { mode, examYear, courseCode, keyword, limit };
+  const isCodeMode = mode === "course_code" || mode === "product_code";
+  const parsed = {
+    mode,
+    examYear,
+    courseCode: isCodeMode ? term : null,
+    keyword: isCodeMode ? null : term,
+    limit,
+  };
+  if (mode === "teacher") parsed.teacher = term;
+  if (mode === "scope") parsed.scope = term;
+  return parsed;
 }
 
 function assertSourceUrl(sourceUrl, index) {
@@ -131,10 +198,16 @@ function assertSourceUrl(sourceUrl, index) {
       `row ${index} source_url host is not in the approved allowlist`,
     );
   }
+  if (parsed.pathname === "" || parsed.pathname === "/") {
+    throw new SearchDataError(
+      "b2_data_integrity_error",
+      `row ${index} source_url is a bare homepage`,
+    );
+  }
 }
 
 /** Maps one B2 row to the five public fields, enforcing the host allowlist. */
-export function buildResultRow(row, index = 0) {
+export function buildResultRow(row, index = 0, source = {}) {
   if (!row || typeof row !== "object") {
     throw new SearchDataError("b2_data_integrity_error", `row ${index} is not an object`);
   }
@@ -150,20 +223,31 @@ export function buildResultRow(row, index = 0) {
     throw new SearchDataError("b2_data_integrity_error", `row ${index} has an empty course identifier`);
   }
   assertSourceUrl(row.source_url, index);
+  const sourceUrl = resolvePublicSourceUrl({
+    exactUrl: row.source_url,
+    mode: source.mode,
+    keyword: source.keyword,
+  });
 
   // Explicit allowlist: never leak id/content_hash/fetched_at/category/etc.
-  return {
+  const result = {
     exam_year: row.exam_year,
     course_code: row.course_code,
     course_name: row.course_name,
     course_content: row.course_content,
-    source_url: row.source_url,
+    // null explicitly means the source has no trustworthy exact/deep URL.
+    source_url: sourceUrl,
+    source_search_mode: source.mode,
+    matched_field: source.matchedField,
   };
+  result.teacher = row.teacher ?? row.instructor ?? null;
+  result.applicable_scope = row.applicable_scope ?? null;
+  return result;
 }
 
 /**
  * Runs a validated search against a B2 store.
- * @param {{ exact: Function, keyword: Function }} store
+ * @param {{ exact: Function, keyword: Function, prefix?: Function, teacher?: Function, scope?: Function }} store
  * @param {object} input raw query values
  */
 export async function searchCourses(store, input = {}) {
@@ -172,24 +256,54 @@ export async function searchCourses(store, input = {}) {
   }
   const params = parseSearchParams(input);
 
-  const rows =
-    params.mode === "course_code"
-      ? await store.exact({ examYear: params.examYear, courseCode: params.courseCode, limit: params.limit })
-      : await store.keyword({ examYear: params.examYear, keyword: params.keyword, limit: params.limit });
+  let rows;
+  if (params.mode === "course_code" || params.mode === "product_code") {
+    rows = await store.exact({ examYear: params.examYear, courseCode: params.courseCode, limit: params.limit });
+    if ((!rows || rows.length === 0) && typeof store.prefix === "function") {
+      rows = await store.prefix({ examYear: params.examYear, courseCode: params.courseCode, limit: params.limit });
+    }
+  } else if (params.mode === "teacher") {
+    if (typeof store.teacher !== "function") {
+      throw new TypeError("store.teacher is required for teacher mode");
+    }
+    rows = await store.teacher({ examYear: params.examYear, keyword: params.keyword, limit: params.limit });
+  } else if (params.mode === "scope") {
+    if (typeof store.scope !== "function") {
+      throw new TypeError("store.scope is required for scope mode");
+    }
+    rows = await store.scope({ examYear: params.examYear, keyword: params.keyword, limit: params.limit });
+  } else {
+    rows = await store.keyword({ examYear: params.examYear, keyword: params.keyword, limit: params.limit });
+  }
 
   if (!Array.isArray(rows)) {
     throw new SearchDataError("b2_data_integrity_error", "store did not return an array of rows");
   }
 
-  const results = rows.map((row, index) => buildResultRow(row, index));
+  const matchedField = params.mode === "teacher" ? "師資"
+    : params.mode === "scope" ? "適用範圍"
+      : params.mode === "course_code" || params.mode === "product_code" ? "品號"
+        : "品名";
+  const sourceMode = params.mode === "course_code" ? "product_code"
+    : params.mode === "keyword" ? "product_name" : params.mode;
+  const sourceKeyword = params.courseCode ?? params.keyword;
+  const results = rows.map((row, index) => buildResultRow(row, index, {
+    mode: sourceMode,
+    keyword: sourceKeyword,
+    matchedField,
+  }));
+  const query = {
+    exam_year: params.examYear,
+    course_code: params.courseCode,
+    keyword: params.keyword,
+    limit: params.limit,
+  };
+  if (params.teacher) query.teacher = params.teacher;
+  if (params.scope) query.scope = params.scope;
+
   return {
     mode: params.mode,
-    query: {
-      exam_year: params.examYear,
-      course_code: params.courseCode,
-      keyword: params.keyword,
-      limit: params.limit,
-    },
+    query,
     count: results.length,
     results,
   };

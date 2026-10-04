@@ -16,7 +16,7 @@
 
 import { spawnSync } from "node:child_process";
 
-const SELECT_COLUMNS = "exam_year, course_code, course_name, course_content, source_url";
+const SELECT_COLUMNS = "exam_year, course_code, course_name, course_content, teacher, applicable_scope, source_url";
 
 // Mirrors the B2 query contract `course_code exact (case-insensitive)`.
 export const EXACT_SQL = `
@@ -44,6 +44,32 @@ FROM (
       OR to_tsvector('simple', course_name || ' ' || course_content)
          @@ websearch_to_tsquery('simple', :'keyword')
     )
+  ORDER BY exam_year DESC, course_name
+  LIMIT :'limit'::int
+) t;
+`;
+
+// Teacher and scope are separate B2 search surfaces.  Do not route either to
+// KEYWORD_SQL: the product-name/content matcher has different semantics.
+export const TEACHER_SQL = `
+SELECT COALESCE(json_agg(t), '[]'::json)::text
+FROM (
+  SELECT ${SELECT_COLUMNS}
+  FROM public.exam_courses
+  WHERE (NULLIF(:'exam_year', '')::smallint IS NULL OR exam_year = NULLIF(:'exam_year', '')::smallint)
+    AND teacher ILIKE '%' || :'keyword' || '%'
+  ORDER BY exam_year DESC, course_name
+  LIMIT :'limit'::int
+) t;
+`;
+
+export const SCOPE_SQL = `
+SELECT COALESCE(json_agg(t), '[]'::json)::text
+FROM (
+  SELECT ${SELECT_COLUMNS}
+  FROM public.exam_courses
+  WHERE (NULLIF(:'exam_year', '')::smallint IS NULL OR exam_year = NULLIF(:'exam_year', '')::smallint)
+    AND applicable_scope ILIKE '%' || :'keyword' || '%'
   ORDER BY exam_year DESC, course_name
   LIMIT :'limit'::int
 ) t;
@@ -110,6 +136,12 @@ export function createPostgresStore(options = {}) {
     },
     async keyword({ examYear = null, keyword, limit }) {
       return run(KEYWORD_SQL, { exam_year: examYear ?? "", keyword, limit });
+    },
+    async teacher({ examYear = null, keyword, limit }) {
+      return run(TEACHER_SQL, { exam_year: examYear ?? "", keyword, limit });
+    },
+    async scope({ examYear = null, keyword, limit }) {
+      return run(SCOPE_SQL, { exam_year: examYear ?? "", keyword, limit });
     },
   };
 }

@@ -22,7 +22,12 @@ export const EXAM_COURSE_SEARCH_COLUMNS = [
   "course_code",
   "course_name",
   "course_content",
-  "source_url"
+  "source_url",
+  // The deployed B2 schema calls this field `teacher`; expose the legacy
+  // `instructor` spelling as an alias at this one database boundary.
+  "teacher",
+  "teacher AS instructor",
+  "applicable_scope"
 ] as const;
 
 /**
@@ -55,6 +60,9 @@ export interface ExamCourseSearchQuery {
   category?: string;
   course_code?: string;
   keyword?: string;
+  search_mode?: "product_name" | "product_code" | "teacher" | "scope";
+  teacher?: string;
+  applicable_scope?: string;
   limit?: number;
 }
 
@@ -64,6 +72,11 @@ export interface ExamCourseSearchResult {
   course_name: string;
   course_content: string;
   source_url: string;
+  teacher?: string | null;
+  instructor?: string | null;
+  applicable_scope?: string | null;
+  source_search_mode?: "product_name" | "product_code" | "teacher" | "scope";
+  matched_field?: string;
 }
 
 /** The natural key of the table: same course code, same exam year is one row. */
@@ -245,6 +258,7 @@ function buildExamCourseSearchPredicate(query: ExamCourseSearchQuery): {
 } {
   const clauses: string[] = [];
   const params: unknown[] = [];
+  const mode = query.search_mode ?? (query.course_code ? "product_code" : "product_name");
 
   if (query.exam_year !== undefined) {
     params.push(query.exam_year);
@@ -254,15 +268,26 @@ function buildExamCourseSearchPredicate(query: ExamCourseSearchQuery): {
     params.push(query.category.trim());
     clauses.push(`category = $${params.length}`);
   }
-  if (query.course_code !== undefined) {
-    // `upper()` wraps the parameter, never the column, so the equality stays
-    // directly comparable against the (exam_year, course_code) primary key while
-    // still matching the contract's case-insensitive identifier semantics. The
-    // table CHECK keeps stored codes uppercase for this to hold.
-    params.push(query.course_code.trim().toUpperCase());
-    clauses.push(`course_code = $${params.length}`);
-  }
-  if (query.keyword !== undefined && query.keyword.trim().length > 0) {
+
+  if (mode === "product_code" || query.course_code !== undefined) {
+    const rawCode = (query.course_code ?? query.keyword ?? "").trim().toUpperCase();
+    if (rawCode) {
+      params.push(rawCode);
+      clauses.push(`(course_code = $${params.length} OR course_code LIKE $${params.length} || '%')`);
+    }
+  } else if (mode === "teacher" || query.teacher !== undefined) {
+    const term = (query.teacher ?? query.keyword ?? "").trim();
+    if (term) {
+      params.push(`%${escapeIlikePattern(term)}%`);
+      clauses.push(`teacher ILIKE $${params.length}`);
+    }
+  } else if (mode === "scope" || query.applicable_scope !== undefined) {
+    const term = (query.applicable_scope ?? query.keyword ?? "").trim();
+    if (term) {
+      params.push(`%${escapeIlikePattern(term)}%`);
+      clauses.push(`applicable_scope ILIKE $${params.length}`);
+    }
+  } else if (query.keyword !== undefined && query.keyword.trim().length > 0) {
     const keyword = query.keyword.trim();
     params.push(`%${escapeIlikePattern(keyword)}%`);
     const patternIndex = params.length;
@@ -311,7 +336,19 @@ export function mapExamCourseSearchRow(row: Record<string, unknown>): ExamCourse
     course_code: String(row.course_code),
     course_name: String(row.course_name),
     course_content: String(row.course_content),
-    source_url: String(row.source_url)
+    source_url: String(row.source_url),
+    teacher: row.teacher !== undefined && row.teacher !== null ? String(row.teacher) : null,
+    instructor: row.instructor !== undefined && row.instructor !== null
+      ? String(row.instructor)
+      : (row.teacher !== undefined && row.teacher !== null ? String(row.teacher) : null),
+    applicable_scope: row.applicable_scope !== undefined && row.applicable_scope !== null ? String(row.applicable_scope) : null,
+    source_search_mode: (row.source_search_mode ?? row.search_mode) as
+      | "product_name"
+      | "product_code"
+      | "teacher"
+      | "scope"
+      | undefined,
+    matched_field: row.matched_field !== undefined && row.matched_field !== null ? String(row.matched_field) : undefined
   };
 }
 

@@ -3451,16 +3451,31 @@ body {
 .knowledge-hero { max-width: 820px; margin: 0 auto; padding: 72px 0 32px; text-align: center; }
 .knowledge-hero h1 { margin: 16px 0 12px; color: #17233d; font-size: clamp(35px, 5vw, 56px); letter-spacing: -.055em; line-height: 1.12; }
 .knowledge-hero > p { max-width: 610px; margin: 0 auto; color: #718099; line-height: 1.7; }
-.knowledge-search-form { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 9px; margin: 32px auto 0; padding: 10px; border: 1px solid rgba(133, 149, 208, .25); border-radius: 22px; background: rgba(255,255,255,.83); box-shadow: 0 18px 46px rgba(87, 98, 173, .12); text-align: left; }
+.knowledge-search-form { display: grid; grid-template-columns: 130px 130px minmax(0, 1fr) auto; gap: 9px; margin: 32px auto 0; padding: 10px; border: 1px solid rgba(133, 149, 208, .25); border-radius: 22px; background: rgba(255,255,255,.83); box-shadow: 0 18px 46px rgba(87, 98, 173, .12); text-align: left; }
 .knowledge-search-form select, .knowledge-search-form input { box-sizing: border-box; width: 100%; height: 46px; padding: 0 13px; border: 1px solid #e0e5f1; border-radius: 13px; color: #3d4b66; background: #f8f9fe; font: inherit; outline: 0; }
 .knowledge-search-form input:focus, .knowledge-search-form select:focus { border-color: #7182dc; box-shadow: 0 0 0 3px rgba(108,125,222,.13); }
-.knowledge-search-form button { min-height: 46px; padding: 0 17px; border: 0; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #326fff, #9265ed); font: inherit; font-weight: 750; cursor: pointer; }
+.knowledge-search-form button { min-height: 46px; padding: 0 17px; border: 0; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #326fff, #9265ed); font: inherit; font-weight: 750; cursor: pointer; white-space: nowrap; }
 .knowledge-search-form button:disabled { opacity: .6; cursor: wait; }
 .knowledge-contract-note { margin-top: 13px !important; color: #929bb0 !important; font-size: 12px; }
 .knowledge-results { max-width: 820px; margin: 10px auto 52px; padding: 22px; border: 1px solid rgba(133, 149, 208, .24); border-radius: 24px; background: rgba(255,255,255,.8); box-shadow: 0 18px 46px rgba(87,98,173,.08); }
-.knowledge-results-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.knowledge-results-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .knowledge-results-heading h2 { margin: 0; color: #293752; font-size: 20px; }.knowledge-results-heading span, .knowledge-year { color: #5869c9; font-size: 12px; font-weight: 750; }
-.knowledge-results ul { display: grid; gap: 12px; margin: 18px 0 0; padding: 0; list-style: none; }.knowledge-results li { padding: 17px; border: 1px solid #e2e6f2; border-radius: 16px; background: rgba(250,251,255,.78); }.knowledge-results li > div { display: flex; gap: 9px; align-items: center; }.knowledge-results code { color: #64718a; font-size: 12px; }.knowledge-results h3 { margin: 10px 0 6px; color: #34415c; font-size: 16px; }.knowledge-results p { margin: 0; color: #718099; line-height: 1.65; }.knowledge-results a { display: inline-block; margin-top: 11px; color: #5268c9; font-size: 13px; font-weight: 700; }.knowledge-empty { margin: 22px 0 2px; color: #7b869b; }
+.knowledge-results ul { display: grid; gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
+.knowledge-results li { padding: 18px; border: 1px solid #e2e6f2; border-radius: 16px; background: rgba(250,251,255,.78); }
+.knowledge-card-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.knowledge-badge-mode, .knowledge-badge-match { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+.knowledge-badge-mode { background: #eef2ff; color: #4338ca; }
+.knowledge-badge-match { background: #ecfdf5; color: #047857; }
+.knowledge-results code { color: #64718a; font-size: 12px; background: #eef2f6; padding: 2px 6px; border-radius: 4px; }
+.knowledge-results h3 { margin: 8px 0 6px; color: #34415c; font-size: 16px; }
+.knowledge-meta-line { margin: 4px 0; color: #4a5568; font-size: 13px; line-height: 1.5; }
+.knowledge-content-text { margin: 6px 0 0; color: #718099; line-height: 1.65; }
+.knowledge-source-block { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #dbe0ee; }
+.knowledge-source-title { font-size: 12px; color: #6b7280; font-weight: 600; }
+.knowledge-source-link { color: #4338ca; font-size: 13px; font-weight: 750; text-decoration: none; width: fit-content; }
+.knowledge-source-link:hover { text-decoration: underline; }
+.knowledge-source-url { color: #9ca3af; font-size: 11px; word-break: break-all; }
+.knowledge-empty { margin: 22px 0 2px; color: #7b869b; }
 .student-login-page { min-height: calc(100svh - 40px); display: grid; place-items: center; padding: 36px 20px; background: linear-gradient(145deg, #f6fbff, #fbf7ff); }
 .student-login-card { width: min(100%, 440px); padding: 32px; border: 1px solid rgba(133, 149, 208, .24); border-radius: 25px; background: rgba(255,255,255,.88); box-shadow: 0 18px 46px rgba(87,98,173,.13); }
 .login-back-link { color: #5869c9; font-size: 13px; font-weight: 700; }

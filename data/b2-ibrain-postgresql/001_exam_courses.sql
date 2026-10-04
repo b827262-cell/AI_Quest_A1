@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS public.exam_courses (
   course_code TEXT NOT NULL CHECK (btrim(course_code) <> ''),
   course_name TEXT NOT NULL CHECK (btrim(course_name) <> ''),
   course_content TEXT NOT NULL,
+  teacher TEXT NULL,
+  applicable_scope TEXT NULL,
   source_url TEXT NOT NULL CHECK (
     source_url ~ '^https?://'
     AND lower(regexp_replace(source_url, '^https?://([^/?#:]+).*$', '\\1')) = 'ec.ibrain.com.tw'
@@ -20,7 +22,7 @@ CREATE TABLE IF NOT EXISTS public.exam_courses (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- The allowed search surface is intentionally limited to these three fields.
+-- The allowed search surface covers course_code, course_name, content, teacher, and applicable_scope.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_exam_courses_year_code
   ON public.exam_courses (exam_year, lower(course_code));
 CREATE INDEX IF NOT EXISTS idx_exam_courses_course_code
@@ -29,6 +31,10 @@ CREATE INDEX IF NOT EXISTS idx_exam_courses_course_name_trgm
   ON public.exam_courses USING GIN (course_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_exam_courses_course_content_trgm
   ON public.exam_courses USING GIN (course_content gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_exam_courses_teacher_trgm
+  ON public.exam_courses USING GIN (teacher gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_exam_courses_applicable_scope_trgm
+  ON public.exam_courses USING GIN (applicable_scope gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_exam_courses_name_content_fts
   ON public.exam_courses USING GIN (to_tsvector('simple', course_name || ' ' || course_content));
 

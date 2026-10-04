@@ -35,6 +35,7 @@ export type {
 } from "./student-rag";
 export {
   EXAM_COURSE_CATEGORIES_V1,
+  EXAM_COURSE_SEARCH_MODES_V1,
   EXAM_COURSE_SOURCE_HOSTS_V1,
   EXAM_COURSE_YEARS_V1,
   examCourseCategoryV1Schema,
@@ -43,11 +44,16 @@ export {
   examCourseSearchQueryV1Schema,
   examCourseSearchResponseV1Schema,
   examCourseSearchResultV1Schema,
+  examCourseSourceSearchModeV1Schema,
   examCourseYearV1Schema,
   matchesExamCourseCode,
   matchesExamCourseKeyword,
   matchesExamCourseYear,
-  searchExamCourseRows
+  searchExamCourseRows,
+  buildPublicSourceUrl,
+  encodeBig5SearchKeyword,
+  encodeBig5Percent,
+  normalizeExactProductUrl
 } from "./exam-course";
 export type {
   ExamCourseCategoryV1,
@@ -57,5 +63,6 @@ export type {
   ExamCourseSearchResponseV1,
   ExamCourseSearchResultV1,
   ExamCourseSearchRow,
+  ExamCourseSourceSearchModeV1,
   ExamCourseYearV1
 } from "./exam-course";

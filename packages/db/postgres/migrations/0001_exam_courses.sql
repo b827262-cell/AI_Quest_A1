@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS exam_courses (
   category       TEXT        NOT NULL,
   course_name    TEXT        NOT NULL,
   course_content TEXT        NOT NULL DEFAULT '',
+  teacher        TEXT        NULL,
+  applicable_scope TEXT      NULL,
   source_url     TEXT        NOT NULL,
 
   -- sha256 over the source-visible fields (fetched_at excluded). The upsert
@@ -89,6 +91,10 @@ CREATE INDEX IF NOT EXISTS exam_courses_course_name_trgm
   ON exam_courses USING gin (course_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS exam_courses_course_content_trgm
   ON exam_courses USING gin (course_content gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS exam_courses_teacher_trgm
+  ON exam_courses USING gin (teacher gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS exam_courses_applicable_scope_trgm
+  ON exam_courses USING gin (applicable_scope gin_trgm_ops);
 
 -- Full text over name + content. The expression must match the query
 -- expression in src/exam/exam-course.repo.ts verbatim or the planner cannot

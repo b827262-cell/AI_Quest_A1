@@ -18,10 +18,18 @@ import {
 import {
   EXACT_SQL,
   KEYWORD_SQL,
+  SCOPE_SQL,
+  TEACHER_SQL,
   createPostgresStore,
   parsePsqlJson,
 } from "./postgres-store.mjs";
 import { createSearchServer } from "./search-server.mjs";
+import {
+  buildStableSearchUrl,
+  encodeBig5Percent,
+  normalizeExactProductUrl,
+  resolvePublicSourceUrl,
+} from "./public-source-url.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -200,12 +208,19 @@ test("searchCourses fails closed when the store leaks a disallowed host", async 
   );
 });
 
+test("searchCourses fails closed when the store leaks a bare homepage URL", async () => {
+  await assert.rejects(
+    searchCourses(fakeStore([b2Row({ source_url: "https://ec.ibrain.com.tw/" })]), { q: "x" }),
+    (error) => error instanceof SearchDataError && /bare homepage/.test(error.message),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // postgres store: read-only SQL and psql wiring
 // ---------------------------------------------------------------------------
 
 test("B3 SQL is read-only and uses psql literal quoting for text values", () => {
-  for (const sql of [EXACT_SQL, KEYWORD_SQL]) {
+  for (const sql of [EXACT_SQL, KEYWORD_SQL, TEACHER_SQL, SCOPE_SQL]) {
     assert.match(sql, /^\s*SELECT /);
     assert.doesNotMatch(sql, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|GRANT|CREATE)\b/i);
     assert.doesNotMatch(sql, /\$[0-9]/); // never raw $1 placeholders
@@ -216,7 +231,71 @@ test("B3 SQL is read-only and uses psql literal quoting for text values", () => 
   assert.match(KEYWORD_SQL, /course_name ILIKE '%' \|\| :'keyword' \|\| '%'/);
   assert.match(KEYWORD_SQL, /course_content ILIKE '%' \|\| :'keyword' \|\| '%'/);
   assert.match(KEYWORD_SQL, /websearch_to_tsquery\('simple', :'keyword'\)/);
+  assert.match(TEACHER_SQL, /teacher ILIKE '%' \|\| :'keyword' \|\| '%'/);
+  assert.match(SCOPE_SQL, /applicable_scope ILIKE '%' \|\| :'keyword' \|\| '%'/);
   assert.match(EXACT_SQL, /NULLIF\(:'exam_year', ''\)::smallint/);
+});
+
+test("createPostgresStore dispatches teacher and scope to their real B2 SQL", async () => {
+  const calls = [];
+  const store = createPostgresStore({
+    connectionString: "postgres://b2.example/db",
+    spawn(_cmd, args) {
+      calls.push(args);
+      return { status: 0, stdout: JSON.stringify([b2Row()]), stderr: "" };
+    },
+  });
+
+  const teacherRows = await store.teacher({ examYear: 115, keyword: "宗台大", limit: 7 });
+  const scopeRows = await store.scope({ examYear: 116, keyword: "法研所", limit: 8 });
+
+  assert.equal(teacherRows.length, 1);
+  assert.equal(scopeRows.length, 1);
+  assert.equal(calls[0].at(-1), TEACHER_SQL);
+  assert.ok(calls[0].includes("keyword=宗台大"));
+  assert.equal(calls[1].at(-1), SCOPE_SQL);
+  assert.ok(calls[1].includes("keyword=法研所"));
+  assert.notEqual(calls[0].at(-1), KEYWORD_SQL);
+  assert.notEqual(calls[1].at(-1), KEYWORD_SQL);
+});
+
+test("searchCourses with real createPostgresStore dispatches 4 modes and cannot silently fall back to keyword", async () => {
+  const calls = [];
+  const store = createPostgresStore({
+    connectionString: "postgres://b2.example/db",
+    spawn(_cmd, args) {
+      calls.push(args);
+      return { status: 0, stdout: JSON.stringify([b2Row({ teacher: "宗台大", applicable_scope: "法研所" })]), stderr: "" };
+    },
+  });
+
+  // Mode: teacher
+  const teacherResult = await searchCourses(store, { search_mode: "teacher", keyword: "宗台大" });
+  assert.equal(teacherResult.mode, "teacher");
+  assert.equal(teacherResult.results[0].source_search_mode, "teacher");
+  assert.equal(teacherResult.results[0].matched_field, "師資");
+  assert.equal(calls.at(-1).at(-1), TEACHER_SQL);
+
+  // Mode: scope
+  const scopeResult = await searchCourses(store, { search_mode: "scope", keyword: "法研所" });
+  assert.equal(scopeResult.mode, "scope");
+  assert.equal(scopeResult.results[0].source_search_mode, "scope");
+  assert.equal(scopeResult.results[0].matched_field, "適用範圍");
+  assert.equal(calls.at(-1).at(-1), SCOPE_SQL);
+
+  // When store lacks teacher or scope, it fails closed with TypeError and cannot silently fall back to keyword
+  const keywordOnlyStore = {
+    exact: async () => [],
+    keyword: async () => [b2Row()],
+  };
+  await assert.rejects(
+    searchCourses(keywordOnlyStore, { search_mode: "teacher", keyword: "宗台大" }),
+    /store\.teacher is required/
+  );
+  await assert.rejects(
+    searchCourses(keywordOnlyStore, { search_mode: "scope", keyword: "法研所" }),
+    /store\.scope is required/
+  );
 });
 
 test("createPostgresStore requires a connection string", () => {
@@ -350,4 +429,76 @@ test("B2 migration still pins the ec.ibrain.com.tw-only source host", { skip: b2
   const migrationPath = join(dirname(b2ContractPath), "001_exam_courses.sql");
   const migration = readFileSync(migrationPath, "utf8");
   assert.match(migration, /ec\.ibrain\.com\.tw/);
+});
+
+test("4-mode search: resolves product_name, product_code, teacher, scope", () => {
+  const pName = parseSearchParams({ search_mode: "product_name", keyword: "憲法" });
+  assert.equal(pName.mode, "product_name");
+  assert.equal(pName.keyword, "憲法");
+
+  const pCode = parseSearchParams({ search_mode: "product_code", keyword: "GA-CON-002" });
+  assert.equal(pCode.mode, "product_code");
+  assert.equal(pCode.courseCode, "GA-CON-002");
+
+  const pTeacher = parseSearchParams({ search_mode: "teacher", keyword: "宗台大" });
+  assert.equal(pTeacher.mode, "teacher");
+  assert.equal(pTeacher.teacher, "宗台大");
+
+  const pScope = parseSearchParams({ search_mode: "scope", keyword: "法研所" });
+  assert.equal(pScope.mode, "scope");
+  assert.equal(pScope.scope, "法研所");
+});
+
+test("server-side Big5 deep links use verified form semantics and escape spaces/special characters", () => {
+  assert.equal(encodeBig5Percent("憲法"), "%BE%CB%AAk");
+  assert.equal(encodeBig5Percent("測試"), "%B4%FA%B8%D5");
+  assert.equal(encodeBig5Percent("憲法？"), "%BE%CB%AAk%A1H");
+  assert.equal(encodeBig5Percent("行政法"), "%A6%E6%ACF%AAk");
+  assert.equal(encodeBig5Percent("憲法 宗台大"), "%BE%CB%AAk%20%A9v%A5x%A4j");
+  assert.notEqual(encodeBig5Percent("憲法"), encodeURIComponent("憲法"));
+  assert.equal(encodeBig5Percent("憲法 & A/B"), "%BE%CB%AAk%20%26%20A%2FB");
+  assert.equal(encodeBig5Percent("😀"), null); // unmappable fails closed
+  assert.equal(
+    buildStableSearchUrl({ mode: "scope", keyword: "高普考" }),
+    "https://ec.ibrain.com.tw/Publish/www/search.asp?PS=30&Col=7&keyword=%B0%AA%B4%B6%A6%D2&PG=0",
+  );
+});
+
+test("source policy returns exact product pages, never homepage or foreign/open-redirect URLs", () => {
+  // Mandatory exact probes
+  assert.equal(
+    normalizeExactProductUrl("http://ec.ibrain.com.tw/Publish/WWW/Book.asp?BKID=18757"),
+    "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18757",
+  );
+  assert.equal(normalizeExactProductUrl("https://ec.ibrain.com.tw/"), null); // homepage => REJECT_AS_EXACT
+  assert.equal(normalizeExactProductUrl("https://evil.example/Publish/www/book.asp?bkid=18757"), null); // evil.example => REJECT
+  assert.equal(normalizeExactProductUrl("https://evil.example@ec.ibrain.com.tw/Publish/www/book.asp?bkid=18757"), null); // evil.example@ec.ibrain.com.tw => REJECT
+  assert.equal(normalizeExactProductUrl("https://ec.ibrain.com.tw.evil.example/Publish/www/book.asp?bkid=18757"), null); // ec.ibrain.com.tw.evil.example => REJECT
+  assert.equal(normalizeExactProductUrl("https://ec.ibrain.com.tw/redirect?next=https://evil.example/"), null); // /redirect?next=... => REJECT_AS_EXACT
+  assert.equal(
+    resolvePublicSourceUrl({ exactUrl: "https://ec.ibrain.com.tw/", mode: "product_name", keyword: "憲法" }),
+    "https://ec.ibrain.com.tw/Publish/www/search.asp?PS=30&Col=1&keyword=%BE%CB%AAk&PG=0",
+  );
+});
+
+test("searchCourses routes 4 modes to store methods and includes teacher/scope when available", async () => {
+  const store = {
+    exact: async ({ courseCode }) => [b2Row({ course_code: courseCode, teacher: "宗台大", applicable_scope: "法研所" })],
+    keyword: async ({ keyword }) => [b2Row({ course_name: keyword, teacher: "宗台大", applicable_scope: "法研所" })],
+    teacher: async ({ keyword }) => [b2Row({ teacher: keyword, applicable_scope: "法研所" })],
+    scope: async ({ keyword }) => [b2Row({ teacher: "宗台大", applicable_scope: keyword })],
+  };
+
+  const resName = await searchCourses(store, { search_mode: "product_name", keyword: "憲法" });
+  assert.equal(resName.mode, "product_name");
+  assert.equal(resName.results[0].teacher, "宗台大");
+  assert.equal(resName.results[0].applicable_scope, "法研所");
+
+  const resTeacher = await searchCourses(store, { search_mode: "teacher", keyword: "宗台大" });
+  assert.equal(resTeacher.mode, "teacher");
+  assert.equal(resTeacher.results[0].teacher, "宗台大");
+
+  const resScope = await searchCourses(store, { search_mode: "scope", keyword: "法研所" });
+  assert.equal(resScope.mode, "scope");
+  assert.equal(resScope.results[0].applicable_scope, "法研所");
 });
