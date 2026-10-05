@@ -68,9 +68,11 @@ CREATE TABLE IF NOT EXISTS exam_courses (
   CONSTRAINT exam_courses_source_url_shape
     CHECK (length(source_url) BETWEEN 1 AND 2048),
   -- The crawl contract allows exactly one host. Encoding it here means a bad
-  -- base URL can never enter the source-of-truth table, not even by hand.
+  -- base URL can never enter the source-of-truth table, not even by hand. The
+  -- host boundary rejects suffixes and userinfo; path case stays unrestricted
+  -- because the published source uses mixed-case paths.
   CONSTRAINT exam_courses_source_url_host
-    CHECK (source_url ~ '^https://ec\.ibrain\.com\.tw/'),
+    CHECK (source_url ~ '^https?://ec\.ibrain\.com\.tw([/?#]|$)'),
   CONSTRAINT exam_courses_content_hash_sha256
     CHECK (content_hash ~ '^[a-f0-9]{64}$')
 );

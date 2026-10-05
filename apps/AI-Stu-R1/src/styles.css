@@ -3470,6 +3470,8 @@ body {
 .knowledge-results h3 { margin: 8px 0 6px; color: #34415c; font-size: 16px; }
 .knowledge-meta-line { margin: 4px 0; color: #4a5568; font-size: 13px; line-height: 1.5; }
 .knowledge-content-text { margin: 6px 0 0; color: #718099; line-height: 1.65; }
+.knowledge-diagnostic { margin-top: 12px; padding: 11px 12px; border-radius: 10px; font-size: 13px; line-height: 1.55; }
+.knowledge-diagnostic p { margin: 4px 0 0; }.knowledge-diagnostic-grounded { color: #245144; background: #edf9f3; }.knowledge-diagnostic-insufficient { color: #735f23; background: #fff8df; }.knowledge-diagnostic-evidence { color: inherit; opacity: .82; }
 .knowledge-source-block { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #dbe0ee; }
 .knowledge-source-title { font-size: 12px; color: #6b7280; font-weight: 600; }
 .knowledge-source-link { color: #4338ca; font-size: 13px; font-weight: 750; text-decoration: none; width: fit-content; }

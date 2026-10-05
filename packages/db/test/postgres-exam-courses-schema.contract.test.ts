@@ -18,4 +18,15 @@ describe("exam_courses PostgreSQL schema category contract", () => {
     expect(categoryCheckAllows(sql, "高考")).toBe(false);
     expect(categoryCheckAllows(sql, "普考")).toBe(false);
   });
+
+  it("allows the approved HTTP host with mixed-case paths, but not host lookalikes", () => {
+    const sql = migration!.sql;
+
+    expect(sql).toContain("CHECK (source_url ~ '^https?://ec\\.ibrain\\.com\\.tw([/?#]|$)')");
+    const hostCheck = /^https?:\/\/ec\.ibrain\.com\.tw([/?#]|$)/;
+    expect(hostCheck.test("http://ec.ibrain.com.tw/Publish/WWW/Book.asp?BKID=18064")).toBe(true);
+    expect(hostCheck.test("http://foreign.example/Publish/WWW/Book.asp")).toBe(false);
+    expect(hostCheck.test("http://ec.ibrain.com.tw.evil.example/Publish/WWW/Book.asp")).toBe(false);
+    expect(hostCheck.test("http://evil@ec.ibrain.com.tw/Publish/WWW/Book.asp")).toBe(false);
+  });
 });

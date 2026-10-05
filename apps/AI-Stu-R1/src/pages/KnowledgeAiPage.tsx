@@ -7,6 +7,7 @@ import {
   type PublicExamYear,
   type PublicSourceSearchMode
 } from "../knowledgeSearchContract";
+import { buildKnowledgePriorities } from "../knowledgeAiDiagnostic";
 
 const YEARS: Array<{ value: PublicExamYear | "all"; label: string }> = [
   { value: "all", label: "115、116 全部" },
@@ -35,13 +36,19 @@ export function KnowledgeAiPage() {
   const [results, setResults] = useState<PublicCourseSearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   async function search(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     setBusy(true);
+    setSearchError(null);
     try {
       setResults(await searchPublicExamCourses({ examYear, query, searchMode }));
       setHasSearched(true);
+    } catch (error) {
+      setResults([]);
+      setHasSearched(true);
+      setSearchError(error instanceof Error ? error.message : "公開課程搜尋暫時無法使用");
     } finally {
       setBusy(false);
     }
@@ -100,8 +107,9 @@ export function KnowledgeAiPage() {
               <h2>搜尋結果</h2>
               <span>{results.length} 筆 · 查詢方式：{SEARCH_MODE_LABELS[searchMode]}</span>
             </div>
-            {results.length ? <ul>{results.map((course) => (
-              <li key={`${course.exam_year}-${course.course_code}`}>
+            {searchError ? <p className="knowledge-empty" role="alert">{searchError}</p> : results.length ? <ul>{buildKnowledgePriorities(results).map((priority) => {
+              const course = priority.course;
+              return <li key={`${course.exam_year}-${course.course_code}`}>
                 <div className="knowledge-card-meta">
                   <span className="knowledge-year">{course.exam_year} 年</span>
                   <code>{course.course_code}</code>
@@ -112,6 +120,11 @@ export function KnowledgeAiPage() {
                 {course.teacher ? <p className="knowledge-meta-line"><strong>師資：</strong>{course.teacher}</p> : null}
                 {course.applicable_scope ? <p className="knowledge-meta-line"><strong>適用範圍：</strong>{course.applicable_scope}</p> : null}
                 <p className="knowledge-content-text">{course.course_content}</p>
+                <div className={`knowledge-diagnostic knowledge-diagnostic-${priority.evidenceStatus}`}>
+                  <strong>{priority.level === "subject" ? "科目層級建議" : "類科層級建議／資料不足"}</strong>
+                  <p>{priority.recommendation}</p>
+                  {priority.subjects.length ? <p className="knowledge-diagnostic-evidence">依據：{priority.subjects.map((subject) => `${subject.subject}（${subject.sourceField === "course_name" ? "課名" : "課程內容"}）`).join("、")}</p> : null}
+                </div>
                 <div className="knowledge-source-block">
                   <span className="knowledge-source-title">來源：ibrain 知識達購課館</span>
                   {course.source_url ? <>
@@ -119,8 +132,8 @@ export function KnowledgeAiPage() {
                     <span className="knowledge-source-url" title={course.source_url}>{course.source_url}</span>
                   </> : <span className="knowledge-source-url">公開來源暫時無法提供</span>}
                 </div>
-              </li>
-            ))}</ul> : <p className="knowledge-empty">找不到相符的公開課程。請調整年度或關鍵字後再試。</p>}
+              </li>;
+            })}</ul> : <p className="knowledge-empty">找不到相符的公開課程。請調整年度或關鍵字後再試。</p>}
           </section>
         ) : null}
       </main>

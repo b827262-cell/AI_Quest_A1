@@ -30,14 +30,17 @@ test("B1 input fails closed when a row violates the required 高普考-only cont
   }
 });
 
-test("migration encodes uniqueness, hash-aware upsert target, and permitted indexes only", async () => {
+test("migration and importer share the canonical uppercase natural key", async () => {
   const [migration, importer, queries] = await Promise.all([
     readFile("data/b2-ibrain-postgresql/001_exam_courses.sql", "utf8"),
     readFile("data/b2-ibrain-postgresql/import-b1-snapshot.mjs", "utf8"),
     readFile("data/b2-ibrain-postgresql/query-contract.sql", "utf8")
   ]);
-  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS uq_exam_courses_year_code/);
-  assert.match(importer, /ON CONFLICT \(exam_year, lower\(course_code\)\)/);
+  assert.match(migration, /PRIMARY KEY \(exam_year, course_code\)/);
+  assert.match(migration, /course_code ~ '\^\[A-Z0-9\]\[A-Z0-9\._-\]\{0,127\}\$'/);
+  assert.doesNotMatch(migration, /lower\(course_code\)/);
+  assert.match(importer, /ON CONFLICT \(exam_year, course_code\)/);
+  assert.doesNotMatch(importer, /ON CONFLICT \(exam_year, lower\(course_code\)\)/);
   assert.match(importer, /content_hash IS DISTINCT FROM EXCLUDED\.content_hash/);
   assert.match(migration, /idx_exam_courses_course_code/);
   assert.match(migration, /course_name gin_trgm_ops/);
@@ -45,4 +48,32 @@ test("migration encodes uniqueness, hash-aware upsert target, and permitted inde
   assert.match(queries, /lower\(course_code\) = lower\(\$1\)/);
   assert.match(queries, /websearch_to_tsquery/);
   assert.match(queries, /ILIKE/);
+});
+
+test("source URL constraint permits mixed-case paths on the approved HTTP host only", async () => {
+  const migration = await readFile("data/b2-ibrain-postgresql/001_exam_courses.sql", "utf8");
+  const hostCheck = /^https?:\/\/ec\.ibrain\.com\.tw([/?#]|$)/;
+
+  assert.ok(migration.includes("source_url ~ '^https?://ec\\.ibrain\\.com\\.tw([/?#]|$)'"));
+  assert.equal(hostCheck.test("http://ec.ibrain.com.tw/Publish/WWW/Book.asp?BKID=18064"), true);
+  for (const sourceUrl of [
+    "http://foreign.example/Publish/WWW/Book.asp",
+    "http://ec.ibrain.com.tw.evil.example/Publish/WWW/Book.asp",
+    "http://evil@ec.ibrain.com.tw/Publish/WWW/Book.asp"
+  ]) {
+    assert.equal(hostCheck.test(sourceUrl), false, `${sourceUrl} must be rejected`);
+  }
+});
+
+test("16-row B1 dry-run projects absent teacher and scope as NULL", async () => {
+  const [{ rows }, importer] = await Promise.all([
+    loadValidatedB1Snapshot(),
+    readFile("data/b2-ibrain-postgresql/import-b1-snapshot.mjs", "utf8")
+  ]);
+  assert.equal(rows.length, 16);
+  assert.ok(rows.every((row) => !("teacher" in row) && !("applicable_scope" in row)));
+  assert.match(importer, /NULL::text, NULL::text, source_url/);
+  assert.match(importer, /teacher = EXCLUDED\.teacher/);
+  assert.match(importer, /applicable_scope = EXCLUDED\.applicable_scope/);
+  assert.doesNotMatch(importer, /teacher text|applicable_scope text/);
 });

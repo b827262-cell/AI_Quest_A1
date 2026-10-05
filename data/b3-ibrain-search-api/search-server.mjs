@@ -4,7 +4,7 @@
 // `apps/AI-Stu-R1/server/flow-sidecar.mjs` pattern (no framework dependency).
 //
 // Routes:
-//   GET /api/exam-courses/search   → validated search over B2 exam_courses
+//   GET /api/public/exam-courses/search → validated search over B2 exam_courses
 //   GET /api/health                → liveness (does not touch the database)
 //   OPTIONS *                      → CORS preflight
 //
@@ -21,7 +21,8 @@ import { pathToFileURL } from "node:url";
 import { searchCourses, SearchDataError, SearchInputError } from "./search-core.mjs";
 import { createPostgresStore } from "./postgres-store.mjs";
 
-const SEARCH_PATH = "/api/exam-courses/search";
+const SEARCH_PATH = "/api/public/exam-courses/search";
+const LEGACY_SEARCH_PATH = "/api/exam-courses/search";
 const HEALTH_PATH = "/api/health";
 
 const CORS_HEADERS = {
@@ -54,6 +55,17 @@ function errorPayload(error) {
   };
 }
 
+export function publicContractResponse(result) {
+  const query = { limit: result.query.limit };
+  if (result.query.exam_year !== null && result.query.exam_year !== undefined) query.exam_year = result.query.exam_year;
+  if (result.mode === "course_code" || result.mode === "product_code") query.course_code = result.query.course_code;
+  else if (result.mode === "teacher") query.teacher = result.query.teacher;
+  else if (result.mode === "scope") query.applicable_scope = result.query.scope;
+  else query.keyword = result.query.keyword;
+  query.search_mode = result.mode === "course_code" ? "product_code" : result.mode === "keyword" ? "product_name" : result.mode;
+  return { contractVersion: 1, mode: "postgres", query, total: result.count, results: result.results };
+}
+
 /** Builds the HTTP server around an injected B2 store. */
 export function createSearchServer({ store }) {
   return http.createServer(async (req, res) => {
@@ -75,7 +87,7 @@ export function createSearchServer({ store }) {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === SEARCH_PATH) {
+    if (req.method === "GET" && (url.pathname === SEARCH_PATH || url.pathname === LEGACY_SEARCH_PATH)) {
       try {
         const result = await searchCourses(store, {
           exam_year: url.searchParams.get("exam_year") ?? undefined,
@@ -87,7 +99,7 @@ export function createSearchServer({ store }) {
           q: url.searchParams.get("q") ?? undefined,
           limit: url.searchParams.get("limit") ?? undefined,
         });
-        sendJson(res, 200, result);
+        sendJson(res, 200, publicContractResponse(result));
       } catch (error) {
         sendJson(res, errorStatus(error), errorPayload(error));
       }

@@ -91,12 +91,11 @@ export function parsePsqlJson(stdout) {
   return parsed;
 }
 
-function psqlArgs(connectionString, vars, sql) {
+function psqlArgs(connectionString, vars) {
   const args = [connectionString, "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1"];
   for (const [name, value] of Object.entries(vars)) {
     args.push("-v", `${name}=${value ?? ""}`);
   }
-  args.push("-c", sql);
   return args;
 }
 
@@ -114,8 +113,9 @@ export function createPostgresStore(options = {}) {
   const spawner = options.spawn ?? spawnSync;
 
   function run(sql, vars) {
-    const result = spawner(psqlPath, psqlArgs(connectionString, vars, sql), {
+    const result = spawner(psqlPath, psqlArgs(connectionString, vars), {
       encoding: "utf8",
+      input: sql,
       timeout: timeoutMs,
       maxBuffer: 8 * 1024 * 1024,
     });

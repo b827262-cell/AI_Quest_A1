@@ -11,16 +11,18 @@ const { rows, dataFreshness } = await loadValidatedB1Snapshot();
 const payload = JSON.stringify(rows);
 const sql = `
 INSERT INTO public.exam_courses
-  (exam_year, category, course_code, course_name, course_content, source_url, fetched_at, content_hash)
-SELECT exam_year, category, course_code, course_name, course_content, source_url, fetched_at, content_hash
+  (exam_year, category, course_code, course_name, course_content, teacher, applicable_scope, source_url, fetched_at, content_hash)
+SELECT exam_year, category, course_code, course_name, course_content, NULL::text, NULL::text, source_url, fetched_at, content_hash
 FROM jsonb_to_recordset($b2payload$${payload}$b2payload$::jsonb) AS input(
   exam_year smallint, category text, course_code text, course_name text,
   course_content text, source_url text, fetched_at timestamptz, content_hash char(64)
 )
-ON CONFLICT (exam_year, lower(course_code)) DO UPDATE SET
+ON CONFLICT (exam_year, course_code) DO UPDATE SET
   category = EXCLUDED.category,
   course_name = EXCLUDED.course_name,
   course_content = EXCLUDED.course_content,
+  teacher = EXCLUDED.teacher,
+  applicable_scope = EXCLUDED.applicable_scope,
   source_url = EXCLUDED.source_url,
   fetched_at = EXCLUDED.fetched_at,
   content_hash = EXCLUDED.content_hash,

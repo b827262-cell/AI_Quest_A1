@@ -236,35 +236,42 @@ test("B3 SQL is read-only and uses psql literal quoting for text values", () => 
   assert.match(EXACT_SQL, /NULLIF\(:'exam_year', ''\)::smallint/);
 });
 
-test("createPostgresStore dispatches teacher and scope to their real B2 SQL", async () => {
+test("createPostgresStore dispatches all modes through stdin to their real B2 SQL", async () => {
   const calls = [];
   const store = createPostgresStore({
     connectionString: "postgres://b2.example/db",
-    spawn(_cmd, args) {
-      calls.push(args);
+    spawn(_cmd, args, options) {
+      calls.push({ args, options });
       return { status: 0, stdout: JSON.stringify([b2Row()]), stderr: "" };
     },
   });
 
+  const exactRows = await store.exact({ examYear: 115, courseCode: "IPKKW126262", limit: 6 });
+  const keywordRows = await store.keyword({ examYear: 116, keyword: "民政", limit: 9 });
   const teacherRows = await store.teacher({ examYear: 115, keyword: "宗台大", limit: 7 });
   const scopeRows = await store.scope({ examYear: 116, keyword: "法研所", limit: 8 });
 
+  assert.equal(exactRows.length, 1);
+  assert.equal(keywordRows.length, 1);
   assert.equal(teacherRows.length, 1);
   assert.equal(scopeRows.length, 1);
-  assert.equal(calls[0].at(-1), TEACHER_SQL);
-  assert.ok(calls[0].includes("keyword=宗台大"));
-  assert.equal(calls[1].at(-1), SCOPE_SQL);
-  assert.ok(calls[1].includes("keyword=法研所"));
-  assert.notEqual(calls[0].at(-1), KEYWORD_SQL);
-  assert.notEqual(calls[1].at(-1), KEYWORD_SQL);
+  assert.deepEqual(calls.map(({ options }) => options.input), [EXACT_SQL, KEYWORD_SQL, TEACHER_SQL, SCOPE_SQL]);
+  assert.ok(calls[0].args.includes("course_code=IPKKW126262"));
+  assert.ok(calls[1].args.includes("keyword=民政"));
+  assert.ok(calls[2].args.includes("keyword=宗台大"));
+  assert.ok(calls[3].args.includes("keyword=法研所"));
+  for (const { args } of calls) {
+    assert.equal(args.includes("-c"), false);
+    assert.equal(args.some((arg) => [EXACT_SQL, KEYWORD_SQL, TEACHER_SQL, SCOPE_SQL].includes(arg)), false);
+  }
 });
 
 test("searchCourses with real createPostgresStore dispatches 4 modes and cannot silently fall back to keyword", async () => {
   const calls = [];
   const store = createPostgresStore({
     connectionString: "postgres://b2.example/db",
-    spawn(_cmd, args) {
-      calls.push(args);
+    spawn(_cmd, args, options) {
+      calls.push({ args, options });
       return { status: 0, stdout: JSON.stringify([b2Row({ teacher: "宗台大", applicable_scope: "法研所" })]), stderr: "" };
     },
   });
@@ -274,14 +281,14 @@ test("searchCourses with real createPostgresStore dispatches 4 modes and cannot 
   assert.equal(teacherResult.mode, "teacher");
   assert.equal(teacherResult.results[0].source_search_mode, "teacher");
   assert.equal(teacherResult.results[0].matched_field, "師資");
-  assert.equal(calls.at(-1).at(-1), TEACHER_SQL);
+  assert.equal(calls.at(-1).options.input, TEACHER_SQL);
 
   // Mode: scope
   const scopeResult = await searchCourses(store, { search_mode: "scope", keyword: "法研所" });
   assert.equal(scopeResult.mode, "scope");
   assert.equal(scopeResult.results[0].source_search_mode, "scope");
   assert.equal(scopeResult.results[0].matched_field, "適用範圍");
-  assert.equal(calls.at(-1).at(-1), SCOPE_SQL);
+  assert.equal(calls.at(-1).options.input, SCOPE_SQL);
 
   // When store lacks teacher or scope, it fails closed with TypeError and cannot silently fall back to keyword
   const keywordOnlyStore = {
@@ -317,15 +324,17 @@ test("createPostgresStore passes values as psql variables and parses JSON rows",
   assert.equal(rows[0].course_code, "IPPP3727011");
 
   assert.equal(calls.length, 1);
-  const { cmd, args } = calls[0];
+  const { cmd, args, options } = calls[0];
   assert.equal(cmd, "psql");
   assert.equal(args[0], "postgres://b2.example/db");
   assert.ok(args.includes("-v"));
   assert.ok(args.includes("exam_year=115"));
   assert.ok(args.includes("course_code=IPKKW126262"));
   assert.ok(args.includes("limit=5"));
-  assert.equal(args.at(-2), "-c");
-  assert.equal(args.at(-1), EXACT_SQL);
+  assert.equal(args.includes("-c"), false);
+  assert.equal(options.input, EXACT_SQL);
+  assert.equal(options.timeout, 10_000);
+  assert.equal(options.maxBuffer, 8 * 1024 * 1024);
 });
 
 test("createPostgresStore fails closed on a non-zero psql exit", async () => {
@@ -350,13 +359,15 @@ test("parsePsqlJson tolerates empty output and rejects non-JSON", () => {
 // HTTP sidecar routing
 // ---------------------------------------------------------------------------
 
-test("GET /api/exam-courses/search returns shaped JSON results", async () => {
+test("GET /api/public/exam-courses/search returns the shared public contract", async () => {
   await withServer(fakeStore([b2Row()]), async (base) => {
-    const res = await fetch(`${base}/api/exam-courses/search?course_code=IPPP3727011&exam_year=116`);
+    const res = await fetch(`${base}/api/public/exam-courses/search?search_mode=product_code&course_code=IPPP3727011&exam_year=116`);
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.equal(body.mode, "course_code");
-    assert.equal(body.count, 1);
+    assert.equal(body.contractVersion, 1);
+    assert.equal(body.mode, "postgres");
+    assert.equal(body.total, 1);
+    assert.equal(body.query.search_mode, "product_code");
     assert.deepEqual(Object.keys(body.results[0]).sort(), [...RESULT_FIELDS].sort());
     assert.match(res.headers.get("access-control-allow-origin"), /\*/);
   });
@@ -364,12 +375,12 @@ test("GET /api/exam-courses/search returns shaped JSON results", async () => {
 
 test("GET search maps input errors to 400 and data errors to 502", async () => {
   await withServer(fakeStore([b2Row()]), async (base) => {
-    const missing = await fetch(`${base}/api/exam-courses/search`);
+    const missing = await fetch(`${base}/api/public/exam-courses/search`);
     assert.equal(missing.status, 400);
     assert.equal((await missing.json()).error, "missing_query");
   });
   await withServer(fakeStore([b2Row({ source_url: "https://evil.example.com/x" })]), async (base) => {
-    const res = await fetch(`${base}/api/exam-courses/search?q=%E7%B5%B1%E8%A8%88`);
+    const res = await fetch(`${base}/api/public/exam-courses/search?q=%E7%B5%B1%E8%A8%88`);
     assert.equal(res.status, 502);
     assert.equal((await res.json()).error, "b2_data_integrity_error");
   });
@@ -428,7 +439,7 @@ test("B3 SQL preserves the B2 query contract predicates", { skip: b2ContractPath
 test("B2 migration still pins the ec.ibrain.com.tw-only source host", { skip: b2ContractPath ? false : "B2 migration not checked out" }, () => {
   const migrationPath = join(dirname(b2ContractPath), "001_exam_courses.sql");
   const migration = readFileSync(migrationPath, "utf8");
-  assert.match(migration, /ec\.ibrain\.com\.tw/);
+  assert.match(migration, /source_url ~ '\^https\?:\/\/ec\\\.ibrain\\\.com\\\.tw\(\[\/\?#\]\|\$\)'/);
 });
 
 test("4-mode search: resolves product_name, product_code, teacher, scope", () => {
