@@ -4,10 +4,21 @@ import { HomeAIComposer } from "../components/HomeAIComposer";
 import { StudentAnswerRenderer } from "../components/GuestAnswerRenderer";
 import {
   addLearningHistoryEntry,
+  canAutoBindAnswer,
+  clearPendingRawAnswer,
+  extractSharedAnswerText,
+  extractGoogleAiSourceUrl,
   clearLearningHistory,
+  findAnswerBinding,
+  findGoogleAiSourceEntry,
   googleAiSearchUrl,
   readLearningHistory,
+  readPendingRawAnswer,
+  savePendingRawAnswerOnce,
   removeLearningHistoryEntry,
+  saveRawAnswerOnce,
+  saveGoogleAiSourceUrl,
+  updateLearningHistoryContent,
   updateLearningHistoryAnswer,
   type AnswerStrategy,
   type LearningHistoryEntry,
@@ -157,22 +168,54 @@ function LearningHistoryPanel({
   entries,
   onEntriesChange,
   onStatusChange,
-  statuses
+  statuses,
+  onIntake
 }: {
   entries: LearningHistoryEntry[];
   onEntriesChange: (entries: LearningHistoryEntry[]) => void;
   onStatusChange: (id: string, message: string) => void;
   statuses: Record<string, string>;
+  onIntake: (rawAnswer: string, preferredEntry?: LearningHistoryEntry) => void;
 }) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ rawAnswer: "", sourceUrl: "" });
+
+  function startEditing(entry: LearningHistoryEntry) {
+    setEditingId(entry.id);
+    setDraft({ rawAnswer: entry.rawAnswer ?? "", sourceUrl: entry.sourceUrl ?? "" });
+  }
+
+  function cancelEditing() {
+    setEditingId(null);
+    setDraft({ rawAnswer: "", sourceUrl: "" });
+  }
+
+  function saveEditing(entry: LearningHistoryEntry) {
+    const result = updateLearningHistoryContent(entry.id, draft);
+    if (result.status === "saved") {
+      onEntriesChange(result.entries);
+      onStatusChange(entry.id, "已儲存這筆紀錄的修改。空白欄位已移除。");
+      cancelEditing();
+      return;
+    }
+    const message = result.status === "rejected_url_only"
+      ? "回答文字未儲存；請將 Google AI／搜尋網址貼到來源連結欄位。"
+      : result.status === "rejected_source_url"
+        ? "來源連結無效：請使用 https://www.google.com/search 且包含 udm=50 與這題的 q 參數。"
+        : result.status === "question_mismatch"
+        ? "來源連結的 q 參數與這筆問題不相符，未儲存修改。"
+        : "找不到這筆紀錄，未儲存修改。";
+    onStatusChange(entry.id, message);
+  }
+
   async function pasteGoogleAnswer(entry: LearningHistoryEntry) {
     try {
       if (!navigator.clipboard?.readText) throw new Error("clipboard unavailable");
       const answer = await navigator.clipboard.readText();
       if (!answer.trim()) throw new Error("clipboard empty");
-      onEntriesChange(updateLearningHistoryAnswer(entry.id, answer));
-      onStatusChange(entry.id, "已從剪貼簿儲存 Google AI 解答。");
+      onIntake(answer, entry);
     } catch {
-      onStatusChange(entry.id, "無法讀取剪貼簿；請允許權限，或在下方手動貼上 Google AI 解答。");
+      onStatusChange(entry.id, "無法讀取剪貼簿；請允許權限，或展開下方手動貼上備援。");
     }
   }
 
@@ -182,7 +225,7 @@ function LearningHistoryPanel({
         <div>
           <span className="public-eyebrow">我的學習</span>
           <h2 id="learning-history-heading">學習紀錄</h2>
-          <p>只儲存在這台裝置的瀏覽器，最多保留 50 筆。</p>
+          <p>只儲存在這台裝置。原始回覆會保留，其他待處理紀錄最多保留 50 筆。</p>
         </div>
         <button type="button" className="learning-history-clear" onClick={() => onEntriesChange(clearLearningHistory())} disabled={!entries.length}>
           清除全部
@@ -190,39 +233,62 @@ function LearningHistoryPanel({
       </div>
       {!entries.length ? <p className="learning-history-empty">尚無提問紀錄。送出問題後會顯示在這裡。</p> : (
         <ol className="learning-history-list">
-          {entries.map((entry) => (
-            <li key={entry.id} className="learning-history-entry">
+          {entries.map((entry) => {
+            const isEditing = editingId === entry.id;
+            return <li key={entry.id} className="learning-history-entry">
               <div className="learning-history-entry-topline">
                 <div>
-                  <span className={`learning-history-strategy ${entry.strategy}`}>{entry.strategy === "google-ai" ? "Google AI" : "API 模式"}</span>
+                  <span className={`learning-history-strategy ${entry.strategy}`}>{entry.strategy === "google-ai" ? "搜尋好朋友／谷哥" : "API 模式"}</span>
                   <span>{entry.category === "auto" ? "自動判斷" : entry.category} · {SOURCE_LABELS[entry.sourceType]}</span>
                 </div>
-                <button type="button" className="learning-history-delete" onClick={() => onEntriesChange(removeLearningHistoryEntry(entry.id))} aria-label={`刪除問題：${entry.question}`}>
-                  刪除
-                </button>
+                <div className="learning-history-entry-actions">
+                  <button type="button" className="learning-history-edit" onClick={() => startEditing(entry)} aria-label={`修改問題：${entry.question}`}>
+                    修改
+                  </button>
+                  <button type="button" className="learning-history-delete" onClick={() => onEntriesChange(removeLearningHistoryEntry(entry.id))} aria-label={`刪除問題：${entry.question}`}>
+                    刪除
+                  </button>
+                </div>
               </div>
               <p className="learning-history-question">{entry.question}</p>
               <time dateTime={entry.askedAt}>{new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.askedAt))}</time>
-              {entry.strategy === "google-ai" ? (
+              {isEditing ? <form className="learning-history-edit-form" onSubmit={(event) => { event.preventDefault(); saveEditing(entry); }}>
+                <label>
+                  <span>原始回覆文字</span>
+                  <textarea value={draft.rawAnswer} onChange={(event) => setDraft((current) => ({ ...current, rawAnswer: event.target.value }))} rows={5} />
+                </label>
+                <label>
+                  <span>搜尋好朋友來源連結</span>
+                  <input type="text" inputMode="url" value={draft.sourceUrl} onChange={(event) => setDraft((current) => ({ ...current, sourceUrl: event.target.value }))} placeholder="https://www.google.com/search?udm=50&q=…" />
+                </label>
+                <p className="learning-history-edit-help">原始回覆會在儲存時於裝置上重新整理；清空欄位後儲存會移除該資料。</p>
+                <div className="learning-history-actions">
+                  <button type="submit">儲存</button>
+                  <button type="button" onClick={cancelEditing}>取消</button>
+                </div>
+                {statuses[entry.id] ? <p className="learning-history-status" role="status" aria-live="polite">{statuses[entry.id]}</p> : null}
+              </form> : entry.strategy === "google-ai" ? (
                 <div className="learning-history-google-workflow">
                   <div className="learning-history-actions">
-                    <a href={googleAiSearchUrl(entry.question)} target="_blank" rel="noopener noreferrer">重新開啟 Google AI</a>
-                    <button type="button" onClick={() => void pasteGoogleAnswer(entry)}>從剪貼簿貼上 Google AI 解答</button>
+                    <a href={entry.sourceUrl ?? googleAiSearchUrl(entry.question)} target="_blank" rel="noopener noreferrer">用搜尋好朋友／谷哥開啟</a>
+                    <button type="button" onClick={() => void pasteGoogleAnswer(entry)}>從剪貼簿帶回回答</button>
                   </div>
-                  <label>
-                    <span className="sr-only">Google AI 解答</span>
-                    <textarea
-                      value={entry.answer ?? ""}
-                      onChange={(event) => onEntriesChange(updateLearningHistoryAnswer(entry.id, event.target.value))}
-                      placeholder="將 Google AI 解答貼在這裡…"
-                      rows={4}
-                    />
-                  </label>
+                  {entry.rawAnswer ? <>
+                    <p className="learning-history-raw-label">整理後回覆（僅在裝置上以原始回覆格式化）</p>
+                    <p className="learning-history-answer">{entry.organizedAnswer}</p>
+                    <details className="learning-history-raw-evidence">
+                      <summary>查看原始回覆</summary>
+                      <pre>{entry.rawAnswer}</pre>
+                    </details>
+                  </> : <details className="learning-history-manual-fallback">
+                    <summary>手動貼上備援</summary>
+                    <p className="learning-history-edit-help">請按「修改」貼上回覆，再按「儲存」；離開欄位不會儲存。</p>
+                  </details>}
                   {statuses[entry.id] ? <p className="learning-history-status" role="status" aria-live="polite">{statuses[entry.id]}</p> : null}
                 </div>
               ) : entry.answer ? <p className="learning-history-answer">{entry.answer}</p> : <p className="learning-history-pending">API 解答會在成功取得後儲存在這裡。</p>}
-            </li>
-          ))}
+            </li>;
+          })}
         </ol>
       )}
     </section>
@@ -247,7 +313,13 @@ export function PublicHomePage() {
   const [learningHistory, setLearningHistory] = useState<LearningHistoryEntry[]>(() => readLearningHistory());
   const [googleStatus, setGoogleStatus] = useState("");
   const [historyStatuses, setHistoryStatuses] = useState<Record<string, string>>({});
+  const [pendingIntake, setPendingIntake] = useState<{ rawAnswer: string; candidates: LearningHistoryEntry[] } | null>(() => {
+    const pending = readPendingRawAnswer();
+    if (!pending) return null;
+    return { rawAnswer: pending.rawAnswer, candidates: readLearningHistory().filter((entry) => entry.strategy === "google-ai" && !entry.rawAnswer).slice(0, 3) };
+  });
   const requestAbortRef = useRef<AbortController | null>(null);
+  const pendingIntakeHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const { user } = useStudentAuth();
   const studentName = user?.displayName || "";
 
@@ -261,6 +333,105 @@ export function PublicHomePage() {
       active = false;
     };
   }, []);
+
+  function saveIntake(entry: LearningHistoryEntry, rawAnswer: string) {
+    const result = saveRawAnswerOnce(entry.id, rawAnswer);
+    setLearningHistory(result.entries);
+    const message = result.status === "saved"
+      ? "已保留原始回覆；整理後版本另行顯示。"
+      : result.status === "already_imported"
+        ? "此題已有保留的原始回覆，未重複匯入或覆寫。"
+        : result.status === "rejected_url_only"
+          ? "來源只分享了連結；沒有儲存回答。請使用「從剪貼簿帶回回答」。"
+        : "找不到這筆題目，未儲存回覆。";
+    setHistoryStatuses((messages) => ({ ...messages, [entry.id]: message }));
+    return result.status;
+  }
+
+  function saveSourceIntake(entry: LearningHistoryEntry, sourceUrl: string) {
+    const result = saveGoogleAiSourceUrl(entry.id, sourceUrl);
+    setLearningHistory(result.entries);
+    return result.status;
+  }
+
+  function requireExplicitChoice(rawAnswer: string, candidates: LearningHistoryEntry[]) {
+    const pending = savePendingRawAnswerOnce(rawAnswer);
+    if (!pending) return;
+    setPendingIntake({ rawAnswer: pending.rawAnswer, candidates: candidates.slice(0, 3) });
+    setGoogleStatus("無法高信心自動對應；原始回覆暫留在本頁，請明確選擇題目。" );
+  }
+
+  function acceptIncomingAnswer(rawAnswer: string, preferredEntry?: LearningHistoryEntry, sharedUrl?: unknown) {
+    const current = readLearningHistory();
+    const source = extractGoogleAiSourceUrl(rawAnswer, sharedUrl);
+    const sourceEntry = source ? findGoogleAiSourceEntry(current, source) : null;
+    const extraction = extractSharedAnswerText(rawAnswer, sharedUrl);
+    if (extraction.status !== "accepted") {
+      if (source && sourceEntry) {
+        saveSourceIntake(sourceEntry, source.sourceUrl);
+        const message = "已保存搜尋好朋友來源連結；尚未保存回答文字。請使用「從剪貼簿帶回回答」，或展開手動貼上備援。";
+        setGoogleStatus(message);
+        setHistoryStatuses((messages) => ({ ...messages, [sourceEntry.id]: message }));
+        return;
+      }
+      const message = "來源只分享了連結；沒有儲存回答。請使用「從剪貼簿帶回回答」，或展開手動貼上備援。";
+      setGoogleStatus(message);
+      if (preferredEntry) setHistoryStatuses((messages) => ({ ...messages, [preferredEntry.id]: message }));
+      return;
+    }
+    rawAnswer = extraction.rawAnswer;
+    // The validated `q` parameter gives an exact, local question binding.
+    if (source && sourceEntry) {
+      saveSourceIntake(sourceEntry, source.sourceUrl);
+      const result = saveIntake(sourceEntry, rawAnswer);
+      setGoogleStatus(result === "saved" ? "已保存搜尋好朋友來源連結與原始回答。" : "已保存搜尋好朋友來源連結；原始回答未覆寫。" );
+      return;
+    }
+    const binding = findAnswerBinding(current, rawAnswer);
+    if (preferredEntry) {
+      const candidates = [preferredEntry, ...binding.matches.filter((entry) => entry.id !== preferredEntry.id)].slice(0, 3);
+      if (!canAutoBindAnswer(binding) || binding.matches[0]?.id !== preferredEntry.id) {
+        requireExplicitChoice(rawAnswer, candidates);
+        return;
+      }
+      saveIntake(preferredEntry, rawAnswer);
+      return;
+    }
+    if (binding.hasExplicitMismatch || !binding.matches.length) {
+      const candidates = current.filter((entry) => entry.strategy === "google-ai" && !entry.rawAnswer).slice(0, 3);
+      if (candidates.length) requireExplicitChoice(rawAnswer, candidates);
+      else setGoogleStatus("沒有可對應的待處理題目；請先提出問題後再帶回回覆。");
+      return;
+    }
+    if (canAutoBindAnswer(binding)) {
+      const target = binding.matches[0];
+      const result = saveIntake(target, rawAnswer);
+      setGoogleStatus(result === "saved" ? "已安全帶回回覆。" : "回覆沒有重複儲存。" );
+      return;
+    }
+    requireExplicitChoice(rawAnswer, binding.matches);
+  }
+
+  useEffect(() => {
+    function requestIntake() { navigator.serviceWorker.controller?.postMessage({ type: "consume-share-intake" }); }
+    function receiveIntake(event: MessageEvent<unknown>) {
+      const data = event.data as { type?: unknown; payload?: { text?: unknown; url?: unknown } } | null;
+      if (data?.type !== "share-intake") return;
+      const rawAnswer = typeof data.payload?.text === "string" ? data.payload.text : "";
+      if (data.payload) acceptIncomingAnswer(rawAnswer, undefined, data.payload.url);
+    }
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.addEventListener("message", receiveIntake);
+    requestIntake();
+    navigator.serviceWorker.addEventListener("controllerchange", requestIntake, { once: true });
+    return () => navigator.serviceWorker.removeEventListener("message", receiveIntake);
+  // Local service-worker payload is the only POST share intake; title and URL never bind an answer.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (pendingIntake) pendingIntakeHeadingRef.current?.focus();
+  }, [pendingIntake]);
 
   useEffect(() => {
     let active = true;
@@ -404,7 +575,7 @@ export function PublicHomePage() {
     setLearningHistory(historyRecord.entries);
     window.open(googleAiSearchUrl(trimmed), "_blank", "noopener,noreferrer");
     setQuestion("");
-    setGoogleStatus("已將問題送往 Google AI；若新分頁未自動開啟，請使用下方紀錄中的「重新開啟 Google AI」。返回後可將解答貼回學習紀錄。");
+    setGoogleStatus("已用搜尋好朋友／谷哥開啟問題；回來後可用分享、剪貼簿或貼上備援帶回回覆。");
   }
 
   async function submitFeedback(helpful: boolean) {
@@ -477,7 +648,7 @@ export function PublicHomePage() {
                 autoFocus={!busy}
               />
               <div className="public-composer-meta">
-                <span>{strategy === "google-ai" ? "Google AI 不需 API 金鑰 · 每題最多 2,000 字" : `訪客每日可體驗 ${config.guestDailyLimit} 題 · 每題最多 2,000 字`}</span>
+                <span>{strategy === "google-ai" ? "搜尋好朋友／谷哥不需 API 金鑰 · 每題最多 2,000 字" : `訪客每日可體驗 ${config.guestDailyLimit} 題 · 每題最多 2,000 字`}</span>
                 <span>目前模式：{category === "auto" ? "自動判斷" : category}</span>
               </div>
               {error ? <p className="public-form-error" role="alert">{error}</p> : null}
@@ -507,7 +678,22 @@ export function PublicHomePage() {
                 onEntriesChange={setLearningHistory}
                 onStatusChange={(id, message) => setHistoryStatuses((current) => ({ ...current, [id]: message }))}
                 statuses={historyStatuses}
+                onIntake={acceptIncomingAnswer}
               />
+              {pendingIntake ? <section className="share-binding-choice" aria-labelledby="share-binding-heading" role="alert" aria-live="assertive">
+                <h2 id="share-binding-heading" ref={pendingIntakeHeadingRef} tabIndex={-1}>這份回覆要對應哪一題？</h2>
+                <p>為避免放錯題目，請選擇一題（最多顯示 3 筆）。</p>
+                {pendingIntake.candidates.map((entry) => <button key={entry.id} type="button" onClick={() => {
+                  if (saveIntake(entry, pendingIntake.rawAnswer) !== "not_found") {
+                    clearPendingRawAnswer();
+                    setPendingIntake(null);
+                  }
+                }}>{entry.question}</button>)}
+                <button type="button" className="share-binding-cancel" onClick={() => {
+                  clearPendingRawAnswer();
+                  setPendingIntake(null);
+                }}>先不儲存</button>
+              </section> : null}
             </>
         ) : restoringAnswer ? (
           <p className="public-answer-loading" role="status">正在載入回答…</p>

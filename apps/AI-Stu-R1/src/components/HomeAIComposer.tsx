@@ -106,7 +106,7 @@ export function HomeAIComposer({
         <label className="composer-mode-select composer-strategy-select">
           <span>解答方式</span>
           <select value={strategy} onChange={(event) => onStrategyChange(event.target.value as AnswerStrategy)} disabled={disabled || busy} aria-label="解答方式">
-            <option value="google-ai">Google AI（目前主線）</option>
+            <option value="google-ai">搜尋好朋友／谷哥（目前主線）</option>
             <option value="api">API 模式（保留）</option>
           </select>
         </label>
