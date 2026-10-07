@@ -47,7 +47,7 @@ export async function GET(request: Request, context: RouteParams) {
       );
     }
 
-    let bucket: any;
+    let bucket: Awaited<ReturnType<typeof getStorageBucket>>;
     try {
       bucket = await getStorageBucket();
     } catch (err) {

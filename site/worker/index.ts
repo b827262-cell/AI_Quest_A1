@@ -5,7 +5,7 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
-  BOOKS_BUCKET?: any;
+  BOOKS_BUCKET?: unknown;
   RELEASE_VALIDATION_SECRET?: string;
   SYNC_IMPORT_SECRET?: string;
   SYNC_MAX_PDF_BYTES?: string;
@@ -31,9 +31,10 @@ interface ExecutionContext {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    (globalThis as any).BOOKS_BUCKET = env.BOOKS_BUCKET;
-    (globalThis as any).DB = env.DB;
-    (globalThis as any).RELEASE_VALIDATION_SECRET = env.RELEASE_VALIDATION_SECRET;
+    (globalThis as unknown as { BOOKS_BUCKET?: unknown }).BOOKS_BUCKET = env.BOOKS_BUCKET;
+    (globalThis as unknown as { DB?: unknown }).DB = env.DB;
+    (globalThis as unknown as { RELEASE_VALIDATION_SECRET?: string }).RELEASE_VALIDATION_SECRET =
+      env.RELEASE_VALIDATION_SECRET;
     (globalThis as unknown as { SYNC_IMPORT_SECRET?: string }).SYNC_IMPORT_SECRET = env.SYNC_IMPORT_SECRET;
     (globalThis as unknown as { SYNC_MAX_PDF_BYTES?: string }).SYNC_MAX_PDF_BYTES = env.SYNC_MAX_PDF_BYTES;
     const url = new URL(request.url);
