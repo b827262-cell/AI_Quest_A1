@@ -3,7 +3,7 @@ import { students, books, readingProgress, adminOverview } from "../db/schema";
 import { syntheticStudents, syntheticBooks, syntheticProgress } from "./generate";
 
 export async function seedD1(d1Database?: D1Database) {
-  const db = getDb(d1Database);
+  const db = await getDb(d1Database);
 
   // Insert students
   for (const s of syntheticStudents) {

@@ -1,4 +1,4 @@
-import { isProductionEnvironment } from "../db/index.ts";
+import { isProductionEnvironment } from "../db/index";
 
 export class R2UnavailableError extends Error {
   constructor(message = "Cloudflare R2 binding `BOOKS_BUCKET` is unavailable.") {
@@ -62,6 +62,8 @@ export class InMemoryR2Bucket {
   async get(key: string) {
     const item = this.objects.get(key);
     if (!item) return null;
+    const responseBody = new ArrayBuffer(item.body.byteLength);
+    new Uint8Array(responseBody).set(item.body);
     return {
       key,
       size: item.body.length,
@@ -69,8 +71,8 @@ export class InMemoryR2Bucket {
       httpEtag: `"${item.etag}"`,
       httpMetadata: item.httpMetadata,
       customMetadata: item.customMetadata,
-      body: new Response(item.body).body,
-      arrayBuffer: async () => item.body.buffer,
+      body: new Response(responseBody).body,
+      arrayBuffer: async () => responseBody.slice(0),
     };
   }
 

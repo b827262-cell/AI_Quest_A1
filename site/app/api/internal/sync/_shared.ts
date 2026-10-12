@@ -121,7 +121,13 @@ function incomingStudent(item: Record<string, unknown>, targetId: string, meta: 
   return { id: targetId, email: requiredString(item, "email"), displayName: requiredString(item, "displayName"), role: "student", isSynthetic: false, createdAt: typeof item.createdAt === "string" ? item.createdAt : meta.sourceUpdatedAt, sourceSystem: meta.sourceSystem, sourceRecordId: meta.sourceRecordId, sourceUpdatedAt: meta.sourceUpdatedAt, syncVersion: meta.syncVersion, checksum: meta.checksum };
 }
 
-async function findExisting(table: typeof students | typeof books | typeof readingProgress, meta: SyncMetadata) {
+function findExisting(table: typeof students, meta: SyncMetadata): Promise<typeof students.$inferSelect | null>;
+function findExisting(table: typeof books, meta: SyncMetadata): Promise<typeof books.$inferSelect | null>;
+function findExisting(table: typeof readingProgress, meta: SyncMetadata): Promise<typeof readingProgress.$inferSelect | null>;
+async function findExisting(
+  table: typeof students | typeof books | typeof readingProgress,
+  meta: SyncMetadata,
+): Promise<typeof students.$inferSelect | typeof books.$inferSelect | typeof readingProgress.$inferSelect | null> {
   const db = await getDb();
   const rows = await db.select().from(table).where(and(eq(table.sourceSystem, meta.sourceSystem), eq(table.sourceRecordId, meta.sourceRecordId))).limit(1);
   return rows[0] ?? null;

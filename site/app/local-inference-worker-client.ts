@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 // This module is deliberately loaded only by the browser worker seam below.
 // Vite owns the `?worker` transform, so the constructor it exports creates an
 // origin-relative worker URL instead of deriving one from vinext's serialized

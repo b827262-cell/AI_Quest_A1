@@ -99,6 +99,7 @@ export function isModelScaleDownloadProgress(bytes: DownloadProgress | null | un
 }
 
 export function formatDownloadProgress(bytes: DownloadProgress | null) {
+  if (!bytes) return "正在準備／下載模型資源：等待模型檔案大小資訊";
   if (isTrustworthyKnownTotalByteProgress(bytes) && isModelScaleDownloadProgress(bytes)) {
     return `正在下載本機 AI 模型：${Math.min(100, Math.round(bytes.loaded / (bytes.total as number) * 100))}% · ${formatDownloadBytes(bytes.loaded)} / ${formatDownloadBytes(bytes.total as number)}`;
   }
@@ -135,7 +136,7 @@ export function resolveProgressPanel({
 /** Let React commit the loading panel, then let the browser paint it once. */
 export function yieldForProgressPaint() {
   return new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
   });
 }
 
@@ -233,7 +234,7 @@ export default function Home() {
     // Polyfill monitor events often start with 0/0. They are not evidence of
     // a real transfer, so only body-counted/native positive values replace the
     // last truthful byte reading.
-    if (isTrustworthyByteProgress(bytes)) {
+    if (bytes && isTrustworthyByteProgress(bytes)) {
       if (isModelScaleDownloadProgress(bytes)) {
         setDownloadProgress(bytes);
         if (bytes.loaded > 0) lastProgressAt.current = Date.now();

@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
-import { getDb, D1UnavailableError, isProductionEnvironment } from "../db/index.ts";
-import { books } from "../db/schema.ts";
-import { syntheticBooks } from "../fixtures/generate.ts";
+import { getDb, D1UnavailableError, isProductionEnvironment } from "../db/index";
+import { books } from "../db/schema";
+import { syntheticBooks } from "../fixtures/generate";
 
 export type BookItem = {
   id: string;
