@@ -61,7 +61,7 @@ export function recordBrandMarkActivation(activationTimes: number[], now: number
 // Model artifacts cannot plausibly have a one-byte total. Polyfill monitor
 // events commonly use a 0..1 ratio with total=1, which is progress metadata,
 // not a byte count.
-function isTrustworthyKnownTotalByteProgress(bytes: DownloadProgress | null | undefined) {
+function isTrustworthyKnownTotalByteProgress(bytes: DownloadProgress | null | undefined): bytes is DownloadProgress {
   return Boolean(
     bytes
     && Number.isFinite(bytes.loaded)
@@ -77,7 +77,7 @@ function isTrustworthyKnownTotalByteProgress(bytes: DownloadProgress | null | un
 // A response without Content-Length has no truthful percentage, but a byte
 // count from its body is still useful once it is clearly model-sized. Keep
 // this distinct from the normalized 0..1 monitor ratios handled above.
-export function isTrustworthyUnknownTotalByteProgress(bytes: DownloadProgress | null | undefined) {
+export function isTrustworthyUnknownTotalByteProgress(bytes: DownloadProgress | null | undefined): bytes is DownloadProgress {
   return Boolean(
     bytes
     && Number.isFinite(bytes.loaded)
@@ -87,7 +87,7 @@ export function isTrustworthyUnknownTotalByteProgress(bytes: DownloadProgress | 
   );
 }
 
-export function isTrustworthyByteProgress(bytes: DownloadProgress | null | undefined) {
+export function isTrustworthyByteProgress(bytes: DownloadProgress | null | undefined): bytes is DownloadProgress {
   return isTrustworthyKnownTotalByteProgress(bytes) || isTrustworthyUnknownTotalByteProgress(bytes);
 }
 
@@ -135,7 +135,7 @@ export function resolveProgressPanel({
 /** Let React commit the loading panel, then let the browser paint it once. */
 export function yieldForProgressPaint() {
   return new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
   });
 }
 

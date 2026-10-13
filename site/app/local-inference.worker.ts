@@ -7,7 +7,7 @@ import { createModelCacheFetch, markLocalModelCacheReady } from "./local-model-c
 // before this dedicated worker evaluates the dependency. Give that probe a
 // worker-local global object, deliberately without `document`, so it remains
 // a Web Worker rather than being mistaken for a browser page.
-const workerGlobal = globalThis as typeof globalThis & { window?: typeof globalThis };
+const workerGlobal = globalThis as unknown as { window?: typeof globalThis };
 workerGlobal.window ??= globalThis;
 
 // Do not turn this into a static import: the compatibility shim above must
@@ -96,7 +96,9 @@ self.addEventListener("message", async ({ data }: MessageEvent<WorkerMessage>) =
       messages,
       // Qwen3 otherwise spends this small deterministic output budget in its
       // reasoning preamble, leaving no complete JSON answer for the parser.
-      { tokenize: false, add_generation_prompt: true, enable_thinking: false },
+      // `enable_thinking` is a Qwen3 chat-template variable that Transformers.js
+      // forwards; its public options type only lists cross-model keys.
+      { tokenize: false, add_generation_prompt: true, enable_thinking: false } as NonNullable<Parameters<typeof tokenizer.apply_chat_template>[1]>,
     ) + (data.assistantPrefix ?? "");
     const output = await generator(chatPrompt, {
       // A concise Traditional-Chinese answer must complete inside the page's
