@@ -2,15 +2,15 @@
 Description=B3 iBrain exam-course search API (read-only, 127.0.0.1:4360)
 # nginx (deploy/nginx/ai-stu-r1.conf) and the Cloudflare Tunnel both reach this
 # sidecar on loopback only; it is never bound to a public interface.
-After=network-online.target postgresql.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-# Copy data/b3-ibrain-search-api/*.mjs here (no build step, no npm deps).
+# Installed by deploy/scripts/install-b3-search.sh (repo-relative layout).
 WorkingDirectory=/opt/b3-ibrain-search-api
 EnvironmentFile=/etc/b3-search-api/search.env
-ExecStart=/usr/bin/node /opt/b3-ibrain-search-api/search-server.mjs
+ExecStart=/opt/b3-ibrain-search-api/bin/node data/b3-ibrain-search-api/search-server.mjs
 Restart=always
 RestartSec=3
 # Read-only service: no persistent state, no privilege, no writable paths.

@@ -3507,6 +3507,11 @@ body {
 .knowledge-source-link:hover { text-decoration: underline; }
 .knowledge-source-url { color: #9ca3af; font-size: 11px; word-break: break-all; }
 .knowledge-empty { margin: 22px 0 2px; color: #7b869b; }
+.knowledge-query-error { margin-top: 18px; padding: 18px; border: 1px solid #e8c878; border-radius: 16px; color: #654711; background: #fff8e8; line-height: 1.7; overflow-wrap: anywhere; }
+.knowledge-query-error h3 { margin: 0 0 10px; color: #654711; }
+.knowledge-query-error p { margin: 10px 0 0; }
+.knowledge-query-error ul { display: block; margin: 10px 0; padding-left: 24px; list-style: disc; }
+.knowledge-query-error li { margin: 5px 0; padding: 0; border: 0; border-radius: 0; background: none; }
 .student-login-page { min-height: calc(100svh - 40px); display: grid; place-items: center; padding: 36px 20px; background: linear-gradient(145deg, #f6fbff, #fbf7ff); }
 .student-login-card { width: min(100%, 440px); padding: 32px; border: 1px solid rgba(133, 149, 208, .24); border-radius: 25px; background: rgba(255,255,255,.88); box-shadow: 0 18px 46px rgba(87,98,173,.13); }
 .login-back-link { color: #5869c9; font-size: 13px; font-weight: 700; }

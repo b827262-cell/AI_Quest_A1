@@ -51,4 +51,27 @@ describe("public exam-course search contract", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("down", { status: 503 }));
     await expect(searchPublicExamCourses({ query: "憲法" }, fetcher)).rejects.toThrow("HTTP 503");
   });
+
+  it("preserves the unsupported snapshot code with a localized message for HTTP 400", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      error: "unsupported_snapshot_query", message: "Snapshot keyword search supports plain words only"
+    }), { status: 400 }));
+    const error = await searchPublicExamCourses({ query: "行政法 OR 民法" }, fetcher).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(PublicCourseSearchError);
+    expect(error).toMatchObject({ code: "unsupported_snapshot_query", message: "此搜尋語法暫時無法使用，請使用一般關鍵字。" });
+    expect((error as Error).message).not.toMatch(/[A-Za-z]|400/);
+  });
+
+  it.each([
+    [400, JSON.stringify({ error: "invalid_request", message: "Invalid request" })],
+    [400, "not JSON"],
+    [400, "null"],
+    [503, JSON.stringify({ error: "unsupported_snapshot_query", message: "Service unavailable" })]
+  ])("keeps the generic HTTP %i behavior for other errors", async (status, body) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status }));
+    const error = await searchPublicExamCourses({ query: "憲法" }, fetcher).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(PublicCourseSearchError);
+    expect(error).toMatchObject({ message: `公開課程搜尋暫時無法使用（HTTP ${status}）` });
+    expect((error as PublicCourseSearchError).code).toBeUndefined();
+  });
 });
