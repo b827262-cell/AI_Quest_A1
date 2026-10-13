@@ -1,7 +1,7 @@
 import { and, eq, isNull, or } from "drizzle-orm";
 import type { Db } from "../client";
 import { aiCredentialModelQuotas, aiProviderCredentials } from "../schema";
-import { localParts, nextDailyReset } from "./timezone.util";
+import { nextDailyReset } from "./timezone.util";
 import { newId } from "./util";
 
 export type QuotaUsageSource = "provider_response" | "system_estimated";

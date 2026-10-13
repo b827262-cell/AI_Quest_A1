@@ -509,7 +509,7 @@ async function createIsolatedLocalInferenceWorker(
   if (typeof document === "undefined" && typeof Worker !== "undefined") {
     return new (Worker as unknown as { new(): Worker })();
   }
-  const workerClient: LocalInferenceWorkerClientModule = await import("./local-inference-worker-client.ts");
+  const workerClient: LocalInferenceWorkerClientModule = await import("./local-inference-worker-client");
   return workerClient.createLocalInferenceWorker();
 }
 

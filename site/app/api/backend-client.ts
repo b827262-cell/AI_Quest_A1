@@ -1,4 +1,4 @@
-import { isProductionEnvironment } from "../../db/index.ts";
+import { isProductionEnvironment } from "../../db";
 
 type BackendRuntime = typeof globalThis & { STAGING_BACKEND_ORIGIN?: string };
 

@@ -50,7 +50,7 @@ export async function GET(request: Request) {
       );
     }
 
-    let bucket: any;
+    let bucket: Awaited<ReturnType<typeof getStorageBucket>>;
     try {
       bucket = await getStorageBucket();
     } catch (err) {

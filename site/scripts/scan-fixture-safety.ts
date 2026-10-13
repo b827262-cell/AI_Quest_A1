@@ -23,7 +23,6 @@ function checkFixtureSafety() {
     const parsed = JSON.parse(content);
 
     // 1. Check for real PII / email domains
-    const realEmailRegex = /@[a-zA-Z0-9.-]+\.(com|org|net|edu|tw|cn)\b/i;
     const syntheticEmailRegex = /@(synthetic\.|example\.)/i;
     const matches = content.match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
     for (const email of matches) {
