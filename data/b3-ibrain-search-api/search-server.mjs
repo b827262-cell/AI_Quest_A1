@@ -111,16 +111,23 @@ export function createSearchServer({ store }) {
   });
 }
 
-/**
- * Starts the sidecar. `store` defaults to a live PostgreSQL-backed B2 store;
- * pass a snapshot store (see snapshot-store.mjs) to run without a database.
- */
+/** Rejects unintended public binding unless explicitly opted in. */
+export function validateSearchHost(host, allowNonLoopback = process.env.B3_SEARCH_ALLOW_NON_LOOPBACK) {
+  const loopback = typeof host === "string" && ["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase());
+  if (!loopback && allowNonLoopback !== "1") {
+    throw new Error("B3 refuses a non-loopback B3_SEARCH_HOST; use 127.0.0.1, ::1, or localhost, or explicitly set B3_SEARCH_ALLOW_NON_LOOPBACK=1.");
+  }
+}
+
+/** Starts the sidecar with PostgreSQL by default, or an injected snapshot store. */
 export function startSearchServer({
   port = Number(process.env.B3_SEARCH_PORT ?? 4360),
   host = process.env.B3_SEARCH_HOST ?? "127.0.0.1",
   connectionString = process.env.DATABASE_URL,
   store = null,
+  allowNonLoopback = process.env.B3_SEARCH_ALLOW_NON_LOOPBACK,
 } = {}) {
+  validateSearchHost(host, allowNonLoopback);
   const activeStore = store ?? createPostgresStore({ connectionString });
   const server = createSearchServer({ store: activeStore });
   server.listen(port, host, () => {
