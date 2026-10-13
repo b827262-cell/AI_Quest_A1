@@ -20,6 +20,7 @@ import http from "node:http";
 import { pathToFileURL } from "node:url";
 import { searchCourses, SearchDataError, SearchInputError } from "./search-core.mjs";
 import { createPostgresStore } from "./postgres-store.mjs";
+import { loadSnapshotStore } from "./snapshot-store.mjs";
 
 const SEARCH_PATH = "/api/public/exam-courses/search";
 const LEGACY_SEARCH_PATH = "/api/exam-courses/search";
@@ -55,7 +56,7 @@ function errorPayload(error) {
   };
 }
 
-export function publicContractResponse(result) {
+export function publicContractResponse(result, mode = "postgres") {
   const query = { limit: result.query.limit };
   if (result.query.exam_year !== null && result.query.exam_year !== undefined) query.exam_year = result.query.exam_year;
   if (result.mode === "course_code" || result.mode === "product_code") query.course_code = result.query.course_code;
@@ -63,7 +64,7 @@ export function publicContractResponse(result) {
   else if (result.mode === "scope") query.applicable_scope = result.query.scope;
   else query.keyword = result.query.keyword;
   query.search_mode = result.mode === "course_code" ? "product_code" : result.mode === "keyword" ? "product_name" : result.mode;
-  return { contractVersion: 1, mode: "postgres", query, total: result.count, results: result.results };
+  return { contractVersion: 1, mode, query, total: result.count, results: result.results };
 }
 
 /** Builds the HTTP server around an injected B2 store. */
@@ -99,7 +100,7 @@ export function createSearchServer({ store }) {
           q: url.searchParams.get("q") ?? undefined,
           limit: url.searchParams.get("limit") ?? undefined,
         });
-        sendJson(res, 200, publicContractResponse(result));
+        sendJson(res, 200, publicContractResponse(result, store.kind === "snapshot" ? "snapshot" : "postgres"));
       } catch (error) {
         sendJson(res, errorStatus(error), errorPayload(error));
       }
@@ -110,24 +111,36 @@ export function createSearchServer({ store }) {
   });
 }
 
-/** Starts the sidecar using a live PostgreSQL-backed B2 store. */
+/**
+ * Starts the sidecar. `store` defaults to a live PostgreSQL-backed B2 store;
+ * pass a snapshot store (see snapshot-store.mjs) to run without a database.
+ */
 export function startSearchServer({
   port = Number(process.env.B3_SEARCH_PORT ?? 4360),
   host = process.env.B3_SEARCH_HOST ?? "127.0.0.1",
   connectionString = process.env.DATABASE_URL,
+  store = null,
 } = {}) {
-  const store = createPostgresStore({ connectionString });
-  const server = createSearchServer({ store });
+  const activeStore = store ?? createPostgresStore({ connectionString });
+  const server = createSearchServer({ store: activeStore });
   server.listen(port, host, () => {
-    process.stdout.write(`b3-ibrain-search-api listening on http://${host}:${port}${SEARCH_PATH}\n`);
+    process.stdout.write(`b3-ibrain-search-api (${activeStore.kind ?? "custom"} store) listening on http://${host}:${port}${SEARCH_PATH}\n`);
   });
   return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (!process.env.DATABASE_URL) {
-    process.stderr.write("B3 requires DATABASE_URL (read-only B2 PostgreSQL); refusing to start.\n");
+  if (process.env.DATABASE_URL) {
+    startSearchServer();
+  } else if (process.env.B3_SEARCH_STORE === "snapshot") {
+    // Read-only validated B1 snapshot; no database required.
+    const store = await loadSnapshotStore({
+      snapshotPath: process.env.B3_SNAPSHOT_PATH,
+      manifestPath: process.env.B3_MANIFEST_PATH,
+    });
+    startSearchServer({ store });
+  } else {
+    process.stderr.write("B3 requires DATABASE_URL (read-only B2 PostgreSQL) or B3_SEARCH_STORE=snapshot; refusing to start.\n");
     process.exit(1);
   }
-  startSearchServer();
 }
