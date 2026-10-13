@@ -99,6 +99,9 @@ importers:
       '@ai-smartbook/book-core':
         specifier: workspace:*
         version: link:../../packages/book-core
+      '@ai-smartbook/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@ai-smartbook/db':
         specifier: workspace:*
         version: link:../../packages/db

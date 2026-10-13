@@ -121,6 +121,16 @@ describe("Student Auth HTTP integration", () => {
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
+    const cancelledStart = await dispatch(router, requestFor("/google/start", "GET", { returnTo: "//attacker.example" }));
+    const cancelledState = new URL(String(cancelledStart.headers.location)).searchParams.get("state")!;
+    const cancelled = await dispatch(router, requestFor("/google/callback", "GET", { state: cancelledState, error: "access_denied" }));
+    expect(cancelled.statusCode).toBe(302);
+    expect(cancelled.headers.location).toBe("/auth/callback?error=oauth_cancelled&next=%2Fbooks");
+    expect(cancelled.headers["set-cookie"]).toBeUndefined();
+    const cancelledReplay = await dispatch(router, requestFor("/google/callback", "GET", { state: cancelledState, code: "authorization-code" }));
+    expect(cancelledReplay.statusCode).toBe(400);
+    expect(cancelledReplay.body).toEqual({ error: "OAUTH_STATE_INVALID" });
+
     const start = await dispatch(router, requestFor("/google/start", "GET", { returnTo: "/books" }));
     expect(start.statusCode).toBe(302);
     const authorizationUrl = new URL(String(start.headers.location));
@@ -133,6 +143,7 @@ describe("Student Auth HTTP integration", () => {
     expect(String(rawCookie)).toMatch(/HttpOnly/);
     expect(String(rawCookie)).toMatch(/Secure/);
     expect(String(rawCookie)).toMatch(/SameSite=strict/i);
+    expect(String(rawCookie)).toMatch(/Max-Age=3600/);
 
     const me = await dispatch(router, requestFor("/me", "GET", {}, undefined, { cookie: sessionCookie }));
     expect(me.body).toMatchObject({ authenticated: true, user: { email: "student@example.test", profileCompleted: false } });

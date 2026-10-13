@@ -32,3 +32,16 @@ export interface StudentAuthMeResponse {
   profile: StudentProfile | null;
   redirectReason?: StudentRedirectReason;
 }
+
+/**
+ * A return location is always an application-relative learning route. This is
+ * intentionally browser-safe so every client transition and the server OAuth
+ * boundary apply the same open-redirect policy.
+ */
+export function safeStudentReturnTo(value: string | null | undefined, fallback = "/books"): string {
+  const candidate = value?.trim();
+  if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//") || candidate.includes("\\") || /[\r\n]/.test(candidate)) {
+    return fallback;
+  }
+  return candidate;
+}

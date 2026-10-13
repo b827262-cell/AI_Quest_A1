@@ -1,6 +1,27 @@
 import { isProductionEnvironment } from "../../db/index.ts";
 
-export const SHARED_BACKEND_ORIGIN = "https://ai-quest-a1-backend.b827262.chatgpt.site";
+type BackendRuntime = typeof globalThis & { STAGING_BACKEND_ORIGIN?: string };
+
+/**
+ * A backend may only be enabled by an explicitly injected staging origin.  There
+ * is intentionally no fallback: absent configuration must not cause an outbound
+ * request to a production service.
+ */
+function getStagingBackendOrigin(): string | null {
+  const configuredOrigin = (globalThis as BackendRuntime).STAGING_BACKEND_ORIGIN;
+  if (!configuredOrigin) return null;
+
+  try {
+    const origin = new URL(configuredOrigin);
+    return origin.protocol === "https:" && origin.origin === configuredOrigin.replace(/\/$/, "")
+      ? origin.origin
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export const SHARED_BACKEND_ORIGIN = getStagingBackendOrigin();
 
 export const ALLOWED_CORS_ORIGINS = [
   "https://ai-quest-a1-student.b827262.chatgpt.site",
@@ -24,6 +45,7 @@ export function isBackendSite(request: Request): boolean {
  * Only delegates in production when running on a frontend domain (student or admin).
  */
 export function shouldDelegateToBackend(request: Request): boolean {
+  if (!SHARED_BACKEND_ORIGIN) return false;
   if (!isProductionEnvironment()) return false;
   try {
     const url = new URL(request.url);
@@ -47,6 +69,16 @@ export function shouldDelegateToBackend(request: Request): boolean {
  * Forward/proxy a request to the shared backend worker.
  */
 export async function delegateToBackend(request: Request, path: string): Promise<Response> {
+  if (!SHARED_BACKEND_ORIGIN) {
+    return Response.json(
+      {
+        error: "backend_disabled",
+        message: "No staging backend origin is configured",
+      },
+      { status: 503 }
+    );
+  }
+
   const reqUrl = new URL(request.url);
   const backendTarget = new URL(path, SHARED_BACKEND_ORIGIN);
   backendTarget.search = reqUrl.search;

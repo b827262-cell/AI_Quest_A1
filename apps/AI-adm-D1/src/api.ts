@@ -20,6 +20,7 @@ import type {
 } from "@ai-smartbook/schema";
 import type { SiteConfig, SiteConfigUpdate } from "@ai-smartbook/schema";
 import { ADMIN_CSRF_COOKIE } from "./admin-auth-contract";
+import { createExamSnapshotHttpClient, type ExamSnapshotClient, type ExamSnapshotRequest } from "./exam-snapshots-contract";
 
 export interface ChapterInput {
   title: string;
@@ -346,6 +347,16 @@ export function readCsrfCookie(): string {
   }
   return "";
 }
+
+/**
+ * Slot D real wiring. The 高普考資料快照 page talks to the two admin endpoints
+ * through the same `http` helper as every other admin call, so cookies, the CSRF
+ * header and the single 401 policy are not re-implemented for this page.
+ */
+const examSnapshotRequest: ExamSnapshotRequest = <T>(path: string, init?: { method?: string; headers?: Record<string, string> }) =>
+  http<T>(path, init);
+
+export const examSnapshotApi: ExamSnapshotClient = createExamSnapshotHttpClient(examSnapshotRequest);
 
 export const adminApi = {
   login: (username: string, password: string) => http<{ authenticated: true; user: { username: string } }>("/api/admin/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
