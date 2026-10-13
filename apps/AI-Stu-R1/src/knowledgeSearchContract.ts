@@ -35,7 +35,7 @@ export interface PublicCourseSearchRequest {
 export const PUBLIC_EXAM_COURSE_SEARCH_PATH = "/api/public/exam-courses/search";
 
 export class PublicCourseSearchError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly code?: string) {
     super(message);
     this.name = "PublicCourseSearchError";
   }
@@ -77,7 +77,15 @@ export async function searchPublicExamCourses(
   const response = await fetcher(`${PUBLIC_EXAM_COURSE_SEARCH_PATH}?${searchUrl(request).toString()}`, {
     headers: { Accept: "application/json" }
   });
-  if (!response.ok) throw new PublicCourseSearchError(`公開課程搜尋暫時無法使用（HTTP ${response.status}）`);
+  if (!response.ok) {
+    if (response.status === 400) {
+      const body: unknown = await response.json().catch(() => null);
+      if (body !== null && typeof body === "object" && "error" in body && body.error === "unsupported_snapshot_query") {
+        throw new PublicCourseSearchError("此搜尋語法暫時無法使用，請使用一般關鍵字。", "unsupported_snapshot_query");
+      }
+    }
+    throw new PublicCourseSearchError(`公開課程搜尋暫時無法使用（HTTP ${response.status}）`);
+  }
 
   const parsed = examCourseSearchResponseV1Schema.safeParse(await response.json() as unknown);
   if (!parsed.success) throw new PublicCourseSearchError("公開課程搜尋回應格式無效");

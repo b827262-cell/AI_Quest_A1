@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   searchPublicExamCourses,
   PUBLIC_SEARCH_MODE_OPTIONS,
+  PublicCourseSearchError,
   type PublicCourseSearchResult,
   type PublicExamYear,
   type PublicSourceSearchMode
@@ -36,7 +37,7 @@ export function KnowledgeAiPage() {
   const [results, setResults] = useState<PublicCourseSearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<{ message: string; code?: string } | null>(null);
 
   async function search(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -48,7 +49,10 @@ export function KnowledgeAiPage() {
     } catch (error) {
       setResults([]);
       setHasSearched(true);
-      setSearchError(error instanceof Error ? error.message : "公開課程搜尋暫時無法使用");
+      setSearchError({
+        message: error instanceof Error ? error.message : "公開課程搜尋暫時無法使用",
+        code: error instanceof PublicCourseSearchError ? error.code : undefined
+      });
     } finally {
       setBusy(false);
     }
@@ -107,7 +111,18 @@ export function KnowledgeAiPage() {
               <h2>搜尋結果</h2>
               <span>{results.length} 筆 · 查詢方式：{SEARCH_MODE_LABELS[searchMode]}</span>
             </div>
-            {searchError ? <p className="knowledge-empty" role="alert">{searchError}</p> : results.length ? <ul>{buildKnowledgePriorities(results).map((priority) => {
+            {searchError?.code === "unsupported_snapshot_query" ? (
+              <div className="knowledge-query-error" role="alert" aria-labelledby="knowledge-query-error-heading">
+                <h3 id="knowledge-query-error-heading">此搜尋語法暫時無法使用</h3>
+                <p>目前的搜尋只支援一般關鍵字，不支援以下語法：</p>
+                <ul>
+                  <li>OR（例如：行政法 OR 民法）</li>
+                  <li>引號片語（例如：{"\"行政法\""}）</li>
+                  <li>否定詞（例如：-民法）</li>
+                </ul>
+                <p>請只輸入一般關鍵字，多個詞以空白分隔（會同時符合所有詞），例如：憲法 行政；或改用上方的品名、品號、師資、適用範圍查詢。</p>
+              </div>
+            ) : searchError ? <p className="knowledge-empty" role="alert">{searchError.message}</p> : results.length ? <ul>{buildKnowledgePriorities(results).map((priority) => {
               const course = priority.course;
               return <li key={`${course.exam_year}-${course.course_code}`}>
                 <div className="knowledge-card-meta">
