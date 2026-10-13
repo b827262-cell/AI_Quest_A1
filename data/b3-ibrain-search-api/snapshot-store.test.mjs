@@ -3,6 +3,7 @@ import { once } from "node:events";
 import test from "node:test";
 import { createSnapshotStore, loadSnapshotStore } from "./snapshot-store.mjs";
 import { createSearchServer } from "./search-server.mjs";
+import { SearchInputError } from "./search-core.mjs";
 
 const rows = [
   { exam_year: 115, course_code: "ABC1", course_name: "統計學 題庫班", course_content: "考古題與經典題型", source_url: "https://ec.ibrain.com.tw/a" },
@@ -32,6 +33,46 @@ test("teacher and scope are NULL in the snapshot, as in the B2 import", async ()
   const [row] = await store.exact({ courseCode: "ABC1", limit: 1 });
   assert.deepEqual(Object.keys(row), ["exam_year", "course_code", "course_name", "course_content", "teacher", "applicable_scope", "source_url"]);
   assert.equal(row.teacher, null);
+});
+
+test("snapshot keyword rejects OR, phrases and negation even when no rows match", async () => {
+  const store = createSnapshotStore({ rows: [] });
+  for (const keyword of ["行政法 OR 民法", "行政法 or 民法", '"行政法 民法"', "行政法 -民法", "-民法"]) {
+    await assert.rejects(store.keyword({ keyword, limit: 10 }),
+      (error) => error instanceof SearchInputError && error.code === "unsupported_snapshot_query");
+  }
+});
+
+test("snapshot keyword keeps percent, underscore and embedded hyphens literal", async () => {
+  const store = createSnapshotStore({ rows: [
+    { ...rows[0], course_name: "A_B 100% civil-law", course_content: "" },
+    { ...rows[1], course_name: "AXB 100 civil law", course_content: "" },
+  ] });
+  for (const keyword of ["A_B", "100%", "civil-law"]) {
+    assert.deepEqual((await store.keyword({ keyword, limit: 10 })).map((r) => r.course_code), ["ABC1"]);
+  }
+});
+
+test("HTTP snapshot keyword surfaces unsupported syntax as 400 with a clear error", async () => {
+  const server = createSearchServer({ store: createSnapshotStore({ rows }) });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const { port } = server.address();
+    for (const params of [
+      { q: "行政法 OR 民法" },
+      { keyword: '"行政法 民法"', search_mode: "product_name" },
+      { keyword: "行政法 -民法", search_mode: "keyword" },
+    ]) {
+      const response = await fetch(`http://127.0.0.1:${port}/api/public/exam-courses/search?${new URLSearchParams(params)}`);
+      assert.equal(response.status, 400);
+      const body = await response.json();
+      assert.equal(body.error, "unsupported_snapshot_query");
+      assert.match(body.message, /OR, quoted phrases, and negation/);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("loads the real validated 16-row B1 snapshot and serves it over HTTP", async () => {

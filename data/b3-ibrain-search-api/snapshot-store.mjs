@@ -17,6 +17,7 @@
 // and apply limit.
 
 import { loadValidatedB1Snapshot } from "../b2-ibrain-postgresql/validate-snapshot.mjs";
+import { SearchInputError } from "./search-core.mjs";
 
 const COLUMNS = ["exam_year", "course_code", "course_name", "course_content", "teacher", "applicable_scope", "source_url"];
 
@@ -54,6 +55,14 @@ export function createSnapshotStore({ rows }) {
       return select(examYear, (row) => String(row.course_code).toLowerCase() === code, limit);
     },
     async keyword({ examYear = null, keyword, limit }) {
+      // Option (b): fail explicitly rather than silently treating websearch
+      // operators as literal AND terms. PostgreSQL mode still supports them.
+      if (/"|(?:^|\s)OR(?:\s|$)|(?:^|\s)-/i.test(String(keyword))) {
+        throw new SearchInputError(
+          "unsupported_snapshot_query",
+          "Snapshot keyword search supports plain words only; OR, quoted phrases, and negation (-term) are unsupported. Use PostgreSQL mode for websearch syntax.",
+        );
+      }
       const terms = String(keyword).trim().split(/\s+/).filter(Boolean);
       return select(examYear, (row) => {
         if (contains(row.course_name, keyword) || contains(row.course_content, keyword)) return true;
