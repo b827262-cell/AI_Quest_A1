@@ -20,7 +20,7 @@ export async function getDb(d1Database?: D1Database) {
   if (!targetDb) {
     try {
       // Dynamic import to prevent Node.js module loader from crashing in non-workerd environments
-      // @ts-ignore
+      // @ts-expect-error cloudflare:workers is only available in the workers runtime
       const cf = await import("cloudflare:workers");
       targetDb = cf?.env?.DB;
     } catch {
@@ -29,7 +29,11 @@ export async function getDb(d1Database?: D1Database) {
   }
 
   if (!targetDb) {
-    targetDb = (globalThis as any)?.DB || (globalThis as any)?.__env__?.DB;
+    const globalBindings = globalThis as unknown as {
+      DB?: unknown;
+      __env__?: { DB?: unknown };
+    };
+    targetDb = (globalBindings.DB || globalBindings.__env__?.DB) as typeof targetDb;
   }
 
   if (!targetDb) {

@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
-import { getDb, D1UnavailableError, isProductionEnvironment } from "../db/index.ts";
-import { books } from "../db/schema.ts";
-import { syntheticBooks } from "../fixtures/generate.ts";
+import { getDb, D1UnavailableError, isProductionEnvironment } from "../db/index";
+import { books } from "../db/schema";
+import { syntheticBooks } from "../fixtures/generate";
 
 export type BookItem = {
   id: string;
@@ -52,7 +52,7 @@ function initInMemoryBookStoreIfEmpty() {
 }
 
 export async function listAllBooks(
-  d1Database?: any,
+  d1Database?: Parameters<typeof getDb>[0],
   activeOnly = false
 ): Promise<BookItem[]> {
   initInMemoryBookStoreIfEmpty();
@@ -66,7 +66,7 @@ export async function listAllBooks(
     if (rows && rows.length > 0) {
       return rows as BookItem[];
     }
-  } catch (err) {
+  } catch {
     if (isProductionEnvironment()) {
       throw new D1UnavailableError("D1 database binding 'DB' is unavailable in production");
     }
@@ -78,7 +78,7 @@ export async function listAllBooks(
 
 export async function getBookById(
   id: string,
-  d1Database?: any
+  d1Database?: Parameters<typeof getDb>[0]
 ): Promise<BookItem | null> {
   initInMemoryBookStoreIfEmpty();
 
@@ -88,7 +88,7 @@ export async function getBookById(
     if (rows && rows.length > 0) {
       return rows[0] as BookItem;
     }
-  } catch (err) {
+  } catch {
     if (isProductionEnvironment()) {
       throw new D1UnavailableError("D1 database binding 'DB' is unavailable in production");
     }
@@ -102,7 +102,7 @@ export async function saveBookMetadata(
     createdAt?: string;
     updatedAt?: string;
   },
-  d1Database?: any
+  d1Database?: Parameters<typeof getDb>[0]
 ): Promise<BookItem> {
   initInMemoryBookStoreIfEmpty();
 
@@ -151,7 +151,7 @@ export async function saveBookMetadata(
 
 export async function markBookDeleted(
   id: string,
-  d1Database?: any
+  d1Database?: Parameters<typeof getDb>[0]
 ): Promise<{ deleted: boolean; alreadyDeleted?: boolean }> {
   initInMemoryBookStoreIfEmpty();
 

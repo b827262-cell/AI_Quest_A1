@@ -10,6 +10,7 @@ import { AiAnalyticsPage } from "./pages/AiAnalyticsPage";
 import { AiProvidersPage } from "./pages/AiProvidersPage";
 import { AiQuotaCenterPage } from "./pages/AiQuotaCenterPage";
 import { AiQualityEvaluationsPage } from "./pages/AiQualityEvaluationsPage";
+import { ExamSnapshotsPage } from "./pages/ExamSnapshotsPage";
 import { BooksPage } from "./pages/BooksPage";
 import { NewBookPage } from "./pages/NewBookPage";
 import { BookDetail } from "./pages/BookDetail";
@@ -41,6 +42,7 @@ function ProtectedAdminRoutes() {
             <Route path="/admin/accounts" element={<AdminAccountsPage />} />
             <Route path="/admin/appearance" element={<AppearanceSettingsPage />} />
             <Route path="/admin/site-config" element={<SiteConfigPage />} />
+            <Route path="/admin/exam-snapshots" element={<ExamSnapshotsPage />} />
             <Route path="/admin/ai-analytics" element={<AiAnalyticsPage />} />
             <Route path="/admin/ai-providers" element={<AiProvidersPage />} />
             <Route path="/admin/ai-quota-center" element={<AiQuotaCenterPage />} />

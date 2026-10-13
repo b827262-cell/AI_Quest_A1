@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 const ranges = ["最近一週", "最近一月", "全部"];
 const navItems = ["首頁", "帳戶管理", "介面設定", "網站首頁設定", "AI 執行分析", "AI Provider／金鑰", "AI 每日配額中心", "AI 品質評測"];
@@ -18,7 +19,7 @@ export default function AdminPage() {
     <main className="admin-page">
       <header className="admin-topbar">
         <a href="/admin" aria-label="管理後台首頁"><Brand /></a>
-        <div className="admin-account"><a href="/">首頁</a><span>admin</span><b>A</b><button type="button">登出</button></div>
+        <div className="admin-account"><Link href="/">首頁</Link><span>admin</span><b>A</b><button type="button">登出</button></div>
       </header>
       <aside className="admin-sidebar" aria-label="管理選單">
         <p className="admin-side-title">管理後台</p>

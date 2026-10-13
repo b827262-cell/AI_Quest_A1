@@ -1,4 +1,4 @@
-import { isProductionEnvironment } from "../db/index.ts";
+import { isProductionEnvironment } from "../db/index";
 
 export class R2UnavailableError extends Error {
   constructor(message = "Cloudflare R2 binding `BOOKS_BUCKET` is unavailable.") {
@@ -7,16 +7,31 @@ export class R2UnavailableError extends Error {
   }
 }
 
+export type R2ObjectMetaLike = { size: number; httpMetadata?: unknown; customMetadata?: Record<string, unknown> };
+export type R2ObjectBodyLike = R2ObjectMetaLike & {
+  body?: BodyInit | null;
+  httpEtag?: string;
+  arrayBuffer: () => Promise<ArrayBufferLike>;
+};
+export type R2PutOptions = { httpMetadata?: unknown; customMetadata?: Record<string, unknown> };
+export type R2PutValue = Uint8Array | ArrayBuffer | string | { arrayBuffer(): Promise<ArrayBufferLike> };
+export type R2BucketLike = {
+  get(key: string): Promise<R2ObjectBodyLike | null>;
+  head?(key: string): Promise<R2ObjectMetaLike | null>;
+  put(key: string, value: R2PutValue, options?: R2PutOptions): Promise<unknown>;
+  delete(key: string): Promise<unknown>;
+};
+
 /**
  * In-memory mock R2 bucket for local dev/test when real Cloudflare R2 is not bound.
  */
 export class InMemoryR2Bucket {
   private objects = new Map<
     string,
-    { body: Uint8Array; httpMetadata?: any; customMetadata?: any; etag: string }
+    { body: Uint8Array; httpMetadata?: unknown; customMetadata?: Record<string, unknown>; etag: string }
   >();
 
-  async put(key: string, value: any, options?: any) {
+  async put(key: string, value: R2PutValue, options?: R2PutOptions) {
     let bytes: Uint8Array;
     if (value instanceof Uint8Array) {
       bytes = value;
@@ -24,7 +39,7 @@ export class InMemoryR2Bucket {
       bytes = new Uint8Array(value);
     } else if (typeof value === "string") {
       bytes = new TextEncoder().encode(value);
-    } else if (value && typeof value.arrayBuffer === "function") {
+    } else if (value && "arrayBuffer" in value) {
       bytes = new Uint8Array(await value.arrayBuffer());
     } else {
       bytes = new Uint8Array(0);
@@ -47,6 +62,8 @@ export class InMemoryR2Bucket {
   async get(key: string) {
     const item = this.objects.get(key);
     if (!item) return null;
+    const responseBody = new ArrayBuffer(item.body.byteLength);
+    new Uint8Array(responseBody).set(item.body);
     return {
       key,
       size: item.body.length,
@@ -54,8 +71,8 @@ export class InMemoryR2Bucket {
       httpEtag: `"${item.etag}"`,
       httpMetadata: item.httpMetadata,
       customMetadata: item.customMetadata,
-      body: new Response(item.body).body,
-      arrayBuffer: async () => item.body.buffer,
+      body: new Response(responseBody).body,
+      arrayBuffer: async () => responseBody.slice(0),
     };
   }
 
@@ -89,12 +106,12 @@ export class InMemoryR2Bucket {
  * Retrieves the Cloudflare R2 bucket binding.
  * Throws R2UnavailableError in production if BOOKS_BUCKET is not accessible.
  */
-export async function getStorageBucket(r2Bucket?: any): Promise<any> {
+export async function getStorageBucket(r2Bucket?: R2BucketLike): Promise<R2BucketLike> {
   let targetBucket = r2Bucket;
   if (!targetBucket) {
     try {
       // Dynamic import to avoid module loader crash in non-workerd environments
-      // @ts-ignore
+      // @ts-expect-error cloudflare:workers is only available in the workers runtime
       const cf = await import("cloudflare:workers");
       targetBucket = cf?.env?.BOOKS_BUCKET;
     } catch {
@@ -103,10 +120,15 @@ export async function getStorageBucket(r2Bucket?: any): Promise<any> {
   }
 
   if (!targetBucket) {
+    const globalBindings = globalThis as unknown as {
+      BOOKS_BUCKET?: R2BucketLike;
+      __env__?: { BOOKS_BUCKET?: R2BucketLike };
+      env?: { BOOKS_BUCKET?: R2BucketLike };
+    };
     targetBucket =
-      (globalThis as any)?.BOOKS_BUCKET ||
-      (globalThis as any)?.__env__?.BOOKS_BUCKET ||
-      (globalThis as any)?.env?.BOOKS_BUCKET;
+      globalBindings.BOOKS_BUCKET ||
+      globalBindings.__env__?.BOOKS_BUCKET ||
+      globalBindings.env?.BOOKS_BUCKET;
   }
 
   if (!targetBucket) {
@@ -115,7 +137,7 @@ export async function getStorageBucket(r2Bucket?: any): Promise<any> {
         "Cloudflare R2 binding `BOOKS_BUCKET` is unavailable. Ensure `r2` is set to `BOOKS_BUCKET` in .openai/hosting.json."
       );
     }
-    const g = globalThis as any;
+    const g = globalThis as unknown as { __inMemoryR2Store?: InMemoryR2Bucket };
     if (!g.__inMemoryR2Store) {
       g.__inMemoryR2Store = new InMemoryR2Bucket();
     }
@@ -178,7 +200,7 @@ export function validatePdfBytes(
  * Calculates SHA-256 hex digest of a byte buffer.
  */
 export async function calculateSha256(buffer: Uint8Array): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer as any);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer as unknown as BufferSource);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -250,14 +272,14 @@ export async function restoreStorageObject(
 ): Promise<void> {
   await bucket.put(objectKey, snapshot.body, {
     httpMetadata: snapshot.httpMetadata,
-    customMetadata: snapshot.customMetadata,
+    customMetadata: snapshot.customMetadata as Record<string, unknown> | undefined,
   });
   await verifyStoredObject(
     bucket,
     objectKey,
     snapshot.body.length,
-    typeof (snapshot.customMetadata as any)?.sha256 === "string"
-      ? (snapshot.customMetadata as any).sha256
+    typeof (snapshot.customMetadata as Record<string, unknown> | undefined)?.sha256 === "string"
+      ? ((snapshot.customMetadata as Record<string, unknown>).sha256 as string)
       : undefined
   );
 }

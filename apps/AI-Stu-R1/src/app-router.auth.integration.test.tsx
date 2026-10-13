@@ -147,6 +147,22 @@ describe("Student router + real session boundary (H-4)", () => {
     }
   });
 
+  it("renders /knowledge-ai without authentication and provides the 4-mode search form", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT, fakeProvider: { getSubject: () => googleSubject } });
+    (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL(`http://127.0.0.1:${TEST_PORT}/`);
+    installBrowserFetch(app.baseUrl);
+
+    await renderAt("/knowledge-ai");
+    await waitForPath("/knowledge-ai");
+    const html = container?.innerHTML ?? "";
+    expect(html).toContain("知識達 AI 學習問答");
+    expect(html).toContain("公開來源查詢方式");
+    expect(html).toContain("品名");
+    expect(html).toContain("品號");
+    expect(html).toContain("師資");
+    expect(html).toContain("適用範圍");
+  });
+
   it("dashboard view-model derives only from the session profile", () => {
     expect(dashboardProfileFromSession(null)).toEqual({ name: null, points: null, authenticated: false });
     const fromSession = dashboardProfileFromSession({

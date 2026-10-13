@@ -116,7 +116,9 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   // Synthetic credentials are local test fixtures. Production validation is
   // allowed only with a separately configured server-side secret.
   const allowSyntheticAuth = !isProd;
-  const configuredValidationGate = (globalThis as any)?.RELEASE_VALIDATION_SECRET;
+  const configuredValidationGate = (
+    globalThis as unknown as { RELEASE_VALIDATION_SECRET?: string }
+  )?.RELEASE_VALIDATION_SECRET;
   const suppliedValidationGate = headers.get("x-validation-gate");
   const allowProductionValidation =
     isProd &&

@@ -162,7 +162,7 @@ export async function POST(request: Request) {
   const sha256 = await calculateSha256(pdfBytes);
 
   // 6. Connect to R2 bucket
-  let bucket: any;
+  let bucket: Awaited<ReturnType<typeof getStorageBucket>>;
   try {
     bucket = await getStorageBucket();
   } catch (err) {

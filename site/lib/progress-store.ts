@@ -68,7 +68,7 @@ export async function getStudentProgress(
         })),
       };
     }
-  } catch (error) {
+  } catch {
     if (isProductionEnvironment() && studentId !== "student-synth-001") {
       throw new D1UnavailableError("D1 database binding 'DB' is unavailable in production");
     }
@@ -150,7 +150,7 @@ export async function saveStudentProgress(
         updatedAt: now,
       });
     }
-  } catch (error) {
+  } catch {
     if (isProductionEnvironment() && data.studentId !== "student-synth-001") {
       throw new D1UnavailableError("D1 database binding 'DB' is unavailable in production");
     }

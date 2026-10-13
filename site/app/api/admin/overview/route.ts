@@ -63,7 +63,7 @@ export async function GET(request: Request) {
       if (row.metricName === "總對話數") defaultTotals.totalSessions = row.metricValue;
       if (row.metricName === "總訊息數") defaultTotals.totalMessages = row.metricValue;
     }
-  } catch (error) {
+  } catch {
     if (isProductionEnvironment()) {
       return Response.json(
         { error: "database_unavailable", message: "D1 database binding 'DB' is unavailable in production" },

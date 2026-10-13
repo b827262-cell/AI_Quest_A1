@@ -853,3 +853,13 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--bor
 .admin-breakdown-table { margin: 0 0 4px; }
 .admin-breakdown-table td:last-child,
 .admin-breakdown-table th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* 高普考資料快照 (Slot D contract shell). */
+.exam-snapshot-notice { margin: 0 0 18px; padding: 12px 14px; border-left: 4px solid #d97706; background: #fffbeb; color: #78350f; border-radius: 8px; }
+.exam-snapshot-status { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.exam-snapshot-status-fresh { background: #dcfce7; color: #166534; }
+.exam-snapshot-status-stale { background: #fef3c7; color: #92400e; }
+.exam-snapshot-status-updating { background: #dbeafe; color: #1e40af; }
+.exam-snapshot-status-failed { background: #fee2e2; color: #b42318; }
+.exam-snapshot-status-not_started { background: #e2e8f0; color: #475569; }
+.exam-snapshot-status-unavailable { background: #f1f5f9; color: #334155; border: 1px dashed #94a3b8; }
