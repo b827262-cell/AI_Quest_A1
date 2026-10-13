@@ -49,7 +49,7 @@ test("P0-FIX-3: actual local worker accepts preload, pins its revision, and exit
   const generating = worker.indexOf('send({ type: "status", status: "generating" })');
   assert.ok(initialized >= 0 && cacheReady > initialized && ready > cacheReady, "preload initializes and finalizes its cache manifest before reporting ready");
   assert.ok(preloaded > ready && generating > preloaded, "preload reports completion and returns before the generation path");
-  assert.match(worker, /if \(!cacheReady\) \{\s*send\(\{ type: "error", message: "[^\"]*本機模型快取[^\"]*" \}\);\s*return;\s*\}/);
+  assert.match(worker, /if \(!cacheReady\) \{\s*send\(\{ type: "error", message: "[^"]*本機模型快取[^"]*" \}\);\s*return;\s*\}/);
   assert.match(worker, /catch \(error\) \{\s*send\(\{ type: "error", message: error instanceof Error \? error\.message : "Local model execution failed\." \}\);/);
   assert.match(worker, /if \(data\.type === "preload"\) \{\s*send\(\{ type: "preloaded" \}\);\s*return;/);
   const cacheFailure = worker.indexOf("if (!cacheReady)");

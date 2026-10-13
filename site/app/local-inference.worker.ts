@@ -8,7 +8,7 @@ import { createModelCacheFetch, markLocalModelCacheReady } from "./local-model-c
 // worker-local global object, deliberately without `document`, so it remains
 // a Web Worker rather than being mistaken for a browser page.
 const workerGlobal = globalThis as typeof globalThis & { window?: typeof globalThis };
-workerGlobal.window ??= globalThis as unknown as Window & typeof globalThis;
+workerGlobal.window ??= globalThis;
 
 // Do not turn this into a static import: the compatibility shim above must
 // execute before Vite evaluates the transformed Transformers.js module.
@@ -92,18 +92,12 @@ self.addEventListener("message", async ({ data }: MessageEvent<WorkerMessage>) =
       ...(data.systemPrompt ? [{ role: "system", content: data.systemPrompt }] : []),
       { role: "user", content: data.prompt },
     ];
-    // Transformers.js passes unrecognized options through to the chat-template
-    // context; Qwen3 uses this template variable to omit its reasoning block.
-    // Keep that supported runtime flag locally typed because the package's
-    // public ApplyChatTemplateOptions only lists common cross-model options.
-    const chatTemplateOptions: NonNullable<Parameters<typeof tokenizer.apply_chat_template>[1]> & {
-      enable_thinking: false;
-    } = {
-      tokenize: false,
-      add_generation_prompt: true,
-      enable_thinking: false,
-    };
-    const chatPrompt = tokenizer.apply_chat_template(messages, chatTemplateOptions) + (data.assistantPrefix ?? "");
+    const chatPrompt = tokenizer.apply_chat_template(
+      messages,
+      // Qwen3 otherwise spends this small deterministic output budget in its
+      // reasoning preamble, leaving no complete JSON answer for the parser.
+      { tokenize: false, add_generation_prompt: true, enable_thinking: false },
+    ) + (data.assistantPrefix ?? "");
     const output = await generator(chatPrompt, {
       // A concise Traditional-Chinese answer must complete inside the page's
       // bounded 45-second generation window on the supported local hardware.
