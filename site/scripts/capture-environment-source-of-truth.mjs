@@ -46,18 +46,47 @@ export async function probe(manifest, fetchJson = getJson, head = (url) => fetch
   const backendProject = backend?.project_id;
   const observed = { health: {} };
 
+  // Validate declarations before any request. Health does not expose project
+  // or physical resource IDs, so those can only be cross-checked locally.
+  expect(manifest.environment === "production", "only production manifests are supported");
+  expect(typeof backendProject === "string" && backendProject.length > 0, "shared_backend project_id is required");
+  expect(manifest.worker?.project_id === backendProject, "worker.project_id must match shared_backend.project_id");
+  for (const name of ["shared_backend", "student", "admin"]) {
+    expect(Boolean(manifest.sites?.[name]?.url), `${name}: site URL is required`);
+  }
+  for (const [name, site] of Object.entries(manifest.sites ?? {})) {
+    try {
+      const url = new URL(site.url);
+      expect(url.protocol === "https:" && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash,
+        `${name}: site URL must be a credential-free HTTPS origin`);
+    } catch {
+      expect(false, `${name}: invalid site URL`);
+    }
+  }
+  try {
+    expect(new URL(manifest.worker?.health_endpoint).href === new URL("/api/health", backend?.url).href,
+      "worker.health_endpoint must match shared_backend /api/health");
+  } catch {
+    expect(false, "worker.health_endpoint or shared_backend URL is invalid");
+  }
+  if (failures.length > 0) return { observed, failures };
+
   for (const [name, site] of Object.entries(manifest.sites ?? {})) {
     const result = await fetchJson(new URL("/api/health", site.url).href);
     const health = result.body ?? {};
-    observed.health[name] = { status: result.status, role: health.role ?? null, time: health.time ?? null };
+    observed.health[name] = {
+      status: result.status, role: health.role ?? null, time: health.time ?? null,
+      d1: health.d1 ?? null, r2: health.r2 ?? null, backendTarget: health.backendTarget ?? null,
+    };
     expect(result.status === 200 && health.status === "ok", `${name}: /api/health not ok (HTTP ${result.status})`);
     expect(health.edge === "cloudflare-worker", `${name}: edge is ${health.edge}`);
-    expect(health.sharedD1Project === backendProject, `${name}: sharedD1Project ${health.sharedD1Project} != ${backendProject}`);
-    expect(health.sharedR2Project === backendProject, `${name}: sharedR2Project ${health.sharedR2Project} != ${backendProject}`);
-    expect(health.d1 === "bound" && health.r2 === "bound", `${name}: d1=${health.d1} r2=${health.r2}`);
-    expect(health.sharedR2Bucket === "BOOKS_BUCKET", `${name}: sharedR2Bucket ${health.sharedR2Bucket}`);
-    expect(health.backendTarget === backend?.url, `${name}: backendTarget ${health.backendTarget} != ${backend?.url}`);
-    expect(health.role === (name === "shared_backend" ? "shared-backend" : "frontend-proxy"), `${name}: role ${health.role}`);
+    // Current route reports backend / standalone; production frontends do not
+    // attest shared bindings. Only the backend's storage is tested below.
+    expect(health.backendTarget === "disabled-or-staging-only", `${name}: backendTarget ${health.backendTarget}`);
+    expect(health.role === (name === "shared_backend" ? "backend" : "standalone"), `${name}: role ${health.role}`);
+    if (name === "shared_backend") {
+      expect(health.d1 === "bound" && health.r2 === "bound", `${name}: d1=${health.d1} r2=${health.r2}`);
+    }
   }
 
   // D1 readable: the student catalogue is served from D1.
@@ -99,6 +128,9 @@ export function refreshed(manifest, observed) {
     carried_forward: {
       "worker.deployed_git_sha": "not observable over HTTP; carried from the previous capture",
       "worker.version": "not observable over HTTP; carried from the previous capture",
+      "worker.project_id": "configuration cross-check only; not observable over HTTP",
+      "sites.*.project_id": "not observable over HTTP; carried from the previous capture",
+      "worker.bindings.*.resource_id": "physical resource IDs are not observable over HTTP; carried from the previous capture",
     },
   };
   return next;
