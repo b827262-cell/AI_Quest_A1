@@ -95,6 +95,9 @@ export async function probe(manifest, fetchJson = getJson, getContent = (url) =>
   const list = Array.isArray(books.body?.books) ? books.body.books : null;
   observed.d1_books = { status: books.status, count: list ? list.length : null };
   expect(books.status === 200 && list && list.length > 0, `D1: /api/student/books HTTP ${books.status}, ${list ? list.length : "no"} books`);
+  // The catalogue is a D1 query, not bucket.list(). No read-only public R2
+  // list endpoint exists, so it cannot re-attest list_readable.
+  observed.r2_list = { status: "not_probed", reason: "No public read-only R2 list endpoint; the student catalogue reads D1 metadata" };
 
   // R2 readable: one object's bytes are served with the sha256 recorded in D1.
   const sample = list?.find((book) => typeof book.id === "string" && /^[a-f0-9]{64}$/i.test(book.sha256 ?? "")) ?? null;
@@ -121,7 +124,6 @@ export function refreshed(manifest, observed) {
   next.captured_at = observed.captured_at;
   next.worker.health_status = observed.health.shared_backend.status;
   next.worker.bindings.DB.readable = true;
-  next.worker.bindings.BOOKS_BUCKET.list_readable = true;
   next.worker.bindings.BOOKS_BUCKET.get_readable = true;
   next.capture_evidence = {
     method: "site/scripts/capture-environment-source-of-truth.mjs (read-only HTTP)",
@@ -129,12 +131,14 @@ export function refreshed(manifest, observed) {
     health: observed.health,
     d1_books: observed.d1_books,
     r2_object: observed.r2_object,
+    r2_list: observed.r2_list,
     carried_forward: {
       "worker.deployed_git_sha": "not observable over HTTP; carried from the previous capture",
       "worker.version": "not observable over HTTP; carried from the previous capture",
       "worker.project_id": "configuration cross-check only; not observable over HTTP",
       "sites.*.project_id": "not observable over HTTP; carried from the previous capture",
       "worker.bindings.*.resource_id": "physical resource IDs are not observable over HTTP; carried from the previous capture",
+      "worker.bindings.BOOKS_BUCKET.list_readable": "unchanged from the previous capture; R2 list was not probed and is not re-attested by this capture",
     },
   };
   return next;

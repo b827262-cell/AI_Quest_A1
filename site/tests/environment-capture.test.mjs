@@ -140,3 +140,20 @@ test("R2 capture rejects non-200 content and propagates incomplete body reads", 
   const brokenBody = new ReadableStream({ start(controller) { controller.error(new Error("truncated response")); } });
   await assert.rejects(probe(manifest(), mock.fetchJson, async () => new Response(brokenBody)), /truncated response/);
 });
+
+test("refresh never infers R2 list readability from a D1 catalogue", async () => {
+  for (const previous of [false, true, undefined]) {
+    const m = manifest();
+    if (previous === undefined) delete m.worker.bindings.BOOKS_BUCKET.list_readable;
+    else m.worker.bindings.BOOKS_BUCKET.list_readable = previous;
+    const mock = mockHttp();
+    const { observed, failures } = await probe(m, mock.fetchJson, mock.getContent);
+    assert.deepEqual(failures, []);
+    const next = refreshed(m, observed);
+    assert.equal(next.worker.bindings.BOOKS_BUCKET.list_readable, previous);
+    assert.equal(Object.hasOwn(next.worker.bindings.BOOKS_BUCKET, "list_readable"), previous !== undefined);
+    assert.equal(next.worker.bindings.BOOKS_BUCKET.get_readable, true);
+    assert.equal(next.capture_evidence.r2_list.status, "not_probed");
+    assert.match(next.capture_evidence.carried_forward["worker.bindings.BOOKS_BUCKET.list_readable"], /not re-attested/);
+  }
+});
