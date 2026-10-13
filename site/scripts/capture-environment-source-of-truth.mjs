@@ -12,6 +12,7 @@
 // git SHA) are carried forward and labelled as such in `capture_evidence`.
 // Only `environment: "production"` manifests are supported.
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +40,7 @@ async function getJson(url) {
 }
 
 /** Probes the live sites and returns { observed, failures }. Exported for tests. */
-export async function probe(manifest, fetchJson = getJson, head = (url) => fetch(url, { method: "HEAD" })) {
+export async function probe(manifest, fetchJson = getJson, getContent = (url) => fetch(url, { method: "GET", redirect: "manual" })) {
   const failures = [];
   const expect = (ok, message) => { if (!ok) failures.push(message); };
   const backend = manifest.sites?.shared_backend;
@@ -96,12 +97,15 @@ export async function probe(manifest, fetchJson = getJson, head = (url) => fetch
   expect(books.status === 200 && list && list.length > 0, `D1: /api/student/books HTTP ${books.status}, ${list ? list.length : "no"} books`);
 
   // R2 readable: one object's bytes are served with the sha256 recorded in D1.
-  const sample = list?.find((book) => typeof book.sha256 === "string") ?? null;
+  const sample = list?.find((book) => typeof book.id === "string" && /^[a-f0-9]{64}$/i.test(book.sha256 ?? "")) ?? null;
   if (sample) {
-    const response = await head(new URL(`/api/student/books/${encodeURIComponent(sample.id)}/content`, backend.url).href);
-    const sha = response.headers.get("x-sha256");
-    observed.r2_object = { id: sample.id, status: response.status, sha256_match: sha === sample.sha256 };
-    expect(response.status === 200 && sha === sample.sha256, `R2: ${sample.id} HTTP ${response.status}, x-sha256 ${sha === sample.sha256 ? "matches" : "mismatch"}`);
+    const response = await getContent(new URL(`/api/student/books/${encodeURIComponent(sample.id)}/content`, backend.url).href);
+    const bytes = response.status === 200 ? new Uint8Array(await response.arrayBuffer()) : null;
+    const sha = bytes === null ? null : createHash("sha256").update(bytes).digest("hex");
+    const matches = sha !== null && sha === sample.sha256.toLowerCase();
+    // x-sha256 is echoed D1 metadata, not proof of the R2 object's bytes.
+    observed.r2_object = { id: sample.id, method: "GET", status: response.status, bytes: bytes?.byteLength ?? null, sha256: sha, sha256_match: matches };
+    expect(response.status === 200 && matches, `R2: ${sample.id} HTTP ${response.status}, content SHA-256 ${matches ? "matches" : "mismatch"}`);
   } else {
     expect(false, "R2: no book with sha256 to probe");
   }
