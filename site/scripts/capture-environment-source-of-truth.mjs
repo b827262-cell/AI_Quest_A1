@@ -39,19 +39,32 @@ async function getJson(url) {
   return { url, status: response.status, body };
 }
 
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 /** Probes the live sites and returns { observed, failures }. Exported for tests. */
 export async function probe(manifest, fetchJson = getJson, getContent = (url) => fetch(url, { method: "GET", redirect: "manual" })) {
   const failures = [];
   const expect = (ok, message) => { if (!ok) failures.push(message); };
   const backend = manifest.sites?.shared_backend;
   const backendProject = backend?.project_id;
+  const studentProject = manifest.sites?.student?.project_id;
+  const adminProject = manifest.sites?.admin?.project_id;
   const observed = { health: {} };
 
   // Validate declarations before any request. Health does not expose project
   // or physical resource IDs, so those can only be cross-checked locally.
   expect(manifest.environment === "production", "only production manifests are supported");
-  expect(typeof backendProject === "string" && backendProject.length > 0, "shared_backend project_id is required");
+  expect(nonEmptyString(backendProject), "shared_backend.project_id must be a non-empty string");
   expect(manifest.worker?.project_id === backendProject, "worker.project_id must match shared_backend.project_id");
+  expect(nonEmptyString(studentProject), "student.project_id must be a non-empty string");
+  expect(nonEmptyString(adminProject), "admin.project_id must be a non-empty string");
+  // Match verify-environment-alignment.mjs: all three production site IDs
+  // must be present and pairwise distinct before the capture can proceed.
+  const projectIds = [backendProject, studentProject, adminProject].filter(nonEmptyString);
+  const distinctProjectIds = new Set(projectIds);
+  expect(distinctProjectIds.size === 3 && projectIds.length === 3, "sites.project_ids must be three distinct non-empty strings");
   for (const name of ["shared_backend", "student", "admin"]) {
     expect(Boolean(manifest.sites?.[name]?.url), `${name}: site URL is required`);
   }

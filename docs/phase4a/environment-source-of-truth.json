@@ -41,6 +41,8 @@
     }
   },
   "capture_evidence": {
+    "evidence_status": "legacy",
+    "evidence_notice": "Legacy capture evidence; not produced by the final site/scripts/capture-environment-source-of-truth.mjs implementation, and must not be treated as a final validation result.",
     "method": "site/scripts/capture-environment-source-of-truth.mjs (read-only HTTP)",
     "captured_at_source": "shared_backend /api/health server time",
     "health": {
