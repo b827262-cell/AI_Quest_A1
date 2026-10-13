@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import test from "node:test";
 import { GET as healthRoute } from "../app/api/health/route.ts";
 import { probe, refreshed } from "../scripts/capture-environment-source-of-truth.mjs";
@@ -59,6 +60,50 @@ test("capture accepts the actual health route contract with standalone frontends
   assert.equal(result.observed.health.student.d1, "unbound");
   assert.equal(result.observed.health.admin.backendTarget, "disabled-or-staging-only");
   assert.equal(mock.calls.length, 5);
+});
+
+test("capture requires all three site project IDs to be present and distinct before HTTP probes", async () => {
+  const invalidCases = [
+    {
+      label: "missing student ID",
+      expectedFailure: "student.project_id",
+      mutate: (m) => { delete m.sites.student.project_id; },
+    },
+    {
+      label: "missing admin ID",
+      expectedFailure: "admin.project_id",
+      mutate: (m) => { delete m.sites.admin.project_id; },
+    },
+    {
+      label: "all three IDs identical",
+      expectedFailure: "sites.project_ids",
+      mutate: (m) => {
+        m.sites.student.project_id = m.sites.shared_backend.project_id;
+        m.sites.admin.project_id = m.sites.shared_backend.project_id;
+      },
+    },
+    {
+      label: "two IDs identical",
+      expectedFailure: "sites.project_ids",
+      mutate: (m) => { m.sites.student.project_id = m.sites.shared_backend.project_id; },
+    },
+  ];
+
+  for (const { label, expectedFailure, mutate } of invalidCases) {
+    const m = manifest();
+    mutate(m);
+    const mock = mockHttp();
+    const result = await probe(m, mock.fetchJson, mock.getContent);
+    assert.ok(result.failures.some((failure) => failure.includes(expectedFailure)), label);
+    assert.equal(result.observed.captured_at, undefined, `${label}: capture timestamp must not be refreshed`);
+    assert.equal(mock.calls.length, 0, `${label}: validation must finish before HTTP probes`);
+  }
+
+  const validMock = mockHttp();
+  const validResult = await probe(manifest(), validMock.fetchJson, validMock.getContent);
+  assert.deepEqual(validResult.failures, [], "three distinct site IDs remain valid");
+  assert.equal(typeof validResult.observed.captured_at, "string");
+  assert.equal(validMock.calls.length, 5);
 });
 
 test("capture rejects mismatched worker declarations before making any HTTP request", async () => {
@@ -155,5 +200,19 @@ test("refresh never infers R2 list readability from a D1 catalogue", async () =>
     assert.equal(next.worker.bindings.BOOKS_BUCKET.get_readable, true);
     assert.equal(next.capture_evidence.r2_list.status, "not_probed");
     assert.match(next.capture_evidence.carried_forward["worker.bindings.BOOKS_BUCKET.list_readable"], /not re-attested/);
+  }
+});
+
+test("committed production capture evidence is explicitly marked legacy without invented R2 evidence", () => {
+  const manifestPath = new URL("../../docs/phase4a/environment-source-of-truth.json", import.meta.url);
+  const committedManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const evidence = committedManifest.capture_evidence;
+
+  assert.equal(evidence.evidence_status, "legacy");
+  assert.match(evidence.evidence_notice, /not produced by the final site\/scripts\/capture-environment-source-of-truth\.mjs implementation/i);
+  assert.match(evidence.evidence_notice, /must not be treated as a final validation result/i);
+  assert.equal(evidence.r2_object.sha256_match, true);
+  for (const field of ["sha256", "bytes", "method"]) {
+    assert.equal(Object.hasOwn(evidence.r2_object, field), false, `legacy R2 evidence must not invent ${field}`);
   }
 });
