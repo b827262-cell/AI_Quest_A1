@@ -10,7 +10,7 @@
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build && npm run package:size-gate",
     "package:size-gate": "node scripts/verify-upload-package-size.mjs dist",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && NODE_ENV=test node --import tsx --test --test-concurrency=1 tests/local-model-cache.test.mjs tests/rendered-html.test.mjs tests/api-runtime.test.mjs tests/chrome-built-in-ai.test.mjs tests/auto-fallback.test.mjs tests/a01-agy-a1-a3.test.mjs tests/subject-triage.test.mjs tests/fixture-safety.test.mjs tests/d1-persistence.test.mjs tests/auth-hardening.test.mjs tests/phase3c-shared-backend.test.mjs tests/phase3d-r2-storage.test.mjs tests/storage-compensation.test.mjs tests/sync-core.test.mjs tests/sync-internal-api.test.mjs tests/environment-alignment.test.mjs tests/signin-with-chatgpt.test.mjs tests/runtime-diagnostics.test.mjs",
+    "test": "npm run build && NODE_ENV=test node --import tsx --test --test-concurrency=1 tests/local-model-cache.test.mjs tests/rendered-html.test.mjs tests/api-runtime.test.mjs tests/chrome-built-in-ai.test.mjs tests/auto-fallback.test.mjs tests/a01-agy-a1-a3.test.mjs tests/subject-triage.test.mjs tests/fixture-safety.test.mjs tests/d1-persistence.test.mjs tests/auth-hardening.test.mjs tests/phase3c-shared-backend.test.mjs tests/phase3d-r2-storage.test.mjs tests/storage-compensation.test.mjs tests/sync-core.test.mjs tests/sync-internal-api.test.mjs tests/environment-alignment.test.mjs tests/environment-capture.test.mjs tests/signin-with-chatgpt.test.mjs tests/runtime-diagnostics.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "fixture:generate": "tsx fixtures/generate.ts",
@@ -25,7 +25,9 @@
     "sync:e500:books": "node tools/e500-sync/index.mjs books",
     "sync:e500:all": "node tools/e500-sync/index.mjs all",
     "sync:e500:verify": "node tools/e500-sync/index.mjs verify",
-    "environment:align:production": "node scripts/verify-environment-alignment.mjs --manifest ../docs/phase4a/environment-source-of-truth.json --json"
+    "environment:align:production": "node scripts/verify-environment-alignment.mjs --manifest ../docs/phase4a/environment-source-of-truth.json --json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "environment:capture:production": "node scripts/capture-environment-source-of-truth.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
@@ -35,6 +37,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@eslint/js": "9.39.4",
     "@next/eslint-plugin-next": "16.2.6",
     "@openai/sites-vite-plugin": "0.1.0",

@@ -1,3 +1,4 @@
+import type { D1Database } from "@cloudflare/workers-types";
 import { getDb } from "../db";
 import { students, books, readingProgress, adminOverview } from "../db/schema";
 import { syntheticStudents, syntheticBooks, syntheticProgress } from "./generate";

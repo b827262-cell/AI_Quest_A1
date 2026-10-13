@@ -1,7 +1,7 @@
 {
   "manifest_version": "phase4a.environment-source-of-truth/v1",
   "environment": "production",
-  "captured_at": "2026-09-17T07:22:56.465Z",
+  "captured_at": "2026-10-13T09:01:41.403Z",
   "sites": {
     "shared_backend": {
       "project_id": "appgprj_6aa80235182c8191a876361138ecbc36",
@@ -38,6 +38,40 @@
         "list_readable": true,
         "get_readable": true
       }
+    }
+  },
+  "capture_evidence": {
+    "method": "site/scripts/capture-environment-source-of-truth.mjs (read-only HTTP)",
+    "captured_at_source": "shared_backend /api/health server time",
+    "health": {
+      "shared_backend": {
+        "status": 200,
+        "role": "shared-backend",
+        "time": "2026-10-13T09:01:41.403Z"
+      },
+      "student": {
+        "status": 200,
+        "role": "frontend-proxy",
+        "time": "2026-10-13T09:01:42.876Z"
+      },
+      "admin": {
+        "status": 200,
+        "role": "frontend-proxy",
+        "time": "2026-10-13T09:01:44.919Z"
+      }
+    },
+    "d1_books": {
+      "status": 200,
+      "count": 8
+    },
+    "r2_object": {
+      "id": "book-synth-001",
+      "status": 200,
+      "sha256_match": true
+    },
+    "carried_forward": {
+      "worker.deployed_git_sha": "not observable over HTTP; carried from the previous capture",
+      "worker.version": "not observable over HTTP; carried from the previous capture"
     }
   }
 }

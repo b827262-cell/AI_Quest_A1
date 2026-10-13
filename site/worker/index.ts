@@ -1,9 +1,12 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
+import type { D1Database } from "@cloudflare/workers-types";
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 
 interface Env {
-  ASSETS: Fetcher;
+  // Static-assets binding; only fetch() is used, typed with the DOM Request/Response
+  // the rest of this file uses (workers-types' Fetcher has its own, incompatible ones).
+  ASSETS: { fetch(request: Request): Promise<Response> };
   DB: D1Database;
   BOOKS_BUCKET?: unknown;
   RELEASE_VALIDATION_SECRET?: string;
