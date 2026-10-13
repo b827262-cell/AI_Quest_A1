@@ -24,7 +24,8 @@
     "sync:e500:progress": "node tools/e500-sync/index.mjs progress",
     "sync:e500:books": "node tools/e500-sync/index.mjs books",
     "sync:e500:all": "node tools/e500-sync/index.mjs all",
-    "sync:e500:verify": "node tools/e500-sync/index.mjs verify"
+    "sync:e500:verify": "node tools/e500-sync/index.mjs verify",
+    "environment:align:production": "node scripts/verify-environment-alignment.mjs --manifest ../docs/phase4a/environment-source-of-truth.json --json"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
