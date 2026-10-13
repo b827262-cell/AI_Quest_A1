@@ -25,7 +25,9 @@
     "sync:e500:books": "node tools/e500-sync/index.mjs books",
     "sync:e500:all": "node tools/e500-sync/index.mjs all",
     "sync:e500:verify": "node tools/e500-sync/index.mjs verify",
-    "environment:align:production": "node scripts/verify-environment-alignment.mjs --manifest ../docs/phase4a/environment-source-of-truth.json --json"
+    "environment:align:production": "node scripts/verify-environment-alignment.mjs --manifest ../docs/phase4a/environment-source-of-truth.json --json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "environment:capture:production": "node scripts/capture-environment-source-of-truth.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
@@ -35,6 +37,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@eslint/js": "9.39.4",
     "@next/eslint-plugin-next": "16.2.6",
     "@openai/sites-vite-plugin": "0.1.0",

@@ -1,3 +1,4 @@
+import type { D1Database } from "@cloudflare/workers-types";
 import { eq, and } from "drizzle-orm";
 import { getDb, D1UnavailableError, isProductionEnvironment } from "../db";
 import { readingProgress } from "../db/schema";

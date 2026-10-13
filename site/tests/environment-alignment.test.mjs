@@ -285,11 +285,21 @@ test("F7: CLI subprocess exit on real repo files follows the measured 72h result
 });
 
 test("superseded production source-of-truth fails when used as the staging validator input", () => {
-  const productionTruthPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json");
-  const hostingPath = path.join(siteDir, ".openai/hosting.json");
-  const result = verifyEnvironment({ manifest: productionTruthPath, hosting: hostingPath, maxAgeHours: DEFAULT_MAX_AGE_HOURS, json: true });
-  assert.equal(result.status, "FAIL");
-  assert.equal(result.config_drift, "YES");
+  // Pin the staging side to a fixture: the checked-in site/.openai/hosting.json
+  // follows whichever environment the branch deploys to, and on main that is
+  // production, which this manifest is supposed to accept.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "superseded-production-"));
+  try {
+    const productionTruthPath = path.join(siteDir, "../docs/phase4a/environment-source-of-truth.json");
+    const stagingManifest = JSON.parse(fs.readFileSync(path.join(siteDir, "../docs/phase4a/environment-source-of-truth.staging.json"), "utf8"));
+    const hostingPath = writeFixture(dir, "hosting.json", { project_id: stagingManifest.sites.shared_backend.project_id });
+    const result = verifyEnvironment({ manifest: productionTruthPath, hosting: hostingPath, maxAgeHours: DEFAULT_MAX_AGE_HOURS, json: true });
+    assert.equal(result.status, "FAIL");
+    assert.equal(result.config_drift, "YES");
+    assert.ok(result.errors.some((error) => error.startsWith("shared_backend.project_id:")));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("F7: CLI subprocess exits 1 on config drift / mismatch", (t) => {

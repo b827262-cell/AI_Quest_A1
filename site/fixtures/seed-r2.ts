@@ -1,3 +1,4 @@
+import type { R2Bucket } from "@cloudflare/workers-types";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
