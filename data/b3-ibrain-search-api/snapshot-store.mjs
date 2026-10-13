@@ -6,15 +6,18 @@
 // a live import would have written: the importer stores `teacher` and
 // `applicable_scope` as NULL, and so does this store.
 //
-// Matching mirrors the SQL in postgres-store.mjs:
+// Matching contract (keyword is an approximation, not PostgreSQL FTS parity):
 //   exact   -> lower(course_code) = lower(:course_code)
 //   keyword -> course_name/course_content ILIKE %kw%, or every whitespace term
-//              of the keyword appears in name+content (the substring analogue
-//              of websearch_to_tsquery('simple', kw) over the same text)
+//              of plain-word input appears as a substring in name+content.
+//              This approximates websearch_to_tsquery('simple', kw); OR,
+//              quoted phrases, and negation are explicitly rejected.
 //   teacher -> teacher ILIKE %kw%
 //   scope   -> applicable_scope ILIKE %kw%
-// All filter by optional exam_year, order by exam_year DESC then course_name,
-// and apply limit.
+// %, _ are literal characters in snapshot searches, unlike SQL ILIKE patterns.
+// All filter by optional exam_year and apply limit after ordering by exam_year
+// DESC then course_name ASC in Unicode code-point order, independent of locale
+// and PostgreSQL collation. Equal keys retain the snapshot's input order.
 
 import { loadValidatedB1Snapshot } from "../b2-ibrain-postgresql/validate-snapshot.mjs";
 import { SearchInputError } from "./search-core.mjs";
@@ -31,6 +34,16 @@ function contains(haystack, needle) {
   return typeof haystack === "string" && haystack.toLowerCase().includes(String(needle).toLowerCase());
 }
 
+function compareCodePoints(left, right) {
+  const a = Array.from(left);
+  const b = Array.from(right);
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    const difference = a[i].codePointAt(0) - b[i].codePointAt(0);
+    if (difference) return difference;
+  }
+  return a.length - b.length;
+}
+
 /**
  * Builds a store over in-memory rows (already validated).
  * @param {{ rows: Array<Record<string, unknown>> }} options
@@ -43,7 +56,7 @@ export function createSnapshotStore({ rows }) {
     const year = examYear == null || examYear === "" ? null : Number(examYear);
     return table
       .filter((row) => (year === null || row.exam_year === year) && predicate(row))
-      .sort((a, b) => b.exam_year - a.exam_year || (a.course_name < b.course_name ? -1 : a.course_name > b.course_name ? 1 : 0))
+      .sort((a, b) => b.exam_year - a.exam_year || compareCodePoints(a.course_name, b.course_name))
       .slice(0, Number(limit))
       .map((row) => ({ ...row }));
   }

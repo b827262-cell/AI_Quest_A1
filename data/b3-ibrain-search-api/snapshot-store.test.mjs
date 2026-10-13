@@ -19,11 +19,25 @@ test("exact matches course_code case-insensitively and filters by exam_year", as
 
 test("keyword matches name or content, multi-term AND, ordered by year desc then name", async () => {
   const store = createSnapshotStore({ rows });
-  // Same year: course_name code-point order ("統" U+7D71 < "經" U+7D93), as in PostgreSQL C collation.
+  // Same year: fixed Unicode code-point order ("統" U+7D71 < "經" U+7D93).
   assert.deepEqual((await store.keyword({ keyword: "題庫班", limit: 10 })).map((r) => r.course_code), ["ABC1", "XYZ9"]);
   assert.deepEqual((await store.keyword({ keyword: "題型", limit: 10 })).map((r) => r.exam_year), [116, 115]);
   assert.deepEqual((await store.keyword({ keyword: "行政學 演練", limit: 10 })).map((r) => r.course_code), ["abc2"]);
   assert.equal((await store.keyword({ keyword: "題", limit: 1 })).length, 1);
+});
+
+test("ordering uses Unicode code points, then stable input order, before applying limit", async () => {
+  const store = createSnapshotStore({ rows: [
+    { ...rows[0], exam_year: 116, course_code: "supplementary", course_name: "\u{10000}", course_content: "match" },
+    { ...rows[0], exam_year: 116, course_code: "private", course_name: "\uE000", course_content: "match" },
+    { ...rows[0], exam_year: 115, course_code: "older", course_name: "A", course_content: "match" },
+    { ...rows[0], exam_year: 116, course_code: "first", course_name: "A", course_content: "match" },
+    { ...rows[0], exam_year: 116, course_code: "second", course_name: "A", course_content: "match" },
+  ] });
+  assert.deepEqual((await store.keyword({ keyword: "match", limit: 10 })).map((row) => row.course_code),
+    ["first", "second", "private", "supplementary", "older"]);
+  assert.deepEqual((await store.keyword({ keyword: "match", limit: 2 })).map((row) => row.course_code), ["first", "second"]);
+  assert.deepEqual((await store.keyword({ keyword: "match", examYear: 115, limit: 10 })).map((row) => row.course_code), ["older"]);
 });
 
 test("teacher and scope are NULL in the snapshot, as in the B2 import", async () => {
