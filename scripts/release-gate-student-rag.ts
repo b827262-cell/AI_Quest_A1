@@ -173,6 +173,7 @@ function main(): void {
   runShell("student:auth-smoke", "pnpm", ["run", "student:auth-smoke"]);
   runShell("student:dashboard-smoke", "pnpm", ["run", "student:dashboard-smoke"]);
   runShell("rag:smoke", "pnpm", ["run", "rag:smoke"]);
+  runShell("ssrf:adversarial", "pnpm", ["run", "ai:test:ssrf"]);
   runShell("browser/server boundary", "bash", ["scripts/boundary-check.sh"]);
   runStep("secret scan", secretScan);
   runStep("git diff --check", gitDiffCheck);
