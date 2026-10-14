@@ -8,8 +8,10 @@
 // Without --write it only prints what it observed and what would change.
 // It refuses to write unless every probe agrees with the manifest's declared
 // identities; it never changes project IDs, URLs, or bindings — it only
-// re-attests them. Fields that cannot be observed over HTTP (the deployed
-// git SHA) are carried forward and labelled as such in `capture_evidence`.
+// re-attests them. The deployed git SHA is re-attested from the three health
+// endpoints, which must report one identical commit. What HTTP still cannot
+// show (`worker.version`, project and physical resource IDs) is carried forward
+// and labelled as such in `capture_evidence`.
 // Only `environment: "production"` manifests are supported.
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -41,6 +43,23 @@ async function getJson(url) {
 
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Declared health contract per site, mirroring site/app/api/backend-client.ts.
+ * Secondaries must name the primary's origin and must never attest shared bindings.
+ */
+function expectedHealth(name, manifest) {
+  if (name === "shared_backend") {
+    return { role: "primary", site: "backend", primaryOrigin: null, d1: "bound", r2: "bound" };
+  }
+  return {
+    role: "secondary",
+    site: name,
+    primaryOrigin: new URL(manifest.sites.shared_backend.url).origin,
+    d1: "unbound",
+    r2: "unbound",
+  };
 }
 
 /** Probes the live sites and returns { observed, failures }. Exported for tests. */
@@ -85,23 +104,31 @@ export async function probe(manifest, fetchJson = getJson, getContent = (url) =>
   }
   if (failures.length > 0) return { observed, failures };
 
+  const gitShas = [];
   for (const [name, site] of Object.entries(manifest.sites ?? {})) {
     const result = await fetchJson(new URL("/api/health", site.url).href);
     const health = result.body ?? {};
+    const want = expectedHealth(name, manifest);
     observed.health[name] = {
-      status: result.status, role: health.role ?? null, time: health.time ?? null,
-      d1: health.d1 ?? null, r2: health.r2 ?? null, backendTarget: health.backendTarget ?? null,
+      status: result.status, role: health.role ?? null, site: health.site ?? null,
+      primaryOrigin: health.primaryOrigin ?? null, gitSha: health.gitSha ?? null,
+      time: health.time ?? null, d1: health.d1 ?? null, r2: health.r2 ?? null,
     };
     expect(result.status === 200 && health.status === "ok", `${name}: /api/health not ok (HTTP ${result.status})`);
     expect(health.edge === "cloudflare-worker", `${name}: edge is ${health.edge}`);
-    // Current route reports backend / standalone; production frontends do not
-    // attest shared bindings. Only the backend's storage is tested below.
-    expect(health.backendTarget === "disabled-or-staging-only", `${name}: backendTarget ${health.backendTarget}`);
-    expect(health.role === (name === "shared_backend" ? "backend" : "standalone"), `${name}: role ${health.role}`);
-    if (name === "shared_backend") {
-      expect(health.d1 === "bound" && health.r2 === "bound", `${name}: d1=${health.d1} r2=${health.r2}`);
-    }
+    expect(health.role === want.role, `${name}: role ${health.role} (expected ${want.role})`);
+    expect(health.site === want.site, `${name}: site ${health.site} (expected ${want.site})`);
+    expect(health.primaryOrigin === want.primaryOrigin, `${name}: primaryOrigin ${health.primaryOrigin} (expected ${want.primaryOrigin})`);
+    // Only the primary attests shared bindings; a secondary reporting D1/R2 is a misconfiguration.
+    expect(health.d1 === want.d1 && health.r2 === want.r2, `${name}: d1=${health.d1} r2=${health.r2} (expected ${want.d1}/${want.r2})`);
+    gitShas.push(health.gitSha ?? null);
   }
+  // The three sites are one deployment: they must report the same, real commit.
+  const sameCommit = new Set(gitShas).size === 1 && /^[0-9a-f]{7,40}$/.test(gitShas[0] ?? "");
+  expect(sameCommit,
+    `sites.gitSha must be one identical commit on all three sites (got ${JSON.stringify(gitShas)})`);
+  // Only an agreed commit counts as observed; anything else stays carried forward.
+  if (sameCommit) observed.git_sha = gitShas[0];
 
   // D1 readable: the student catalogue is served from D1.
   const books = await fetchJson(new URL("/api/student/books", backend.url).href);
@@ -134,19 +161,26 @@ export async function probe(manifest, fetchJson = getJson, getContent = (url) =>
 /** Returns the refreshed manifest (pure). Exported for tests. */
 export function refreshed(manifest, observed) {
   const next = structuredClone(manifest);
+  const attestedGitSha = typeof observed.git_sha === "string" ? observed.git_sha : null;
   next.captured_at = observed.captured_at;
   next.worker.health_status = observed.health.shared_backend.status;
   next.worker.bindings.DB.readable = true;
   next.worker.bindings.BOOKS_BUCKET.get_readable = true;
+  if (attestedGitSha !== null) next.worker.deployed_git_sha = attestedGitSha;
   next.capture_evidence = {
     method: "site/scripts/capture-environment-source-of-truth.mjs (read-only HTTP)",
     captured_at_source: "shared_backend /api/health server time",
+    git_sha: {
+      value: attestedGitSha ?? next.worker.deployed_git_sha ?? null,
+      source: attestedGitSha !== null
+        ? "re-attested from the one identical gitSha reported by all three /api/health endpoints"
+        : "carried from the previous capture; the sites did not report one identical commit",
+    },
     health: observed.health,
     d1_books: observed.d1_books,
     r2_object: observed.r2_object,
     r2_list: observed.r2_list,
     carried_forward: {
-      "worker.deployed_git_sha": "not observable over HTTP; carried from the previous capture",
       "worker.version": "not observable over HTTP; carried from the previous capture",
       "worker.project_id": "configuration cross-check only; not observable over HTTP",
       "sites.*.project_id": "not observable over HTTP; carried from the previous capture",

@@ -1,0 +1,33 @@
+{
+  "manifest_version": "a01.site-targets/v1",
+  "description": "Three Sites projects deployed from one commit. Only the primary (backend) binds D1 and R2; secondaries name the primary in primary_origin. Keep in sync with docs/phase4a/environment-source-of-truth.json and tests/three-site-topology.test.mjs.",
+  "targets": {
+    "backend": {
+      "site": "backend",
+      "role": "primary",
+      "project_id": "appgprj_6aa80235182c8191a876361138ecbc36",
+      "url": "https://ai-quest-a1-backend.b827262.chatgpt.site",
+      "primary_origin": null,
+      "bindings": {
+        "d1": "DB",
+        "r2": "BOOKS_BUCKET"
+      }
+    },
+    "student": {
+      "site": "student",
+      "role": "secondary",
+      "project_id": "appgprj_6a843b2ece70819191132bd6e99df7a1",
+      "url": "https://ai-quest-a1-student.b827262.chatgpt.site",
+      "primary_origin": "https://ai-quest-a1-backend.b827262.chatgpt.site",
+      "bindings": {}
+    },
+    "admin": {
+      "site": "admin",
+      "role": "secondary",
+      "project_id": "appgprj_6a843b6432f88191aa4cc090c236f3d3",
+      "url": "https://ai-quest-a1-admin.b827262.chatgpt.site",
+      "primary_origin": "https://ai-quest-a1-backend.b827262.chatgpt.site",
+      "bindings": {}
+    }
+  }
+}

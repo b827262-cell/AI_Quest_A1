@@ -2,6 +2,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { gateApiRequest } from "../app/api/backend-client";
 
 interface Env {
   // Static-assets binding; only fetch() is used, typed with the DOM Request/Response
@@ -12,6 +13,11 @@ interface Env {
   RELEASE_VALIDATION_SECRET?: string;
   SYNC_IMPORT_SECRET?: string;
   SYNC_MAX_PDF_BYTES?: string;
+  // Declared site topology and the deployed commit. See app/api/backend-client.ts.
+  GIT_SHA?: string;
+  SITE_ROLE?: string;
+  SITE_NAME?: string;
+  PRIMARY_ORIGIN?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -40,7 +46,17 @@ const worker = {
       env.RELEASE_VALIDATION_SECRET;
     (globalThis as unknown as { SYNC_IMPORT_SECRET?: string }).SYNC_IMPORT_SECRET = env.SYNC_IMPORT_SECRET;
     (globalThis as unknown as { SYNC_MAX_PDF_BYTES?: string }).SYNC_MAX_PDF_BYTES = env.SYNC_MAX_PDF_BYTES;
+    const runtimeGlobals = globalThis as unknown as { GIT_SHA?: string; SITE_ROLE?: string; SITE_NAME?: string; PRIMARY_ORIGIN?: string };
+    runtimeGlobals.GIT_SHA = env.GIT_SHA;
+    runtimeGlobals.SITE_ROLE = env.SITE_ROLE;
+    runtimeGlobals.SITE_NAME = env.SITE_NAME;
+    runtimeGlobals.PRIMARY_ORIGIN = env.PRIMARY_ORIGIN;
     const url = new URL(request.url);
+
+    // The gate decides what counts as an API request; a second prefix test here would
+    // be a second path grammar that /API/ or //api// variants could slip past.
+    const gate = gateApiRequest(url.pathname);
+    if (gate) return gate;
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
