@@ -1,4 +1,3 @@
-import { buildSplitBookPrompt } from "@ai-smartbook/ai";
 import type { BookChapter } from "@ai-smartbook/schema";
 import { type BookCoreContext, extractJson } from "./context";
 
@@ -23,7 +22,7 @@ export async function splitBookIntoChapters(
   const contents = ctx.repos.contents.findByBookId(bookId);
   const contentText = contents.map((c) => c.contentText).join("\n\n");
 
-  const prompt = buildSplitBookPrompt({ bookTitle: book.title, contentText });
+  const prompt = ctx.prompts.buildSplitBookPrompt({ bookTitle: book.title, contentText });
   const raw = await ctx.ai.generateText(prompt);
   const drafts = extractJson<ChapterDraft[]>(raw) ?? [];
 

@@ -1,3 +1,4 @@
+import { bookPromptBuilders } from "./book-core-ai";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
@@ -159,7 +160,7 @@ export function createAdminApp(dependencies: AdminAppDependencies): express.Expr
     appearanceUploadDir
   } = dependencies;
   const bookRepos: BookRepositories = repos;
-  const ctx: BookCoreContext = { repos: bookRepos, ai };
+  const ctx: BookCoreContext = { repos: bookRepos, ai, prompts: bookPromptBuilders };
   const studentAuthConfig = resolveStudentAuthConfig(env);
   const studentAuth = createStudentAuthService(studentAuthConfig, {
     users: repos.studentUsers,

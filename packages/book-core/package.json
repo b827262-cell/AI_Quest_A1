@@ -16,7 +16,6 @@
     "@types/node": "26.1.2"
   },
   "dependencies": {
-    "@ai-smartbook/ai": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
     "pdf-parse": "2.4.5"
   }

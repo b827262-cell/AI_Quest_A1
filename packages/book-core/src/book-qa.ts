@@ -1,4 +1,3 @@
-import { buildBookQaPrompt } from "@ai-smartbook/ai";
 import type { BookContent, BookQaLog } from "@ai-smartbook/schema";
 import type { BookCoreContext } from "./context";
 
@@ -72,7 +71,7 @@ export async function askBookQuestion(
   const contextContents = retrieveContext(ctx, bookId, question, limit);
   const contextChunks = contextContents.map((c) => c.contentText);
 
-  const prompt = buildBookQaPrompt({
+  const prompt = ctx.prompts.buildBookQaPrompt({
     bookTitle: book.title,
     question,
     contextChunks
