@@ -1,4 +1,6 @@
 import { readSiteDeclaration, type SiteDeclaration } from "../backend-client";
+import { isAdminAllowlistConfigured } from "../auth-helper";
+import { isProductionEnvironment } from "../../../db";
 import { readInjectedIdentity, resolveBuildIdentity } from "../../runtime-diagnostics";
 
 type RuntimeEnv = Record<string, unknown> | undefined;
@@ -36,6 +38,16 @@ export async function GET() {
     },
     injected: readInjectedIdentity(),
   });
+  // Whether an administrator allowlist exists is observable without ever
+  // exposing an address. When it is unset, nobody can be an administrator.
+  // The log line fires in production, where a missing allowlist is a real
+  // lockout risk; the health field is always present.
+  const adminAllowlist = isAdminAllowlistConfigured();
+  if (!adminAllowlist && isProductionEnvironment()) {
+    console.warn(
+      "[auth] ADMIN_EMAILS allowlist is not configured; no user can be an administrator",
+    );
+  }
   return Response.json({
     status: "ok",
     role: declared.role,
@@ -43,6 +55,7 @@ export async function GET() {
     primaryOrigin: declared.primaryOrigin,
     gitSha: identity.gitSha,
     edge: "cloudflare-worker",
+    adminAllowlist: adminAllowlist ? "configured" : "unset",
     // Binding state is derived from the live worker environment, not hardcoded,
     // so staging predeploy reports unbound and a real deployment reports bound.
     d1: d1Bound ? "bound" : "unbound",

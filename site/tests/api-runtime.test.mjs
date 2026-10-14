@@ -19,6 +19,9 @@ async function requestWorker(pathname, options = {}) {
     {
       ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
       DB: options.db,
+      // Administrator privilege is allowlist-driven (issue #47); the synthetic
+      // admin identity used by these tests is configured here.
+      ADMIN_EMAILS: options.adminEmails ?? "admin@synthetic.ai-smartbook.test",
     },
     { waitUntil() {}, passThroughOnException() {} }
   );
