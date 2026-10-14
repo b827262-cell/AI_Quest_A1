@@ -48,6 +48,9 @@ try {
   const { API } = await import(require.resolve("typescript/unstable/sync"));
   api = new API();
   const forbidden = value => /^@ai-smartbook\/(ai|db)(?:\/|$)/.test(value);
+  const configDirToken = "${configDir}";
+  const expandConfigDir = (value, configDirectory) => typeof value === "string" && value.startsWith(configDirToken)
+    ? `${configDirectory}${value.slice(configDirToken.length)}` : value;
   // Resolve symlink ancestors too, including workspace links under node_modules.
   const canonical = value => {
     const absolute = path.resolve(value);
@@ -100,16 +103,20 @@ try {
     }
     return {
       ...inherited,
-      ...(options.baseUrl === undefined ? {} : { baseUrl: path.resolve(path.dirname(file), options.baseUrl) }),
+      ...(options.baseUrl === undefined ? {} : {
+        baseUrl: path.resolve(path.dirname(file), expandConfigDir(options.baseUrl, path.dirname(file)))
+      }),
       ...(options.paths === undefined ? {} : { paths: options.paths, pathsBase: path.dirname(file) })
     };
   };
   const configFile = path.join(book, "tsconfig.json");
   api.parseConfigFile(configFile); // Let the installed compiler validate options too.
   const config = loadConfig(configFile);
-  const pathsBase = config.baseUrl || config.pathsBase || book;
+  const pathsConfigDir = config.pathsBase || book;
+  const pathsBase = config.baseUrl || pathsConfigDir;
+  const resolvePathTarget = target => path.resolve(pathsBase, expandConfigDir(target, pathsConfigDir));
   for (const [alias, targets] of Object.entries(config.paths ?? {})) {
-    if (forbidden(alias) || targets.some(target => forbidden(target) || blockedPath(path.resolve(pathsBase, target)))) {
+    if (forbidden(alias) || targets.some(target => forbidden(target) || blockedPath(resolvePathTarget(target)))) {
       fail(`tsconfig paths: ${alias}`);
     }
   }
@@ -118,19 +125,21 @@ try {
     const capture = star < 0 ? (specifier === alias ? "" : null)
       : specifier.startsWith(alias.slice(0, star)) && specifier.endsWith(alias.slice(star + 1))
         ? specifier.slice(star, alias.length === star + 1 ? undefined : -(alias.length - star - 1)) : null;
-    return capture !== null && targets.some(target => blockedPath(path.resolve(pathsBase, target.replace("*", capture))));
+    return capture !== null && targets.some(target => blockedPath(resolvePathTarget(target.replace("*", capture))));
   });
   const files = [];
+  const excludedDirectories = new Set(["node_modules", "dist"]);
   const walk = dir => {
+    if (fs.lstatSync(dir).isSymbolicLink()) throw new Error(`source symlink is not allowed: ${path.relative(root, dir)}`);
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
+      if (excludedDirectories.has(entry.name)) continue;
       if (entry.isSymbolicLink()) throw new Error(`source symlink is not allowed: ${path.relative(root, file)}`);
       if (entry.isDirectory()) walk(file);
-      else if (/\.[cm]?[jt]sx?$/.test(entry.name)) files.push(file);
+      else if (entry.isFile() && /\.[cm]?[jt]sx?$/.test(entry.name)) files.push(file);
     }
   };
-  walk(path.join(book, "src"));
-  walk(path.join(book, "test"));
+  walk(book);
   snapshot = api.updateSnapshot({ openFiles: files });
   const constantString = node => {
     if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) return node.text;
