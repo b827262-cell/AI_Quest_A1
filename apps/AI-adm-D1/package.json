@@ -13,8 +13,8 @@
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "dependencies": {
-    "@ai-smartbook/auth": "workspace:*",
     "@ai-smartbook/ai": "workspace:*",
+    "@ai-smartbook/auth": "workspace:*",
     "@ai-smartbook/book-core": "workspace:*",
     "@ai-smartbook/contracts": "workspace:*",
     "@ai-smartbook/db": "workspace:*",
@@ -26,7 +26,7 @@
     "pdf-parse": "latest",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7.0.0",
+    "react-router-dom": "^7.18.4",
     "zod": "latest"
   },
   "devDependencies": {
