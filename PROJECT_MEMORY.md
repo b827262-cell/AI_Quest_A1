@@ -44,7 +44,7 @@ Default commands used by the launcher:
 ```bash
 pnpm --filter AI-adm-D1 server:dev
 pnpm --filter AI-Stu-R1 server:dev
-pnpm --filter AI-Stu-R1 dev
+STUDENT_API_TARGET=http://127.0.0.1:4310 pnpm --filter AI-Stu-R1 dev
 pnpm --filter AI-adm-D1 dev
 ```
 
@@ -55,9 +55,11 @@ The script also manages PID/log directories, port cleanup, Admin token/vault-key
 When AI_Quest_A1 services need to be restored on E500, the first-line command is:
 
 ```bash
-cd /home/b827262/project/AI-Quest-A1
+cd <repo-checkout>
 ./reset-ai-smartbook.sh restart
 ```
+
+`<repo-checkout>` is a placeholder for the local clone path of this repository on the E500 host. Replace it with the actual checkout location (for example, the output of `git rev-parse --show-toplevel` inside your clone), then run the launcher from there.
 
 Use `status` before or after restart when diagnosing runtime state:
 
@@ -67,17 +69,21 @@ Use `status` before or after restart when diagnosing runtime state:
 
 Do not manually kill unrelated Node processes or modify Cloudflare/DNS merely because ports 4300/4310 are down. Restore and verify the application runtime first.
 
-## Cloudflare mapping currently established for the E500 runtime
+## Expected Cloudflare mapping for the E500 runtime
 
-The established routing model is:
+The routing model below is the **expected configuration** for the E500 runtime; it is not a verified statement of the current live state.
+
+- Verification status: not verified — no live DNS or Tunnel lookup was performed.
+- Last reviewed: 2026-10-14.
+- Source: repository documentation (this file) only.
 
 ```text
 admin-api.b827262.org
-  -> e500-ai-tutor Cloudflare Tunnel
+  -> e500-ai-tutor Cloudflare Tunnel (expected)
   -> http://127.0.0.1:4300
 
 student-api.b827262.org
-  -> e500-ai-tutor Cloudflare Tunnel
+  -> e500-ai-tutor Cloudflare Tunnel (expected)
   -> http://127.0.0.1:4310
 ```
 
