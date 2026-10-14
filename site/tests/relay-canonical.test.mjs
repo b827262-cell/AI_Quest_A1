@@ -4,7 +4,7 @@ import { buildCanonicalString, signRelay } from "../lib/relay-signature.ts";
 
 const vector = {
   method: "post",
-  pathname: "/API//V1/Resource/",
+  pathname: "/api//v1/resource/",
   search: "?b=2&a=1",
   body: new TextEncoder().encode('{"x":1}'),
   site: "student",
@@ -38,14 +38,26 @@ test("fixed canonical and HMAC-SHA256 vector", async () => {
   assert.equal(Buffer.from(signature.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("hex"), expectedSignatureHex);
 });
 
-test("path canonicalization folds case, repeated slashes, and trailing slash without decoding escapes", async () => {
+test("path canonicalization preserves case, folds repeated slashes, and strips a trailing slash without decoding escapes", async () => {
   const canonical = await buildCanonicalString(vector);
   const equivalent = await buildCanonicalString({
     ...vector,
-    pathname: "//API///V1/RESOURCE",
+    pathname: "//api///v1/resource",
   });
   assert.equal(equivalent, canonical);
-  assert.equal((await buildCanonicalString({ ...vector, pathname: "/A/%2F/B/" })).split("\n")[2], "/a/%2f/b");
+  assert.equal((await buildCanonicalString({ ...vector, pathname: "/A/%2F/B/" })).split("\n")[2], "/A/%2F/B");
+});
+
+test("case-different paths now yield different canonical strings and signatures", async () => {
+  const upper = await buildCanonicalString({ ...vector, pathname: "/A/" });
+  const lower = await buildCanonicalString({ ...vector, pathname: "/a" });
+  assert.equal(upper.split("\n")[2], "/A");
+  assert.equal(lower.split("\n")[2], "/a");
+  assert.notEqual(upper, lower);
+  assert.notEqual(
+    await signRelay({ ...vector, pathname: "/BookA" }, "test-secret"),
+    await signRelay({ ...vector, pathname: "/booka" }, "test-secret"),
+  );
 });
 
 test("query digest distinguishes an empty search from a non-empty raw search", async () => {
@@ -63,4 +75,35 @@ test("GET and HEAD omit body digests while POST hashes body bytes", async () => 
   }
   const post = await buildCanonicalString({ ...vector, method: "POST", body: "abc" });
   assert.equal(post.split("\n")[4], "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+});
+
+test("control characters and line separators are rejected in every field", async () => {
+  const forbidden = [
+    "x\r", "x\n", "x\u2028", "x\u2029", "x\u0085", "x\u000b", "x\u000c",
+    "x\u0000", "x\u001f", "x\u007f", "x\u009f",
+  ];
+  const fields = ["method", "pathname", "search", "site", "userId", "email", "role", "ts", "nonce"];
+  for (const field of fields) {
+    for (const value of forbidden) {
+      assert.deepEqual(
+        await signRelay({ ...vector, [field]: value }, "test-secret"),
+        { ok: false },
+        `${field}=${JSON.stringify(value)} must be rejected`,
+      );
+    }
+  }
+});
+
+test("unpaired surrogates are rejected so distinct strings cannot share a signature", async () => {
+  const loneSurrogates = ["a\ud800", "a\ud801", "a\ud83d", "a\udc00", "a\udfff", "\ud800"];
+  for (const value of loneSurrogates) {
+    assert.deepEqual(
+      await signRelay({ ...vector, userId: value }, "test-secret"),
+      { ok: false },
+      `${JSON.stringify(value)} must be rejected`,
+    );
+  }
+  // Well-formed surrogate pairs (e.g. an emoji) stay valid.
+  const paired = await buildCanonicalString({ ...vector, userId: "user-\u{1f600}" });
+  assert.equal(typeof paired, "string");
 });

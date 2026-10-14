@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkTimestamp, parseRelayHeaders, signRelay, verifyRelay } from "../lib/relay-signature.ts";
+import { buildCanonicalString, checkTimestamp, parseRelayHeaders, signRelay, verifyRelay } from "../lib/relay-signature.ts";
 
 const vector = {
   method: "post",
-  pathname: "/API//V1/Resource/",
+  pathname: "/api//v1/resource/",
   search: "?b=2&a=1",
   body: new TextEncoder().encode('{"x":1}'),
   site: "student",
@@ -105,7 +105,7 @@ test("relay header parser rejects repeated, comma-multi-value, and missing requi
     ts: "1700000000",
     nonce: "0123456789abcdef",
     userId: "user-123",
-    email: "Alice@Example.com",
+    email: "alice@example.com",
     role: "student",
     signature,
   });
@@ -127,4 +127,69 @@ test("relay header parser rejects repeated, comma-multi-value, and missing requi
     "X-A01-RELAY-TS": "1700000000",
   }), { ok: false });
   assert.deepEqual(parseRelayHeaders(requiredHeaders({ "x-a01-relay-user-role": "owner" })), { ok: false });
+});
+
+const plainBase = {
+  "x-a01-relay-site": "student",
+  "x-a01-relay-ts": "1700000000",
+  "x-a01-relay-nonce": "0123456789abcdef",
+  "x-a01-relay-sig": signature,
+};
+
+test("relay header parser fails closed on malformed plain-object header values", () => {
+  const malformed = [
+    { "x-a01-relay-user-id": [123] },
+    { "x-a01-relay-user-id": [null] },
+    { "x-a01-relay-user-id": [{}] },
+    { "x-a01-relay-user-id": [["a"]] },
+    { "x-a01-relay-user-id": [] },
+    { "x-a01-relay-user-id": ["a", "b"] },
+    { "x-a01-relay-user-id": ["ok", 5] },
+    { "x-a01-relay-user-id": [undefined] },
+    { "x-a01-relay-user-id": 123 },
+    { "x-a01-relay-user-id": {} },
+  ];
+  for (const override of malformed) {
+    assert.deepEqual(parseRelayHeaders({ ...plainBase, ...override }), { ok: false }, JSON.stringify(override));
+  }
+});
+
+test("relay header parser rejects control characters and unpaired surrogates in values", () => {
+  const bad = [
+    "student\r", "student\n", "student\u2028", "student\u2029", "student\u0085",
+    "student\u000b", "student\u000c", "student\u0000", "student\u007f", "student\u009f",
+    "\ud800", "a\udc00",
+  ];
+  for (const value of bad) {
+    assert.deepEqual(
+      parseRelayHeaders({ ...plainBase, "x-a01-relay-user-id": value }),
+      { ok: false },
+      JSON.stringify(value),
+    );
+  }
+});
+
+test("relay header parser canonicalizes email exactly like the canonical builder", async () => {
+  const cases = [" Alice@Example.COM ", "Alice@Example.com", "ALICE@EXAMPLE.COM", " - ", "   ", "-"];
+  for (const raw of cases) {
+    const parsed = parseRelayHeaders({ ...plainBase, "x-a01-relay-user-email": raw });
+    assert.equal(parsed.ok, true, `parse ${JSON.stringify(raw)}`);
+    const canonical = await buildCanonicalString({ ...vector, email: raw });
+    assert.equal(typeof canonical, "string", `canonical ${JSON.stringify(raw)}`);
+    assert.equal(parsed.email, canonical.split("\n")[7], `email ${JSON.stringify(raw)}`);
+  }
+  const missing = parseRelayHeaders(plainBase);
+  assert.equal(missing.ok, true);
+  assert.equal(missing.email, "-");
+});
+
+test("relay header parser fails closed when a plain-object header getter throws", () => {
+  const hostile = { ...plainBase };
+  Object.defineProperty(hostile, "x-a01-relay-user-id", {
+    enumerable: true,
+    get() {
+      throw new Error("boom");
+    },
+  });
+  assert.deepEqual(parseRelayHeaders(hostile), { ok: false });
 });

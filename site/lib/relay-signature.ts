@@ -1,3 +1,20 @@
+/**
+ * Relay request signing core (A-01 identity signing, PR-A).
+ *
+ * Canonical form notes:
+ * - The canonical path preserves letter case; it only collapses repeated
+ *   slashes and strips a single trailing slash. Data IDs may be
+ *   case-sensitive, so lowercasing here would let a signature issued for
+ *   "BookA" also verify for "booka". Route-policy matching that folds case
+ *   belongs to classifyApiPath, not to this file.
+ * - "-" is the missing-value sentinel: a legal userId, email, or role must
+ *   never be the literal "-".
+ * - Canonical fields and header values reject C0/C1 control characters
+ *   (U+0000-U+001F, U+007F-U+009F) and U+2028/U+2029, and must be
+ *   well-formed UTF-16 (no unpaired surrogates), so distinct strings cannot
+ *   collapse to the same bytes during UTF-8 encoding.
+ */
+
 export type RelayInput = {
   method: string;
   pathname: string;
@@ -38,16 +55,49 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
-function hasNewline(value: string): boolean {
-  return value.includes("\n");
+// Reject C0/C1 control characters (U+0000-U+001F, U+007F-U+009F) plus the
+// U+2028/U+2029 line separators. This covers "\r", VT, FF, NEL (U+0085), and
+// "\n" itself.
+const FORBIDDEN_CHAR_PATTERN = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
+
+function hasForbiddenChar(value: string): boolean {
+  return FORBIDDEN_CHAR_PATTERN.test(value);
+}
+
+// Reject unpaired UTF-16 surrogates. Two distinct strings can otherwise
+// encode to the same UTF-8 bytes (each lone surrogate becoming U+FFFD),
+// which would let different inputs share one signature.
+function isWellFormed(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isCleanString(value: string): boolean {
+  return isWellFormed(value) && !hasForbiddenChar(value);
 }
 
 function missingAsDash(value: string | null | undefined): string {
   return value === undefined || value === null || value === "" ? "-" : value;
 }
 
+// Shared by the canonical builder and the header parser so both sides agree
+// on the exact email form that is covered by the signature.
+function canonicalEmail(value: string | null | undefined): string {
+  if (value === undefined || value === null || value.trim() === "-") return "-";
+  return value.trim().toLowerCase() || "-";
+}
+
 function canonicalPath(pathname: string): string {
-  const folded = pathname.replace(/\/{2,}/g, "/").toLowerCase();
+  const folded = pathname.replace(/\/{2,}/g, "/");
   return folded.length > 1 ? folded.replace(/\/+$/, "") : folded;
 }
 
@@ -97,15 +147,13 @@ async function buildCanonical(input: RelayInput): Promise<string | RelayInvalid>
     input.ts,
     input.nonce,
   ];
-  if (rawValues.some((value) => value !== undefined && value !== null && (!isString(value) || hasNewline(value)))) return INVALID;
+  if (rawValues.some((value) => value !== undefined && value !== null && (!isString(value) || !isCleanString(value)))) return INVALID;
 
   if (!input.method || !input.pathname || !validDecimalTimestamp(input.ts) || !NONCE_PATTERN.test(input.nonce)) return INVALID;
 
   const site = missingAsDash(input.site);
   const userId = missingAsDash(input.userId);
-  const email = input.email === undefined || input.email === null || input.email.trim() === "-"
-    ? "-"
-    : input.email.trim().toLowerCase() || "-";
+  const email = canonicalEmail(input.email);
   const role = missingAsDash(input.role);
 
   if (site !== "student" && site !== "admin") return INVALID;
@@ -131,7 +179,7 @@ async function buildCanonical(input: RelayInput): Promise<string | RelayInvalid>
     input.nonce,
   ];
 
-  if (fields.some(hasNewline)) return INVALID;
+  if (fields.some((field) => !isCleanString(field))) return INVALID;
   return fields.join("\n");
 }
 
@@ -208,7 +256,7 @@ export async function verifyRelay(input: RelayInput, signature: string, keys: st
 export function checkTimestamp(ts: string, nowSec: number, skewSec = 300): boolean {
   if (
     !isString(ts) ||
-    hasNewline(ts) ||
+    !isCleanString(ts) ||
     !validDecimalTimestamp(ts) ||
     !Number.isSafeInteger(nowSec) ||
     nowSec < 0 ||
@@ -233,15 +281,25 @@ function readHeader(headers: RelayHeaderSource, target: string): { ok: true; val
     } else if (typeof raw === "string") {
       value = raw;
     } else {
-      if (raw.length !== 1) return INVALID;
+      if (!Array.isArray(raw) || raw.length !== 1 || typeof raw[0] !== "string") return INVALID;
       value = raw[0];
     }
   }
-  if (value !== undefined && (value.includes(",") || hasNewline(value))) return INVALID;
+  if (value !== undefined && (value.includes(",") || !isCleanString(value))) return INVALID;
   return { ok: true, value };
 }
 
 export function parseRelayHeaders(headers: RelayHeaderSource): RelayHeaderResult {
+  try {
+    return parseRelayHeadersChecked(headers);
+  } catch {
+    // Any unexpected shape (hostile plain object, throwing getter, ...) fails
+    // closed rather than surfacing a diagnostic.
+    return INVALID;
+  }
+}
+
+function parseRelayHeadersChecked(headers: RelayHeaderSource): RelayHeaderResult {
   const names = {
     site: "x-a01-relay-site",
     ts: "x-a01-relay-ts",
@@ -263,7 +321,7 @@ export function parseRelayHeaders(headers: RelayHeaderSource): RelayHeaderResult
   const nonce = values.nonce;
   const signature = values.signature;
   const userId = missingAsDash(values.userId);
-  const email = values.email ?? "-";
+  const email = canonicalEmail(values.email);
   const role = missingAsDash(values.role);
 
   if (
