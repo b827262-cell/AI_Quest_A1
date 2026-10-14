@@ -106,6 +106,9 @@ async function requestWorker(pathname, options = {}) {
       DB: options.db,
       BOOKS_BUCKET: options.booksBucket,
       RELEASE_VALIDATION_SECRET: options.releaseValidationSecret,
+      // Administrator privilege is allowlist-driven (issue #47); the synthetic
+      // admin identity used by these tests is configured here.
+      ADMIN_EMAILS: options.adminEmails ?? "admin.tester@synthetic.ai-smartbook.test",
     },
     { waitUntil() {}, passThroughOnException() {} }
   );

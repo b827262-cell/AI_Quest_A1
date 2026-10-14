@@ -21,6 +21,7 @@ async function requestWorker(pathname, options = {}) {
     {
       ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
       DB: options.db,
+      ...(options.env ?? {}),
     },
     { waitUntil() {}, passThroughOnException() {} }
   );
@@ -112,8 +113,10 @@ test("Phase 3B: Valid admin auth succeeds on admin routes", async () => {
     headers: {
       "oai-authenticated-user-id": "adm-01",
       "oai-authenticated-user-email": "admin.master@synthetic.ai-smartbook.test",
-      "oai-authenticated-user-role": "admin",
     },
+    // Administrator privilege now comes from the server-side allowlist, not a
+    // client-supplied role header.
+    env: { ADMIN_EMAILS: "admin.master@synthetic.ai-smartbook.test" },
   });
   assert.equal(res.status, 200);
   const data = await res.json();
@@ -199,4 +202,121 @@ test("Phase 3B: Valid authenticated progress write and persistence across reques
   assert.equal(bookProgress.progressPercent, 92);
   assert.equal(bookProgress.lastReadChapter, "ch-05-microarchitecture");
   assert.equal(bookProgress.lastReadPage, 85);
+});
+
+// Issue #47: administrator privilege comes from an explicit server-side
+// allowlist (ADMIN_EMAILS), never from an email substring or a role header.
+
+test("Issue #47: an email containing 'admin' is not an administrator without an allowlist match", async () => {
+  const res = await requestWorker("/api/admin/auth/me", {
+    headers: {
+      "oai-authenticated-user-id": "usr-substr",
+      "oai-authenticated-user-email": "admin.imposter@example.test",
+    },
+    env: { ADMIN_EMAILS: "owner@example.test" },
+  });
+  assert.equal(res.status, 403);
+  const data = await res.json();
+  assert.match(data.error, /admin permission required/i);
+});
+
+test("Issue #47: an exact allowlist match is an administrator", async () => {
+  const res = await requestWorker("/api/admin/auth/me", {
+    headers: {
+      "oai-authenticated-user-id": "usr-owner",
+      "oai-authenticated-user-email": "owner@example.test",
+    },
+    env: { ADMIN_EMAILS: "owner@example.test" },
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.role, "admin");
+});
+
+test("Issue #47: allowlist matching folds case and ignores surrounding whitespace", async () => {
+  const res = await requestWorker("/api/admin/auth/me", {
+    headers: {
+      "oai-authenticated-user-id": "usr-owner",
+      "oai-authenticated-user-email": "Owner@Example.Test",
+    },
+    env: { ADMIN_EMAILS: "  owner@example.test , second@example.test " },
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.role, "admin");
+});
+
+test("Issue #47: an unset allowlist grants nobody administrator", async () => {
+  const res = await requestWorker("/api/admin/auth/me", {
+    headers: {
+      "oai-authenticated-user-id": "usr-owner",
+      "oai-authenticated-user-email": "owner@example.test",
+    },
+  });
+  assert.equal(res.status, 403);
+  const data = await res.json();
+  assert.match(data.error, /admin permission required/i);
+});
+
+test("Issue #47: production with an unset allowlist fails closed", async () => {
+  const originalEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  try {
+    const res = await requestWorker("/api/admin/auth/me", {
+      headers: {
+        "oai-authenticated-user-id": "usr-owner",
+        "oai-authenticated-user-email": "owner@example.test",
+      },
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    process.env.NODE_ENV = originalEnv;
+  }
+});
+
+test("Issue #47: a forged oai-authenticated-user-role header never grants admin", async () => {
+  const res = await requestWorker("/api/admin/auth/me", {
+    headers: {
+      "oai-authenticated-user-id": "usr-forged",
+      "oai-authenticated-user-email": "forged@example.test",
+      "oai-authenticated-user-role": "admin",
+    },
+    env: { ADMIN_EMAILS: "owner@example.test" },
+  });
+  assert.equal(res.status, 403);
+  const data = await res.json();
+  assert.match(data.error, /admin permission required/i);
+});
+
+test("Issue #47: the synthetic x-admin-key works outside production and is inert in production", async () => {
+  const allowed = await requestWorker("/api/admin/auth/me", {
+    headers: { "x-admin-key": "synthetic-admin-secret" },
+  });
+  assert.equal(allowed.status, 200);
+  assert.equal((await allowed.json()).role, "admin");
+
+  const originalEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  try {
+    const blocked = await requestWorker("/api/admin/auth/me", {
+      headers: { "x-admin-key": "synthetic-admin-secret" },
+    });
+    assert.equal(blocked.status, 401);
+  } finally {
+    process.env.NODE_ENV = originalEnv;
+  }
+});
+
+test("Issue #47: health reports the allowlist state without exposing any address", async () => {
+  const unset = await requestWorker("/api/health");
+  const unsetBody = await unset.json();
+  assert.equal(unsetBody.adminAllowlist, "unset");
+  assert.equal(JSON.stringify(unsetBody).includes("example.test"), false);
+
+  const configured = await requestWorker("/api/health", {
+    env: { ADMIN_EMAILS: "owner@example.test" },
+  });
+  const configuredBody = await configured.json();
+  assert.equal(configuredBody.adminAllowlist, "configured");
+  assert.equal(JSON.stringify(configuredBody).includes("example.test"), false);
 });

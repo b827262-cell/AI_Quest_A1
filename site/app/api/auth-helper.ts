@@ -1,5 +1,53 @@
 import { isProductionEnvironment } from "../../db";
 
+const ADMIN_EMAILS_ENV = "ADMIN_EMAILS";
+
+/**
+ * Reads a runtime value from the worker's globals (the same place the entry
+ * point mirrors its bindings to) with a Node/`process.env` fallback so the same
+ * code path is exercised in tests. Read per call, never cached.
+ */
+function readRuntimeString(name: string): string | undefined {
+  const runtime = globalThis as unknown as {
+    [key: string]: unknown;
+    __env__?: Record<string, unknown>;
+    process?: { env?: Record<string, string | undefined> };
+  };
+  const injected = runtime[name] ?? runtime.__env__?.[name];
+  if (typeof injected === "string") return injected;
+  return runtime.process?.env?.[name];
+}
+
+/**
+ * Parses the `ADMIN_EMAILS` allowlist: comma-separated entries, surrounding
+ * whitespace trimmed, case folded. An unset or blank value yields an empty list,
+ * which grants nobody administrator (fail-closed).
+ */
+export function parseAdminEmails(raw: string | undefined): string[] {
+  if (typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+}
+
+/** True when an admin allowlist is configured. Never exposes any address. */
+export function isAdminAllowlistConfigured(): boolean {
+  return parseAdminEmails(readRuntimeString(ADMIN_EMAILS_ENV)).length > 0;
+}
+
+/**
+ * Administrator membership is an exact, case-insensitive match against the
+ * server-side `ADMIN_EMAILS` allowlist. A missing allowlist grants nobody admin
+ * in any environment, so production fails closed by default.
+ */
+export function isAllowedAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const allowlist = parseAdminEmails(readRuntimeString(ADMIN_EMAILS_ENV));
+  if (allowlist.length === 0) return false;
+  return allowlist.includes(email.trim().toLowerCase());
+}
+
 export type NormalizedUser = {
   id: string;
   email: string;
@@ -29,7 +77,10 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
 
   const userId = headers.get("oai-authenticated-user-id");
   const email = headers.get("oai-authenticated-user-email");
-  const roleHeader = headers.get("oai-authenticated-user-role");
+  // `oai-authenticated-user-role` is deliberately NOT read: it is a client
+  // header that the platform is not (yet) verified to strip or inject, so it can
+  // never be the source of administrator privilege. See issue #47 and the
+  // runbook O-1 note. Admin comes from the `ADMIN_EMAILS` allowlist instead.
   const adminKey = headers.get("x-admin-key");
 
   // 1. Detect malformed auth headers
@@ -152,13 +203,13 @@ export function getNormalizedAuth(request: Request): NormalizedAuthContext {
   }
 
   // 3. Authenticated case
+  // Administrator privilege is granted only by server-side sources: the
+  // `ADMIN_EMAILS` allowlist, or the synthetic bypasses that are themselves
+  // gated to non-production (or a configured production validation secret).
+  // A client-supplied `oai-authenticated-user-role` header, and any substring
+  // match on the email, must never promote a caller.
   let role: "admin" | "student" = "student";
-  if (
-    isAdminBypass ||
-    roleHeader === "admin" ||
-    isSyntheticAdminKey ||
-    (email && (email.includes("admin") || email === "admin.tester@synthetic.ai-smartbook.test"))
-  ) {
+  if (isAdminBypass || isSyntheticAdminKey || isAllowedAdminEmail(email)) {
     role = "admin";
   }
 

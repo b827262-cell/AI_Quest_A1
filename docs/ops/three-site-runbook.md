@@ -23,12 +23,14 @@
 | `SITE_NAME` | `backend`、`student` 或 `admin` | 必須與角色成對：`primary` 對 `backend`，`secondary` 對 `student` 或 `admin`。 |
 | `PRIMARY_ORIGIN` | `https://...`（次站必填） | 只能是純 https origin：不得含路徑、帳號密碼，可帶單一結尾 `/`。主站忽略此值。 |
 | `GIT_SHA` | 同一個完整 commit SHA | 健康檢查的 `gitSha` 來源。三站必須相同，且不得為 `unknown`。 |
+| `ADMIN_EMAILS` | 逗號分隔的位址清單（主站必填） | 管理員 allowlist。格式為 `位址1,位址2`；每項會去除前後空白、不分大小寫、以完全相等比對。未設定或為空時，沒有任何人會是管理員（fail-closed）。次站不需要此變數。 |
 
 缺漏與錯誤時的行為（一律 fail closed）：
 
 - 上述變數皆未設定：站點為 `standalone`，沿用舊的本地行為，不代理任何請求。
 - 角色與站名不成對，或值不被認得：站點為 `misconfigured`。除 `/api/health` 外，所有 `/api/*` 回 503 `site_misconfigured`。
 - 次站缺少 `PRIMARY_ORIGIN`，或其值不是 https origin：其自身 API 前綴回 503 `backend_disabled`，且不對外呼叫。
+- 主站未設定 `ADMIN_EMAILS`：沒有任何帳號會被視為管理員（fail-closed），`/api/health` 的 `adminAllowlist` 回 `unset`。管理員身分只來自這份 allowlist；`oai-authenticated-user-role` 標頭不再授予管理員。
 
 Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalThis`，與 D1、R2 綁定的做法相同。
 
@@ -53,8 +55,10 @@ Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalT
 
 ## 4. health 契約
 
-`GET /api/health` 的契約欄位為 `status`、`role`、`site`、`primaryOrigin`、`gitSha`、`d1`、`r2`。
+`GET /api/health` 的契約欄位為 `status`、`role`、`site`、`primaryOrigin`、`gitSha`、`d1`、`r2`、`adminAllowlist`。
 為相容既有使用者，仍保留 `edge`、`phase`、`storage`、`backendTarget`、`version`、`buildId`、`identitySource`、`time`。
+
+`adminAllowlist` 只回報 `configured` 或 `unset`，永遠不含任何位址。當它為 `unset` 時，沒有任何帳號會是管理員。
 
 | 站點 | role | site | primaryOrigin | d1 | r2 |
 | --- | --- | --- | --- | --- | --- |
@@ -67,12 +71,12 @@ Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalT
 ## 5. 部署順序
 
 1. 在本地確認目標 commit 通過 `cd site && npm ci && npm run typecheck && npm test`，以及 `npm run environment:align:production`。
-2. 先設定三站的執行期變數，再部署程式碼。三站的 `GIT_SHA` 都填同一個 commit。
+2. 先設定三站的執行期變數，再部署程式碼。三站的 `GIT_SHA` 都填同一個 commit。**主站部署前必須先設定 `ADMIN_EMAILS`**，否則上線後沒有任何人能登入管理端（fail-closed）。
 3. 先部署主站，並完成第 6 節的驗證。主站的 API 行為對既有次站相容，因此可以先上線。
 4. 依序部署學生次站與管理次站，每站部署後各自驗證。
 5. 三站上線後，capture 才會與新契約一致。是否寫回 production manifest 須由 Owner 指示；本手冊不要求執行。
 
-注意：次站若只部署程式碼、未設定 `SITE_ROLE` 與 `PRIMARY_ORIGIN`，會退回本地 standalone 行為，且沒有 D1，使頁面 API 出錯。部署前必須先設定變數。
+注意：次站若只部署程式碼、未設定 `SITE_ROLE` 與 `PRIMARY_ORIGIN`，會退回本地 standalone 行為，且沒有 D1，使頁面 API 出錯。部署前必須先設定變數。主站若未設定 `ADMIN_EMAILS`，管理端會 fail-closed 而無人可登入；`/api/health` 的 `adminAllowlist` 為 `unset` 即為此徵兆。
 
 ## 6. 部署後驗證（只使用 GET）
 
@@ -99,7 +103,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://ai-quest-a1-student.b827262.ch
 
 ## 8. 開放問題與已知限制
 
-- **O-1 身分轉送尚未簽章。** `x-a01-relay` 簽章屬於本版的擴充點，尚未實作。目前主站信任 `oai-authenticated-user-*` 與 `x-admin-key` 標頭，次站會原樣轉送。上線前須先確認 Sites 會在主站入口清除外來的 `oai-*` 標頭。這是設計文件標示的最大風險，目前仍待驗證。
+- **O-1 身分轉送尚未簽章。** `x-a01-relay` 簽章屬於本版的擴充點，尚未實作。主站仍信任 `oai-authenticated-user-id`、`oai-authenticated-user-email` 等標頭，次站會原樣轉送；上線前須先確認 Sites 會在主站入口清除外來的 `oai-*` 標頭。這是設計文件標示的最大風險，目前仍待驗證。管理員權限已不再由此類標頭推得：`oai-authenticated-user-role` 與 email 子字串都不再授予管理員，改由伺服器端 `ADMIN_EMAILS` allowlist 決定（issue #47）；`x-admin-key` 僅在非 production 的合成測試有效。
 - **O-2 平台注入方式待確認。** 需確認 Sites 是否支援每個專案注入自己的執行期變數與 secret。若只能於建置時寫入，則必須逐站建置，並寫入 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA`（不含 secret）。
 - **O-3 逐站部署工具未納入本版。** 設計文件第 5 節提到的 `deploy-target.mjs` 與 `npm run deploy:target` 未納入本版。在工具完成前，請依第 5 節手動部署。
 - **O-4 主站直接回應的標籤仍為舊值。** 主站本地路由仍標示 `x-data-plane: shared-backend`，本版未改動各路由。只有次站的代理回應標示 `primary`。

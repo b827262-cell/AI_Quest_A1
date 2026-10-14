@@ -18,6 +18,9 @@ interface Env {
   SITE_ROLE?: string;
   SITE_NAME?: string;
   PRIMARY_ORIGIN?: string;
+  // Comma-separated administrator allowlist (exact, case-insensitive). Unset
+  // means nobody is an administrator. See app/api/auth-helper.ts.
+  ADMIN_EMAILS?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -46,11 +49,12 @@ const worker = {
       env.RELEASE_VALIDATION_SECRET;
     (globalThis as unknown as { SYNC_IMPORT_SECRET?: string }).SYNC_IMPORT_SECRET = env.SYNC_IMPORT_SECRET;
     (globalThis as unknown as { SYNC_MAX_PDF_BYTES?: string }).SYNC_MAX_PDF_BYTES = env.SYNC_MAX_PDF_BYTES;
-    const runtimeGlobals = globalThis as unknown as { GIT_SHA?: string; SITE_ROLE?: string; SITE_NAME?: string; PRIMARY_ORIGIN?: string };
+    const runtimeGlobals = globalThis as unknown as { GIT_SHA?: string; SITE_ROLE?: string; SITE_NAME?: string; PRIMARY_ORIGIN?: string; ADMIN_EMAILS?: string };
     runtimeGlobals.GIT_SHA = env.GIT_SHA;
     runtimeGlobals.SITE_ROLE = env.SITE_ROLE;
     runtimeGlobals.SITE_NAME = env.SITE_NAME;
     runtimeGlobals.PRIMARY_ORIGIN = env.PRIMARY_ORIGIN;
+    runtimeGlobals.ADMIN_EMAILS = env.ADMIN_EMAILS;
     const url = new URL(request.url);
 
     // The gate decides what counts as an API request; a second prefix test here would
