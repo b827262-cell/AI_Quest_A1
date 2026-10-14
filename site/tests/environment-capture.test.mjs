@@ -24,6 +24,29 @@ function manifest() {
   };
 }
 
+const GIT_SHA = "5f3c2a1b9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a";
+const RUNTIME_KEYS = ["GIT_SHA", "SITE_ROLE", "SITE_NAME", "PRIMARY_ORIGIN"];
+
+/** The topology each synthetic site declares at runtime, as the Sites platform would inject it. */
+function declarationFor(target) {
+  if (target.hostname.includes("ai-quest-a1-backend")) return { SITE_ROLE: "primary", SITE_NAME: "backend" };
+  return {
+    SITE_ROLE: "secondary",
+    SITE_NAME: target.hostname.includes("admin") ? "admin" : "student",
+    PRIMARY_ORIGIN: "https://ai-quest-a1-backend.example.test",
+  };
+}
+
+async function healthWithDeclaration(url, declaration) {
+  const saved = Object.fromEntries(RUNTIME_KEYS.map((key) => [key, globalThis[key]]));
+  try {
+    Object.assign(globalThis, { GIT_SHA, SITE_ROLE: undefined, SITE_NAME: undefined, PRIMARY_ORIGIN: undefined }, declaration);
+    return await healthRoute(new Request(url));
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+}
+
 function mockHttp(changeHealth = (body) => body) {
   const calls = [];
   const fetchJson = async (url) => {
@@ -34,7 +57,7 @@ function mockHttp(changeHealth = (body) => body) {
       const previous = globalThis.__env__;
       try {
         globalThis.__env__ = target.hostname.includes("ai-quest-a1-backend") ? { DB: {}, BOOKS_BUCKET: {} } : {};
-        const response = await healthRoute(new Request(url));
+        const response = await healthWithDeclaration(url, declarationFor(target));
         return { status: response.status, body: changeHealth(await response.json(), target) };
       } finally {
         if (hadEnv) globalThis.__env__ = previous;
@@ -51,14 +74,19 @@ function mockHttp(changeHealth = (body) => body) {
   return { calls, fetchJson, getContent };
 }
 
-test("capture accepts the actual health route contract with standalone frontends unbound", async () => {
+test("capture accepts the declared primary and secondary health contract on three sites", async () => {
   const mock = mockHttp();
   const result = await probe(manifest(), mock.fetchJson, mock.getContent);
   assert.deepEqual(result.failures, []);
-  assert.equal(result.observed.health.shared_backend.role, "backend");
-  assert.equal(result.observed.health.student.role, "standalone");
+  assert.equal(result.observed.health.shared_backend.role, "primary");
+  assert.equal(result.observed.health.shared_backend.site, "backend");
+  assert.equal(result.observed.health.shared_backend.primaryOrigin, null);
+  assert.equal(result.observed.health.student.role, "secondary");
+  assert.equal(result.observed.health.student.site, "student");
+  assert.equal(result.observed.health.student.primaryOrigin, "https://ai-quest-a1-backend.example.test");
   assert.equal(result.observed.health.student.d1, "unbound");
-  assert.equal(result.observed.health.admin.backendTarget, "disabled-or-staging-only");
+  assert.equal(result.observed.health.admin.r2, "unbound");
+  assert.equal(result.observed.health.admin.gitSha, GIT_SHA);
   assert.equal(mock.calls.length, 5);
 });
 
@@ -123,12 +151,17 @@ test("capture rejects mismatched worker declarations before making any HTTP requ
   }
 });
 
-test("capture fails closed for stale health roles, wrong edge, target, binding or server time", async () => {
+test("capture fails closed for stale or misdeclared roles, origins, bindings, gitSha or server time", async () => {
   for (const change of [
     (body) => ({ ...body, role: "shared-backend" }),
     (body) => ({ ...body, edge: "other" }),
-    (body) => ({ ...body, backendTarget: manifest().sites.shared_backend.url }),
-    (body) => ({ ...body, d1: "unbound" }),
+    (body, target) => (target.hostname.includes("student") ? { ...body, role: "primary" } : body),
+    (body, target) => (target.hostname.includes("student") ? { ...body, site: "admin" } : body),
+    (body, target) => (target.hostname.includes("student") ? { ...body, primaryOrigin: "https://other.example.test" } : body),
+    (body, target) => (target.hostname.includes("admin") ? { ...body, d1: "bound" } : body),
+    (body, target) => (target.hostname.includes("ai-quest-a1-backend") ? { ...body, d1: "unbound" } : body),
+    (body, target) => (target.hostname.includes("admin") ? { ...body, gitSha: "d".repeat(40) } : body),
+    (body) => ({ ...body, gitSha: "unknown" }),
     (body) => ({ ...body, status: "error" }),
     (body) => ({ ...body, time: "not-a-time" }),
   ]) {
