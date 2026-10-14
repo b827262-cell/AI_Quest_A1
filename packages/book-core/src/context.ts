@@ -8,7 +8,6 @@ import type {
   UpdateChapterInput,
   CreateQaLogInput
 } from "@ai-smartbook/schema";
-import type { AiProvider } from "@ai-smartbook/ai";
 
 /** Storage operations owned by book-core; applications supply their implementations.
  * Keep these methods synchronous to preserve the current service behavior.
@@ -38,10 +37,30 @@ export interface BookRepositories {
   };
 }
 
+/** The book workflows need text generation only; apps own provider configuration. */
+export interface BookAiPrompt {
+  system?: string;
+  prompt: string;
+}
+
+export interface BookAiProvider {
+  readonly name: string;
+  readonly model: string;
+  generateText(input: BookAiPrompt): Promise<string>;
+}
+
+/** Pure prompt builders supplied by the application composition layer. */
+export interface BookPromptBuilders {
+  buildSplitBookPrompt(input: { bookTitle: string; contentText: string }): BookAiPrompt;
+  buildSummarizeChapterPrompt(input: { chapterTitle: string; contentText: string }): BookAiPrompt;
+  buildBookQaPrompt(input: { bookTitle: string; question: string; contextChunks: string[] }): BookAiPrompt;
+}
+
 /** Shared dependencies injected into book-core service functions. */
 export interface BookCoreContext {
   repos: BookRepositories;
-  ai: AiProvider;
+  ai: BookAiProvider;
+  prompts: BookPromptBuilders;
 }
 
 /** Extract the first JSON array/object found in a model response. */

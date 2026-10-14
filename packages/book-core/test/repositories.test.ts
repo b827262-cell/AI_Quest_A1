@@ -4,6 +4,7 @@ import { type BookCoreContext, type BookRepositories } from "../src/context";
 import { buildChaptersFromContents, linkChaptersByPageRange } from "../src/chapter-builder";
 import { askBookQuestion } from "../src/book-qa";
 import { summarizeChapter } from "../src/chapter-summarizer";
+import { splitBookIntoChapters } from "../src/book-splitter";
 
 /** A complete storage port with no database implementation or connection. */
 function fixture() {
@@ -53,7 +54,15 @@ function fixture() {
     }
   };
   const generateText = vi.fn(async () => "answer from fake provider");
-  const ctx: BookCoreContext = { repos, ai: { name: "mock", model: "port-test", generateText } };
+  const ctx: BookCoreContext = {
+    repos,
+    ai: { name: "mock", model: "port-test", generateText },
+    prompts: {
+      buildSplitBookPrompt: input => ({ prompt: input.contentText }),
+      buildSummarizeChapterPrompt: input => ({ prompt: input.contentText }),
+      buildBookQaPrompt: input => ({ prompt: input.question })
+    }
+  };
   return { ctx, contents, chapters, logs, generateText };
 }
 
@@ -78,10 +87,13 @@ describe("book-core repository port", () => {
 
   it("retrieves context and persists QA through the injected storage port", async () => {
     const { ctx, logs, generateText } = fixture();
+    const buildPrompt = vi.fn(() => ({ system: "qa system", prompt: "injected qa prompt" }));
+    ctx.prompts.buildBookQaPrompt = buildPrompt;
     const result = await askBookQuestion(ctx, "b", "repository", { contextLimit: 2 });
     expect(result.contextChunks).toHaveLength(2);
     expect(result.answer).toBe("answer from fake provider");
-    expect(generateText).toHaveBeenCalledOnce();
+    expect(buildPrompt).toHaveBeenCalledWith({ bookTitle: "Test book", question: "repository", contextChunks: result.contextChunks });
+    expect(generateText).toHaveBeenCalledExactlyOnceWith({ system: "qa system", prompt: "injected qa prompt" });
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatchObject({ bookId: "b", provider: "mock", model: "port-test", answer: result.answer });
     expect(JSON.parse(logs[0].contextJson!)).toEqual(result.contextChunks);
@@ -93,4 +105,29 @@ describe("book-core repository port", () => {
     ctx.repos.chapters.update = () => null;
     await expect(summarizeChapter(ctx, "b", chapter.id)).rejects.toThrow(`Failed to update chapter: ${chapter.id}`);
   });
+
+  it("uses the injected split prompt and preserves persisted chapter drafts", async () => {
+    const { ctx, generateText, contents } = fixture();
+    const buildPrompt = vi.fn(() => ({ system: "split system", prompt: "injected split prompt" }));
+    ctx.prompts.buildSplitBookPrompt = buildPrompt;
+    generateText.mockResolvedValueOnce('[{"title":"A chapter","summary":"A summary"}]');
+    const chapters = await splitBookIntoChapters(ctx, "b");
+    expect(buildPrompt).toHaveBeenCalledWith({ bookTitle: "Test book", contentText: contents.map(c => c.contentText).join("\n\n") });
+    expect(generateText).toHaveBeenCalledExactlyOnceWith({ system: "split system", prompt: "injected split prompt" });
+    expect(chapters).toMatchObject([{ title: "A chapter", summary: "A summary", status: "draft", orderIndex: 0 }]);
+  });
+
+  it("uses the injected summary prompt and preserves trimming and storage", async () => {
+    const { ctx, generateText, contents } = fixture();
+    const [chapter] = await buildChaptersFromContents(ctx, "b");
+    const buildPrompt = vi.fn(() => ({ system: "summary system", prompt: "injected summary prompt" }));
+    ctx.prompts.buildSummarizeChapterPrompt = buildPrompt;
+    generateText.mockResolvedValueOnce("  chapter summary\n");
+    const result = await summarizeChapter(ctx, "b", chapter.id);
+    expect(buildPrompt).toHaveBeenCalledWith({ chapterTitle: chapter.title, contentText: contents.map(c => c.contentText).join("\n\n") });
+    expect(generateText).toHaveBeenCalledExactlyOnceWith({ system: "summary system", prompt: "injected summary prompt" });
+    expect(result.summary).toBe("chapter summary");
+    expect(ctx.repos.chapters.findById(chapter.id)?.summary).toBe("chapter summary");
+  });
+
 });

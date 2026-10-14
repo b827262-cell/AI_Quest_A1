@@ -1,4 +1,3 @@
-import { buildSummarizeChapterPrompt } from "@ai-smartbook/ai";
 import type { BookChapter } from "@ai-smartbook/schema";
 import type { BookCoreContext } from "./context";
 
@@ -21,7 +20,7 @@ export async function summarizeChapter(
     chapterContents.length > 0 ? chapterContents : ctx.repos.contents.findByBookId(bookId);
   const contentText = fallbackContents.map((c) => c.contentText).join("\n\n");
 
-  const prompt = buildSummarizeChapterPrompt({
+  const prompt = ctx.prompts.buildSummarizeChapterPrompt({
     chapterTitle: chapter.title,
     contentText
   });

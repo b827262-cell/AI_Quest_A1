@@ -212,9 +212,6 @@ importers:
 
   packages/book-core:
     dependencies:
-      '@ai-smartbook/ai':
-        specifier: workspace:*
-        version: link:../ai
       '@ai-smartbook/schema':
         specifier: workspace:*
         version: link:../schema
