@@ -6,6 +6,9 @@ import https from "node:https";
 import tls from "node:tls";
 import { assertSafeLlmBaseUrl, resolveSafeAddress, type DnsResolver } from "./safe-url";
 
+/** Conservative cap for one non-streaming LLM JSON response (4 MiB). */
+export const MAX_LLM_RESPONSE_BYTES = 4 * 1024 * 1024;
+
 export type PinnedFetchOptions = {
   method?: string;
   headers?: Record<string, string>;
@@ -39,7 +42,13 @@ export async function pinnedFetch(url: string | URL, options: PinnedFetchOptions
     controller.signal.throwIfAborted();
     return await new Promise<Response>((resolve, reject) => {
       let req: http.ClientRequest | undefined;
-      const fail = (error: Error) => { req?.destroy(); reject(error); };
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+        req?.destroy();
+      };
       const requestOptions: https.RequestOptions = {
         method: options.method ?? "GET",
         host: target.hostname,
@@ -57,10 +66,27 @@ export async function pinnedFetch(url: string | URL, options: PinnedFetchOptions
       };
       req = https.request(requestOptions, (res) => {
         const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        let bytes = 0;
+        const tooLarge = () => {
+          fail(new Error("LLM response exceeds 4 MiB limit"));
+          res.destroy();
+        };
         res.on("error", fail);
         res.on("aborted", () => fail(new Error("Upstream response aborted")));
+        const declaredLength = res.headers["content-length"];
+        if (typeof declaredLength === "string" && /^\d+$/.test(declaredLength)
+          && Number(declaredLength) > MAX_LLM_RESPONSE_BYTES) {
+          tooLarge();
+          return;
+        }
+        res.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          bytes += chunk.byteLength;
+          if (bytes > MAX_LLM_RESPONSE_BYTES) { tooLarge(); return; }
+          chunks.push(chunk);
+        });
         res.on("end", () => {
+          if (settled) return;
           try {
             const headers = new Headers();
             for (const [key, value] of Object.entries(res.headers)) {
@@ -70,11 +96,13 @@ export async function pinnedFetch(url: string | URL, options: PinnedFetchOptions
             const status = res.statusCode ?? 502;
             const body = [204, 205, 304].includes(status) || options.method === "HEAD"
               ? null : Buffer.concat(chunks);
-            resolve(new Response(body, { status, headers }));
+            const response = new Response(body, { status, headers });
+            settled = true;
+            resolve(response);
           } catch (error) { fail(error as Error); }
         });
       });
-      req.on("error", reject);
+      req.on("error", fail);
       if (options.body) req.write(options.body);
       req.end();
     });

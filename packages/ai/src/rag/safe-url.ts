@@ -100,21 +100,26 @@ function isAllowedPublicIp(host: string): boolean {
   const family = isIP(raw);
   if (family === 4) return isAllowedPublicIpv4(raw.split(".").map(Number));
   if (family !== 6) return false;
-  // Canonicalize expanded and dotted IPv6 before classifying mapped addresses.
-  const canonical = new URL(`https://[${raw}]/`).hostname.slice(1, -1);
-  const [left, right = ""] = canonical.split("::");
-  const l = left ? left.split(":") : [];
-  const r = right ? right.split(":") : [];
-  const words = [...l, ...Array(8 - l.length - r.length).fill("0"), ...r].map(x => parseInt(x, 16));
-  if (words.slice(0, 5).every(x => x === 0) && words[5] === 0xffff) {
-    return isAllowedPublicIpv4([words[6] >> 8, words[6] & 255, words[7] >> 8, words[7] & 255]);
+  try {
+    // Canonicalize expanded and dotted IPv6 before classifying mapped addresses.
+    const canonical = new URL(`https://[${raw}]/`).hostname.slice(1, -1);
+    const [left, right = ""] = canonical.split("::");
+    const l = left ? left.split(":") : [];
+    const r = right ? right.split(":") : [];
+    const words = [...l, ...Array(8 - l.length - r.length).fill("0"), ...r].map(x => parseInt(x, 16));
+    if (words.slice(0, 5).every(x => x === 0) && words[5] === 0xffff) {
+      return isAllowedPublicIpv4([words[6] >> 8, words[6] & 255, words[7] >> 8, words[7] & 255]);
+    }
+    // Permit global unicast only; exclude special-use 2001::/23, documentation,
+    // and 6to4 (which embeds an IPv4 destination).
+    if ((words[0] & 0xe000) !== 0x2000) return false;
+    if (words[0] === 0x2001 && (words[1] < 0x200 || words[1] === 0xdb8)) return false;
+    if (words[0] === 0x2002 || (words[0] === 0x3fff && words[1] < 0x1000)) return false;
+    return true;
+  } catch {
+    // Scoped IPv6 (zone IDs) and uncanonicalizable answers fail closed.
+    return false;
   }
-  // Permit global unicast only; exclude special-use 2001::/23, documentation,
-  // and 6to4 (which embeds an IPv4 destination).
-  if ((words[0] & 0xe000) !== 0x2000) return false;
-  if (words[0] === 0x2001 && (words[1] < 0x200 || words[1] === 0xdb8)) return false;
-  if (words[0] === 0x2002 || (words[0] === 0x3fff && words[1] < 0x1000)) return false;
-  return true;
 }
 
 function isAllowedPublicIpv4(octets: number[]): boolean {

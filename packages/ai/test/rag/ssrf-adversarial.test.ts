@@ -20,7 +20,7 @@ import https from "node:https";
 import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import { assertSafeLlmBaseUrl, resolveSafeAddress, type DnsResolver } from "../../src/rag/safe-url";
-import { pinnedFetch } from "../../src/rag/pinned-fetch";
+import { pinnedFetch, MAX_LLM_RESPONSE_BYTES } from "../../src/rag/pinned-fetch";
 import type { PinnedFetchOptions } from "../../src/rag/pinned-fetch";
 import { CerebrasLlmProvider } from "../../src/rag/cerebras.adapter";
 
@@ -381,6 +381,11 @@ describe("SSRF port regressions", () => {
 
 describe("native HTTP client with a mock TLS socket", () => {
   it("uses the pinned createConnection hook without a second hostname lookup", async () => {
+    // Fail before any socket if a regression switches back to an Agent.
+    const agent = vi.spyOn(https.Agent.prototype, "addRequest").mockImplementation(() => {
+      throw new Error("Agent must not bypass the pinned hook");
+    });
+    const request = vi.spyOn(https, "request");
     const resolver = vi.fn(seqDns("8.8.8.8", "127.0.0.1"));
     let sent = "";
     let replied = false;
@@ -408,6 +413,10 @@ describe("native HTTP client with a mock TLS socket", () => {
       host: "8.8.8.8", servername: "provider.example", rejectUnauthorized: true
     }));
     expect(sent).toContain("Host: provider.example");
+    expect(agent).not.toHaveBeenCalled();
+    const options = request.mock.calls[0][0] as https.RequestOptions;
+    expect(options.agent).toBeUndefined();
+    expect(options.createConnection).toEqual(expect.any(Function));
   });
 
   it("rejects response-stream errors instead of throwing outside the request promise", async () => {
@@ -418,6 +427,7 @@ describe("native HTTP client with a mock TLS socket", () => {
       req.write = vi.fn(() => true);
       req.end = vi.fn(() => {
         const res = new EventEmitter() as http.IncomingMessage;
+        res.headers = {};
         callback(res);
         queueMicrotask(() => res.emit("error", new Error("mock stream failure")));
         return req;
@@ -427,5 +437,86 @@ describe("native HTTP client with a mock TLS socket", () => {
     await expect(pinnedFetch("https://provider.example/v1", {
       dnsResolver: safeDns
     })).rejects.toThrow("mock stream failure");
+  });
+});
+
+
+describe("PR #48 follow-up bounds", () => {
+  it.each(["fe80::1%eth0", "2001:4860:4860::8888%eth0", "fe80::1%25eth0"])(
+    "fails closed with a stable DNS error for zone ID %s", async address => {
+      await expect(resolveSafeAddress(new URL("https://provider.example/v1"), {
+        resolver: async () => [address]
+      })).rejects.toMatchObject({ reasonCode: "unsafe_dns:resolved_ip_blocked" });
+    }
+  );
+
+  it.each([0, 5, 6])("bounds a chain of %i redirects to five followed hops", async redirects => {
+    const transport = vi.fn(async () => {
+      const requestNumber = transport.mock.calls.length;
+      return requestNumber <= redirects
+        ? new Response(null, { status: 307, headers: { location: `/v1/hop-${requestNumber}` } })
+        : new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    });
+    const provider = new CerebrasLlmProvider({
+      credentialResolver: async () => ({ apiKey: SAFE_KEY }), transport
+    });
+    const result = provider.generate({ requestId: "redirect-limit", systemPrompt: "s", userPrompt: "u", maxOutputTokens: 5 });
+    if (redirects <= 5) await expect(result).resolves.toMatchObject({ text: "ok" });
+    else await expect(result).rejects.toMatchObject({ reasonCode: "unsafe_redirect:too_many" });
+    expect(transport).toHaveBeenCalledTimes(Math.min(redirects + 1, 6));
+  });
+
+  function mockResponse(chunks: Buffer[], declaredLength?: number) {
+    const res = new EventEmitter() as http.IncomingMessage;
+    res.statusCode = 200;
+    res.headers = declaredLength === undefined ? {} : { "content-length": String(declaredLength) };
+    res.destroy = vi.fn(() => res);
+    const req = new EventEmitter() as http.ClientRequest;
+    req.destroy = vi.fn(() => req);
+    req.end = vi.fn(() => {
+      queueMicrotask(() => {
+        callback(res);
+        for (const chunk of chunks) res.emit("data", chunk);
+        res.emit("end");
+      });
+      return req;
+    });
+    let callback: (res: http.IncomingMessage) => void;
+    vi.spyOn(https, "request").mockImplementation(((_options: unknown, cb: typeof callback) => {
+      callback = cb;
+      return req;
+    }) as typeof https.request);
+    return { res, req };
+  }
+
+  it.each([MAX_LLM_RESPONSE_BYTES - 1, MAX_LLM_RESPONSE_BYTES])(
+    "accepts a response of %i bytes", async bytes => {
+      const { res } = mockResponse([Buffer.alloc(bytes)]);
+      const response = await pinnedFetch("https://provider.example/v1", { dnsResolver: safeDns });
+      expect((await response.arrayBuffer()).byteLength).toBe(bytes);
+      expect(res.destroy).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects a single oversized chunk and destroys the response and request", async () => {
+    const { res, req } = mockResponse([Buffer.alloc(MAX_LLM_RESPONSE_BYTES + 1)]);
+    await expect(pinnedFetch("https://provider.example/v1", { dnsResolver: safeDns }))
+      .rejects.toThrow("4 MiB");
+    expect(res.destroy).toHaveBeenCalledOnce();
+    expect(req.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("counts actual streamed bytes despite an understated content-length", async () => {
+    const { res } = mockResponse([Buffer.alloc(MAX_LLM_RESPONSE_BYTES), Buffer.alloc(1)], 1);
+    await expect(pinnedFetch("https://provider.example/v1", { dnsResolver: safeDns }))
+      .rejects.toThrow("4 MiB");
+    expect(res.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an oversized content-length before consuming the body", async () => {
+    const { res } = mockResponse([], MAX_LLM_RESPONSE_BYTES + 1);
+    await expect(pinnedFetch("https://provider.example/v1", { dnsResolver: safeDns }))
+      .rejects.toThrow("4 MiB");
+    expect(res.destroy).toHaveBeenCalledOnce();
   });
 });

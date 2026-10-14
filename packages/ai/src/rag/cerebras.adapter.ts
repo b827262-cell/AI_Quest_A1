@@ -142,7 +142,9 @@ export class CerebrasLlmProvider implements LlmProvider {
     input: LlmGenerateInput,
     signal: AbortSignal
   ): Promise<Response> {
+    // Five followed redirects = at most six total requests, including the first.
     const maxRedirects = 5;
+    let redirectsFollowed = 0;
     const seenUrls = new Set<string>();
     let currentUrl = assertSafeLlmBaseUrl(url).toString();
     let previousOrigin: string | undefined;
@@ -203,7 +205,7 @@ export class CerebrasLlmProvider implements LlmProvider {
         return response;
       }
 
-      if (seenUrls.size > maxRedirects) {
+      if (redirectsFollowed >= maxRedirects) {
         throw new RagApplicationError({
           code: "RAG_PROVIDER_UNAVAILABLE",
           provider: "cerebras",
@@ -225,6 +227,7 @@ export class CerebrasLlmProvider implements LlmProvider {
       // Validate the redirect target statically (and, on the next loop
       // iteration, via pinnedFetch). Cross-origin is rejected above.
       currentUrl = new URL(location, currentUrl).toString();
+      redirectsFollowed += 1;
     }
   }
 }
