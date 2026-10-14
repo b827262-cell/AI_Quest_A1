@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { classifyApiPath, gateApiRequest } from "../app/api/backend-client.ts";
 
 // Three sites in one process. Every request carries the runtime declaration its
 // site would receive from Sites (SITE_ROLE, SITE_NAME, PRIMARY_ORIGIN, GIT_SHA).
@@ -18,6 +19,14 @@ const DECLARATIONS = {
   primary: { SITE_ROLE: "primary", SITE_NAME: "backend" },
   student: { SITE_ROLE: "secondary", SITE_NAME: "student", PRIMARY_ORIGIN },
   admin: { SITE_ROLE: "secondary", SITE_NAME: "admin", PRIMARY_ORIGIN },
+};
+/** The same four declarations as readSiteDeclaration() values, for gate tests that pass them in. */
+const SITE_DECLARATIONS = {
+  primary: { role: "primary", site: "backend", primaryOrigin: null },
+  student: { role: "secondary", site: "student", primaryOrigin: PRIMARY_ORIGIN },
+  admin: { role: "secondary", site: "admin", primaryOrigin: PRIMARY_ORIGIN },
+  standalone: { role: "standalone", site: null, primaryOrigin: null },
+  misconfigured: { role: "misconfigured", site: null, primaryOrigin: null },
 };
 const ASSETS = { fetch: async () => new Response("Not found", { status: 404 }) };
 const ctx = { waitUntil() {}, passThroughOnException() {} };
@@ -119,6 +128,118 @@ test("a secondary never proxies a foreign prefix or internal sync and answers 40
     }
     assert.equal(arrived.length, 0);
   });
+});
+
+test("a secondary rejects case, duplicate-slash and trailing-slash variants of a foreign prefix without calling out", async () => {
+  await withPrimaryRouting(async (arrived) => {
+    for (const [site, pathname] of [
+      ["student", "/API/admin/auth/me"],
+      ["student", "/API//ADMIN//AUTH//ME"],
+      ["student", "//api//admin//auth//me"],
+      ["student", "/api/admin/auth/me/"],
+      ["student", "/Api/Admin/Books/"],
+      ["admin", "/API/student/me"],
+      ["admin", "//api//student//me"],
+      ["admin", "/api/student/me/"],
+    ]) {
+      const res = await siteRequest(site, pathname);
+      assert.equal(res.status, 404, `${site} ${pathname}`);
+      assert.equal((await res.json()).error, "not_found", `${site} ${pathname}`);
+    }
+    assert.equal(arrived.length, 0, "a folded foreign prefix must never be proxied");
+  });
+});
+
+test("an encoded separator or double-encoded traversal is refused as ambiguous on every site", async () => {
+  await withPrimaryRouting(async (arrived) => {
+    for (const [site, pathname] of [
+      ["student", "/api/student%2f..%2fadmin%2fauth%2fme"],
+      ["student", "/api/admin%2f%2e%2fbooks"],
+      ["student", "/api/internal%2fsync"],
+      ["student", "/api/%252e%252e/admin/auth/me"],
+      ["student", "/api/admin%23x"],
+      ["student", "/api/admin%5cx"],
+      ["admin", "/api/admin%2f..%2fstudent%2fme"],
+      ["primary", "/api/student%2f..%2fadmin%2fauth%2fme"],
+    ]) {
+      const res = await siteRequest(site, pathname);
+      assert.equal(res.status, 400, `${site} ${pathname}`);
+      assert.equal((await res.json()).error, "ambiguous_path", `${site} ${pathname}`);
+    }
+    assert.equal(arrived.length, 0, "an ambiguous path is refused before any outbound call");
+  });
+});
+
+test("traversal the platform resolves below the API root never reaches a foreign API", async () => {
+  await withPrimaryRouting(async (arrived) => {
+    for (const pathname of [
+      "/api/%2e%2e/admin/auth/me",
+      "/api/admin/%2e%2e/%2e%2e/student/me",
+      "/api/admin/../../student/me",
+    ]) {
+      const res = await siteRequest("student", pathname);
+      assert.equal(res.status, 404, pathname);
+      assert.equal(res.headers.get("x-data-plane"), null, `${pathname} must not be answered by the primary`);
+    }
+    assert.equal(arrived.length, 0, "a resolved traversal must not become an outbound proxy call");
+  });
+});
+
+test("health stays observable through the folded path form on every role", async () => {
+  const cases = [
+    ["primary", {}, "primary"],
+    ["student", {}, "secondary"],
+    ["admin", {}, "secondary"],
+    ["student", { SITE_ROLE: "secondary", SITE_NAME: "backend" }, "misconfigured"],
+  ];
+  for (const [site, env, role] of cases) {
+    const res = await siteRequest(site, "/api/health/", { env });
+    assert.equal(res.status, 200, `${site} /api/health/`);
+    assert.equal((await res.json()).role, role, `${site} /api/health/`);
+  }
+});
+
+test("one path grammar backs both the gate and the proxy decision", () => {
+  for (const [raw, pathname] of [
+    ["/api/student/me", "/api/student/me"],
+    ["/API//Student//ME/", "/api/student/me"],
+    ["/api/student/me/", "/api/student/me"],
+    ["/api/", "/api"],
+    ["/api", "/api"],
+    ["/api/student/books/a%20b", "/api/student/books/a b"],
+  ]) {
+    assert.deepEqual(classifyApiPath(raw), { kind: "api", pathname }, raw);
+  }
+  for (const raw of ["/", "/student/me", "/admin/auth/me", "/_next/static/x.js", "/api-webhooks/student", "/apix/me"]) {
+    assert.deepEqual(classifyApiPath(raw), { kind: "not_api" }, raw);
+  }
+});
+
+test("a path whose decoding would move the route is classified ambiguous instead of guessed", () => {
+  for (const raw of [
+    "/api/%2e%2e/admin/auth/me",
+    "/api/admin/./x",
+    "/api/admin/../../student",
+    "/api/admin%00",
+    "/api/admin%3fx",
+    "/api/admin%252fx",
+    "/api/%zz/x",
+  ]) {
+    assert.equal(classifyApiPath(raw).kind, "ambiguous", raw);
+  }
+});
+
+test("the gate answers from the folded path for every declared role", () => {
+  const { primary, student, admin, standalone, misconfigured } = SITE_DECLARATIONS;
+  assert.equal(gateApiRequest("/API//STUDENT//ME/", student), null);
+  assert.equal(gateApiRequest("/API//STUDENT//ME/", admin).status, 404);
+  assert.equal(gateApiRequest("/api/health/", standalone), null);
+  assert.equal(gateApiRequest("/API/HEALTH", misconfigured), null, "health stays readable even when the declaration is broken");
+  assert.equal(gateApiRequest("/api/student/me", misconfigured).status, 503);
+  assert.equal(gateApiRequest("/API/INTERNAL/sync/", admin).status, 404);
+  assert.equal(gateApiRequest("/api/internal/sync/commit", primary), null);
+  assert.equal(gateApiRequest("/api/student%2f..%2fadmin", primary).status, 400);
+  assert.equal(gateApiRequest("/admin/auth/me", student), null, "a resolved page path is not an API decision");
 });
 
 test("a secondary fails closed with 503 unless PRIMARY_ORIGIN is a bare https origin", async () => {

@@ -53,10 +53,10 @@ const worker = {
     runtimeGlobals.PRIMARY_ORIGIN = env.PRIMARY_ORIGIN;
     const url = new URL(request.url);
 
-    if (url.pathname.startsWith("/api/")) {
-      const gate = gateApiRequest(url.pathname);
-      if (gate) return gate;
-    }
+    // The gate decides what counts as an API request; a second prefix test here would
+    // be a second path grammar that /API/ or //api// variants could slip past.
+    const gate = gateApiRequest(url.pathname);
+    if (gate) return gate;
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

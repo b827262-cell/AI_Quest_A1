@@ -41,6 +41,9 @@ Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalT
 | `/api/<自己的站名>/*`（student 為 `/api/student/*`，admin 為 `/api/admin/*`） | 本地回應 | 代理到主站同一路徑，回應帶 `x-data-plane: primary` |
 | `/api/internal/sync/*` | 本地回應 | 404 `not_found`，不對外呼叫 |
 | 其他站的前綴（例如 student 收到 `/api/admin/*`） | 本地回應 | 404 `not_found`，不對外呼叫 |
+| 必須解碼才能判定的 `/api` 路徑（`%2f`、`%2e`、`%25`、控制字元，或殘留 `.`／`..` 段） | 400 `ambiguous_path` | 400 `ambiguous_path`，不對外呼叫 |
+
+路徑判定只有一套：Worker 不再自己比對 `/api/` 字串，而是把請求原樣交給 `gateApiRequest`，由它正規化後決定。正規化會折疊重複斜線、不分大小寫、忽略尾斜線，因此 `/API/admin/...`、`//api//admin//...`、`/api/admin/me/` 與直接寫法得到同一個結論。位元組需要解碼才看得出是不是分隔符或點（`%2f`、`%5c`、`%2e`）、屬於雙重編碼（`%25`），或解碼後仍留有 `.`／`..` 段時，一律拒絕而不挑一個解釋；只帶資料的編碼（例如 `%20`）不受影響。平台在請求抵達 Worker 前就已解析普通的 `.`／`..` 段，因此這類 traversal 會落到頁面路由，永遠不會變成對外代理呼叫。`/api/health/` 與 `/api/health` 同為可觀察路徑。
 
 代理行為：
 
@@ -59,7 +62,7 @@ Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalT
 | 學生次站 | `secondary` | `student` | 主站 origin | `unbound` | `unbound` |
 | 管理次站 | `secondary` | `admin` | 主站 origin | `unbound` | `unbound` |
 
-三站的 `gitSha` 必須是同一個有效 SHA。capture 腳本會檢查這一點。
+三站的 `gitSha` 必須是同一個有效 SHA。capture 腳本會檢查這一點：一致時把 `worker.deployed_git_sha` 重新認證為該 commit；不一致時不改寫該欄位，並在 `capture_evidence.git_sha` 標示為沿用前次 capture。`worker.version` 仍無法經 HTTP 觀察，一律沿用前次。
 
 ## 5. 部署順序
 
