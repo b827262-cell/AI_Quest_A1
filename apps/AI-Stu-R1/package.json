@@ -20,23 +20,23 @@
     "@ai-smartbook/schema": "workspace:*",
     "@ai-smartbook/student-runtime": "workspace:*",
     "@ai-smartbook/ui": "workspace:*",
-    "better-sqlite3": "latest",
+    "better-sqlite3": "13.0.2",
     "express": "^4.19.2",
     "pdfjs-dist": "5.4.296",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7.0.0"
+    "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
-    "@types/express": "latest",
-    "@types/node": "latest",
+    "@types/express": "5.0.6",
+    "@types/node": "26.1.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "latest",
-    "esbuild": "latest",
+    "@vitejs/plugin-react": "6.0.5",
+    "esbuild": "0.28.1",
     "happy-dom": "^20.11.1",
-    "tsx": "latest",
-    "typescript": "latest",
-    "vite": "latest"
+    "tsx": "4.23.5",
+    "typescript": "7.0.2",
+    "vite": "8.2.0"
   }
 }

@@ -12,9 +12,9 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "typescript": "latest"
+    "typescript": "7.0.2"
   },
   "dependencies": {
-    "zod": "latest"
+    "zod": "4.4.3"
   }
 }

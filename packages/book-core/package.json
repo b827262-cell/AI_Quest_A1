@@ -11,13 +11,13 @@
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "devDependencies": {
-    "typescript": "latest",
-    "@types/node": "latest"
+    "typescript": "7.0.2",
+    "@types/node": "26.1.2"
   },
   "dependencies": {
     "@ai-smartbook/ai": "workspace:*",
     "@ai-smartbook/db": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
-    "pdf-parse": "latest"
+    "pdf-parse": "2.4.5"
   }
 }

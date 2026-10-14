@@ -34,9 +34,9 @@
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "devDependencies": {
-    "@types/express": "latest",
-    "typescript": "latest",
-    "@types/node": "latest"
+    "@types/express": "5.0.6",
+    "typescript": "7.0.2",
+    "@types/node": "26.1.2"
   },
   "dependencies": {
     "@ai-smartbook/db": "workspace:*",

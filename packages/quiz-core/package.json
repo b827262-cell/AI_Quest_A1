@@ -11,6 +11,6 @@
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "devDependencies": {
-    "typescript": "latest"
+    "typescript": "7.0.2"
   }
 }
