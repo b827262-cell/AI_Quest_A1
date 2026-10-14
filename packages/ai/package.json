@@ -40,8 +40,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "typescript": "latest",
-    "@types/node": "latest"
+    "typescript": "7.0.2",
+    "@types/node": "26.1.2"
   },
   "dependencies": {
     "@ai-smartbook/contracts": "workspace:*"

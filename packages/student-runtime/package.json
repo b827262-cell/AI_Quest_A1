@@ -11,12 +11,12 @@
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@types/better-sqlite3": "latest",
-    "typescript": "latest"
+    "@types/node": "26.1.2",
+    "@types/better-sqlite3": "9.6.0",
+    "typescript": "7.0.2"
   },
   "dependencies": {
     "@ai-smartbook/schema": "workspace:*",
-    "better-sqlite3": "latest"
+    "better-sqlite3": "13.0.2"
   }
 }

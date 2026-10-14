@@ -13,34 +13,34 @@
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "dependencies": {
-    "@ai-smartbook/ai": "workspace:*",
     "@ai-smartbook/auth": "workspace:*",
+    "@ai-smartbook/ai": "workspace:*",
     "@ai-smartbook/book-core": "workspace:*",
     "@ai-smartbook/contracts": "workspace:*",
     "@ai-smartbook/db": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
     "@ai-smartbook/ui": "workspace:*",
-    "better-sqlite3": "latest",
+    "better-sqlite3": "13.0.3",
     "express": "^4.19.2",
     "multer": "^1.4.5-lts.1",
-    "pdf-parse": "latest",
+    "pdf-parse": "2.4.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.18.4",
-    "zod": "latest"
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/express": "latest",
-    "@types/multer": "latest",
-    "@types/node": "latest",
+    "@types/express": "5.0.6",
+    "@types/multer": "2.2.0",
+    "@types/node": "26.1.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/supertest": "^7.2.1",
-    "@vitejs/plugin-react": "latest",
-    "esbuild": "latest",
+    "@vitejs/plugin-react": "6.0.5",
+    "esbuild": "0.28.1",
     "supertest": "^7.2.2",
-    "tsx": "latest",
-    "typescript": "latest",
-    "vite": "latest"
+    "tsx": "4.23.5",
+    "typescript": "7.0.2",
+    "vite": "8.2.0"
   }
 }
