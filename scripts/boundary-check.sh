@@ -30,13 +30,162 @@ if grep -rn --include='*.ts' "@ai-smartbook/ai" packages/student-runtime/src/ 2>
   FAIL=1
 fi
 
-# Informational: book-core historically depends on ai/db. Tracked as a known
-# limitation; it does not affect the browser/server split enforced above.
-if grep -q "@ai-smartbook/ai" packages/book-core/package.json 2>/dev/null; then
-  echo "⚠️  WARN: book-core depends on ai (known limitation)"
-fi
-if grep -q "@ai-smartbook/db" packages/book-core/package.json 2>/dev/null; then
-  echo "⚠️  WARN: book-core depends on db (known limitation)"
+# G1: book-core owns its interfaces and must not depend on ai/db implementations.
+# Reuse the existing TypeScript dev dependency; no source modules are executed.
+if ! node --input-type=module <<'G1_NODE'
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+
+let failed = false;
+let api, snapshot;
+const fail = message => { console.error(`❌ FAIL (G1): ${message}`); failed = true; };
+try {
+  const root = process.cwd();
+  const book = path.join(root, "packages/book-core");
+  const require = createRequire(path.join(book, "package.json"));
+  const ts = await import(require.resolve("typescript/unstable/ast"));
+  const { API } = await import(require.resolve("typescript/unstable/sync"));
+  api = new API();
+  const forbidden = value => /^@ai-smartbook\/(ai|db)(?:\/|$)/.test(value);
+  // Resolve symlink ancestors too, including workspace links under node_modules.
+  const canonical = value => {
+    const absolute = path.resolve(value);
+    if (fs.existsSync(absolute)) return fs.realpathSync(absolute);
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(canonical(parent), path.basename(absolute));
+  };
+  const blockedRoots = ["ai", "db"].map(name => canonical(path.join(root, "packages", name)));
+  const blockedPath = value => {
+    const target = canonical(value.split("*")[0]);
+    return blockedRoots.some(dir => target === dir || target.startsWith(dir + path.sep));
+  };
+  const pkg = JSON.parse(fs.readFileSync(path.join(book, "package.json"), "utf8"));
+  for (const section of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+    for (const [name, version] of Object.entries(pkg[section] ?? {})) {
+      const alias = String(version).replace(/^npm:/, "");
+      const local = /^(?:workspace|file|link):(.+)$/.exec(String(version));
+      if (forbidden(name) || /^@ai-smartbook\/(ai|db)(?:@|\/|$)/.test(alias)
+        || (local && blockedPath(path.resolve(book, local[1])))) fail(`package.json ${section}: ${name}`);
+    }
+  }
+  // JSONC tokenization supports comments/trailing commas without executing config.
+  const jsonc = file => {
+    const scan = ts.createScanner(true, undefined, fs.readFileSync(file, "utf8"));
+    const tokens = [];
+    while (scan.scan() !== ts.SyntaxKind.EndOfFile) {
+      if (scan.isUnterminated()) throw new Error("unterminated tsconfig token");
+      tokens.push(scan.getTokenText());
+    }
+    return JSON.parse(tokens.filter((t, i) => !(t === "," && ["}", "]"].includes(tokens[i + 1]))).join(""));
+  };
+  const loadConfig = (file, ancestors = new Set()) => {
+    file = canonical(file);
+    if (ancestors.has(file)) throw new Error("tsconfig extends cycle");
+    const next = new Set([...ancestors, file]);
+    const config = jsonc(file);
+    let inherited = {};
+    for (const parent of typeof config.extends === "string" ? [config.extends] : config.extends ?? []) {
+      let target = parent.startsWith(".") || path.isAbsolute(parent)
+        ? path.resolve(path.dirname(file), parent)
+        : createRequire(file).resolve(parent);
+      if (!fs.existsSync(target) && fs.existsSync(target + ".json")) target += ".json";
+      if (fs.statSync(target).isDirectory()) target = path.join(target, "tsconfig.json");
+      if (blockedPath(target)) fail("tsconfig extends an ai/db config");
+      inherited = { ...inherited, ...loadConfig(target, next) };
+    }
+    const options = config.compilerOptions ?? {};
+    for (const ref of config.references ?? []) {
+      if (blockedPath(path.resolve(path.dirname(file), ref.path))) fail("tsconfig references an ai/db project");
+    }
+    return {
+      ...inherited,
+      ...(options.baseUrl === undefined ? {} : { baseUrl: path.resolve(path.dirname(file), options.baseUrl) }),
+      ...(options.paths === undefined ? {} : { paths: options.paths, pathsBase: path.dirname(file) })
+    };
+  };
+  const configFile = path.join(book, "tsconfig.json");
+  api.parseConfigFile(configFile); // Let the installed compiler validate options too.
+  const config = loadConfig(configFile);
+  const pathsBase = config.baseUrl || config.pathsBase || book;
+  for (const [alias, targets] of Object.entries(config.paths ?? {})) {
+    if (forbidden(alias) || targets.some(target => forbidden(target) || blockedPath(path.resolve(pathsBase, target)))) {
+      fail(`tsconfig paths: ${alias}`);
+    }
+  }
+  const aliasedToBlockedPath = specifier => Object.entries(config.paths ?? {}).some(([alias, targets]) => {
+    const star = alias.indexOf("*");
+    const capture = star < 0 ? (specifier === alias ? "" : null)
+      : specifier.startsWith(alias.slice(0, star)) && specifier.endsWith(alias.slice(star + 1))
+        ? specifier.slice(star, alias.length === star + 1 ? undefined : -(alias.length - star - 1)) : null;
+    return capture !== null && targets.some(target => blockedPath(path.resolve(pathsBase, target.replace("*", capture))));
+  });
+  const files = [];
+  const walk = dir => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`source symlink is not allowed: ${path.relative(root, file)}`);
+      if (entry.isDirectory()) walk(file);
+      else if (/\.[cm]?[jt]sx?$/.test(entry.name)) files.push(file);
+    }
+  };
+  walk(path.join(book, "src"));
+  walk(path.join(book, "test"));
+  snapshot = api.updateSnapshot({ openFiles: files });
+  const constantString = node => {
+    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) return node.text;
+    if (ts.isParenthesizedExpression(node)) return constantString(node.expression);
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const a = constantString(node.left), b = constantString(node.right);
+      return a !== null && b !== null ? a + b : null;
+    }
+    return null;
+  };
+  const inspect = file => {
+    const project = snapshot.getDefaultProjectForFile(file);
+    const source = project?.program.getSourceFile(file);
+    if (!source || project.program.getSyntacticDiagnostics(file).length) throw new Error(`source parse error: ${path.relative(root, file)}`);
+    const check = (node, expression) => {
+      const specifier = constantString(expression);
+      const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+      const location = `${path.relative(root, file)}:${line}`;
+      if (specifier === null) { fail(`${location}: computed module loading is not allowed`); return; }
+      if (forbidden(specifier)
+        || (specifier.startsWith(".") && blockedPath(path.resolve(path.dirname(file), specifier)))
+        || (path.isAbsolute(specifier) && blockedPath(specifier))
+        || aliasedToBlockedPath(specifier)
+        || (config.baseUrl && blockedPath(path.resolve(config.baseUrl, specifier)))) fail(`${location}: forbidden module ${specifier}`);
+    };
+    const visit = node => {
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) check(node, node.moduleSpecifier);
+      if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && node.moduleReference.expression) check(node, node.moduleReference.expression);
+      if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) check(node, node.argument.literal);
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression;
+        const isLoader = callee.kind === ts.SyntaxKind.ImportKeyword
+          || (ts.isIdentifier(callee) && callee.text === "require")
+          || (ts.isPropertyAccessExpression(callee) && (callee.name.text === "require"
+            || (ts.isIdentifier(callee.expression) && callee.expression.text === "require" && callee.name.text === "resolve")));
+        if (isLoader) {
+          if (!node.arguments.length) fail(`${path.relative(root, file)}: module loading without a specifier`);
+          else check(node, node.arguments[0]);
+        }
+      }
+      node.forEachChild(visit);
+    };
+    visit(source);
+  };
+  for (const file of files) inspect(file);
+} catch (error) {
+  fail(`unable to complete isolation check: ${error.message}`);
+} finally {
+  snapshot?.dispose();
+  api?.close();
+}
+process.exitCode = failed ? 1 : 0;
+G1_NODE
+then
+  FAIL=1
 fi
 
 # --- Deployment hygiene -------------------------------------------------------
