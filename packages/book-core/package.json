@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "lint": "node --import ../../apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs ../../scripts/lint.mjs --scope=."
   },
   "devDependencies": {
@@ -16,7 +17,6 @@
   },
   "dependencies": {
     "@ai-smartbook/ai": "workspace:*",
-    "@ai-smartbook/db": "workspace:*",
     "@ai-smartbook/schema": "workspace:*",
     "pdf-parse": "2.4.5"
   }

@@ -215,9 +215,6 @@ importers:
       '@ai-smartbook/ai':
         specifier: workspace:*
         version: link:../ai
-      '@ai-smartbook/db':
-        specifier: workspace:*
-        version: link:../db
       '@ai-smartbook/schema':
         specifier: workspace:*
         version: link:../schema

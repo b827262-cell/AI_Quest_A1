@@ -82,7 +82,8 @@ import {
   linkChaptersByPageRange,
   summarizeChapter,
   askBookQuestion,
-  type BookCoreContext
+  type BookCoreContext,
+  type BookRepositories
 } from "@ai-smartbook/book-core";
 import {
   applyChapterPreviewInputSchema,
@@ -157,7 +158,8 @@ export function createAdminApp(dependencies: AdminAppDependencies): express.Expr
     uploadRoot,
     appearanceUploadDir
   } = dependencies;
-  const ctx: BookCoreContext = { repos, ai };
+  const bookRepos: BookRepositories = repos;
+  const ctx: BookCoreContext = { repos: bookRepos, ai };
   const studentAuthConfig = resolveStudentAuthConfig(env);
   const studentAuth = createStudentAuthService(studentAuthConfig, {
     users: repos.studentUsers,
