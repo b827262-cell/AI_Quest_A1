@@ -1,9 +1,46 @@
-import type { Repositories } from "@ai-smartbook/db";
+import type {
+  Book,
+  BookFile,
+  BookContent,
+  BookChapter,
+  BookQaLog,
+  CreateChapterInput,
+  UpdateChapterInput,
+  CreateQaLogInput
+} from "@ai-smartbook/schema";
 import type { AiProvider } from "@ai-smartbook/ai";
+
+/** Storage operations owned by book-core; applications supply their implementations.
+ * Keep these methods synchronous to preserve the current service behavior.
+ */
+export interface BookRepositories {
+  books: {
+    findById(id: string): Book | null;
+  };
+  files: {
+    findByBookId(bookId: string): BookFile[];
+  };
+  contents: {
+    findByBookId(bookId: string): BookContent[];
+    findByChapterId(chapterId: string): BookContent[];
+    searchByKeyword(bookId: string, keyword: string): BookContent[];
+    unlinkChaptersByBookId(bookId: string): void;
+    linkChapter(contentId: string, chapterId: string | null): void;
+  };
+  chapters: {
+    findById(id: string): BookChapter | null;
+    findByBookId(bookId: string): BookChapter[];
+    createMany(inputs: CreateChapterInput[]): BookChapter[];
+    update(id: string, input: UpdateChapterInput): BookChapter | null;
+  };
+  qaLogs: {
+    create(input: CreateQaLogInput): BookQaLog;
+  };
+}
 
 /** Shared dependencies injected into book-core service functions. */
 export interface BookCoreContext {
-  repos: Repositories;
+  repos: BookRepositories;
   ai: AiProvider;
 }
 
