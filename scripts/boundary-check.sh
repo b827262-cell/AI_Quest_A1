@@ -56,7 +56,9 @@ fi
 
 if [ $FAIL -eq 0 ]; then
   echo "✅ All boundary checks passed"
+  echo "GATE_STATUS: PASS"
 else
   echo "❌ Boundary violations detected"
+  echo "GATE_STATUS: FAIL"
 fi
 exit $FAIL
