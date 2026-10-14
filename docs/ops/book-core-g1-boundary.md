@@ -47,18 +47,21 @@ The fixture script changes no working-tree source, dependencies or lockfile.
 Both source and tests are scanned, including TS/JS module variants. Direct
 ai/db package names and their subpaths are blocked. Relative paths and matched
 tsconfig wildcard aliases resolving into packages/ai or packages/db are also
-blocked. Config inheritance is inspected with paths relative to its defining
-configuration and baseUrl, with a leading `${configDir}` expanded to the
-directory of the tsconfig that defines the option. The scan covers all source
-files under `packages/book-core`, including package-level scripts and entry
-points; `node_modules` and `dist` are excluded. Package and directory symlinks
-are canonicalized, and source symlinks are rejected.
+blocked. For `${configDir}`, TypeScript replaces only a leading token with the
+directory of the entry tsconfig (`packages/book-core/tsconfig.json`); the
+remaining suffix is resolved relative to that directory, equivalent to
+`path.resolve(rootConfigDir, "." + remainder)`, even when the option came from an
+extended config. Tokens elsewhere in the string are not expanded. The scan covers
+all source files under `packages/book-core`, including package-level scripts and
+entry points; `node_modules` and `dist` are excluded. Package and directory
+symlinks are canonicalized, and source symlinks are rejected.
 
-This is static analysis, not a complete runtime sandbox: `eval`, `new Function`
-and `import.meta.resolve` cannot be reliably intercepted statically. Indirect
-re-exports through another package (for example, book-core → schema → ai) are
-outside this gate's analysis scope. Review such dynamic loading and indirect
-re-export paths manually.
+This is static analysis, not a complete runtime sandbox. The gate does not model
+`rootDirs` or `typeRoots` (which only affects automatic `@types` package lookup),
+and cannot reliably intercept `eval`, `new Function` or
+`import.meta.resolve`. Indirect re-exports through another package (for example,
+book-core → schema → ai) are outside this gate's analysis scope. Review those
+paths manually.
 
 Keep adapters at the application composition boundary. Do not satisfy tests by
 adding ai/db back as a test-only or type-only dependency. Examples in dated review

@@ -43,14 +43,16 @@ const fail = message => { console.error(`❌ FAIL (G1): ${message}`); failed = t
 try {
   const root = process.cwd();
   const book = path.join(root, "packages/book-core");
+  const configFile = path.join(book, "tsconfig.json");
+  const rootConfigDir = path.dirname(configFile);
   const require = createRequire(path.join(book, "package.json"));
   const ts = await import(require.resolve("typescript/unstable/ast"));
   const { API } = await import(require.resolve("typescript/unstable/sync"));
   api = new API();
   const forbidden = value => /^@ai-smartbook\/(ai|db)(?:\/|$)/.test(value);
   const configDirToken = "${configDir}";
-  const expandConfigDir = (value, configDirectory) => typeof value === "string" && value.startsWith(configDirToken)
-    ? `${configDirectory}${value.slice(configDirToken.length)}` : value;
+  const expandConfigDir = value => typeof value === "string" && value.startsWith(configDirToken)
+    ? path.resolve(rootConfigDir, "." + value.slice(configDirToken.length)) : value;
   // Resolve symlink ancestors too, including workspace links under node_modules.
   const canonical = value => {
     const absolute = path.resolve(value);
@@ -104,17 +106,16 @@ try {
     return {
       ...inherited,
       ...(options.baseUrl === undefined ? {} : {
-        baseUrl: path.resolve(path.dirname(file), expandConfigDir(options.baseUrl, path.dirname(file)))
+        baseUrl: path.resolve(path.dirname(file), expandConfigDir(options.baseUrl))
       }),
       ...(options.paths === undefined ? {} : { paths: options.paths, pathsBase: path.dirname(file) })
     };
   };
-  const configFile = path.join(book, "tsconfig.json");
   api.parseConfigFile(configFile); // Let the installed compiler validate options too.
   const config = loadConfig(configFile);
   const pathsConfigDir = config.pathsBase || book;
   const pathsBase = config.baseUrl || pathsConfigDir;
-  const resolvePathTarget = target => path.resolve(pathsBase, expandConfigDir(target, pathsConfigDir));
+  const resolvePathTarget = target => path.resolve(pathsBase, expandConfigDir(target));
   for (const [alias, targets] of Object.entries(config.paths ?? {})) {
     if (forbidden(alias) || targets.some(target => forbidden(target) || blockedPath(resolvePathTarget(target)))) {
       fail(`tsconfig paths: ${alias}`);

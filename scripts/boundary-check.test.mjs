@@ -57,6 +57,41 @@ const cases = [
     f.write('tsconfig.base.json', JSON.stringify({ compilerOptions: { paths: { '@storage/*': ['packages/db/*'] } } }));
     f.config({ extends: '../../tsconfig.base.json' });
   }, true],
+  ['configDir paths from a deeper extended config use the entry config directory', f => {
+    f.write('packages/config/deep/tsconfig.json', JSON.stringify({ compilerOptions: { paths: { '@deep/*': ['${configDir}/../ai/*'] } } }));
+    f.config({ extends: '../config/deep/tsconfig.json' });
+    f.source('export * from "@deep/src/index";');
+  }, true, { specifier: '@deep/src/index', target: 'packages/ai/src/index.ts' }],
+  ['repeated configDir token resolves like TypeScript', f => {
+    f.config({ compilerOptions: { paths: { '@repeat/*': ['${configDir}${configDir}/../../ai/*'] } } });
+    f.source('export * from "@repeat/src/index";');
+  }, true, { specifier: '@repeat/src/index', target: 'packages/ai/src/index.ts' }],
+  ['configDir foo parent normalization stays inside book-core', f => {
+    f.write('packages/book-core/ai/src/index.ts', 'export const ready = true;');
+    f.config({ compilerOptions: { paths: { '@local/*': ['${configDir}foo/../ai/*'] } } });
+    f.source('export * from "@local/src/index";');
+  }, false, { specifier: '@local/src/index', target: 'packages/book-core/ai/src/index.ts' }],
+  ['./ configDir token is not expanded', f => {
+    f.write('packages/book-core/ai/src/index.ts', 'export const ready = true;');
+    f.config({ compilerOptions: { paths: { '@dot/*': ['./${configDir}/../ai/*'] } } });
+    f.source('export * from "@dot/src/index";');
+  }, false, { specifier: '@dot/src/index', target: 'packages/book-core/ai/src/index.ts' }],
+  ['embedded configDir token is not expanded', f => {
+    f.write('packages/book-core/ai/src/index.ts', 'export const ready = true;');
+    f.config({ compilerOptions: { paths: { '@embedded/*': ['./x${configDir}/../ai/*'] } } });
+    f.source('export * from "@embedded/src/index";');
+  }, false, { specifier: '@embedded/src/index', target: 'packages/book-core/ai/src/index.ts' }],
+  ['uppercase configDir token is not expanded', f => {
+    f.write('packages/book-core/ai/src/index.ts', 'export const ready = true;');
+    f.config({ compilerOptions: { paths: { '@upper/*': ['${CONFIGDIR}/../ai/*'] } } });
+    f.source('export * from "@upper/src/index";');
+  }, false, { specifier: '@upper/src/index', target: 'packages/book-core/ai/src/index.ts' }],
+  ['deep inherited configDir path to repo ai root is not blocked', f => {
+    f.write('ai/src/index.ts', 'export const ready = true;');
+    f.write('packages/config/deep/tsconfig.json', JSON.stringify({ compilerOptions: { paths: { '@root/*': ['${configDir}/../../ai/*'] } } }));
+    f.config({ extends: '../config/deep/tsconfig.json' });
+    f.source('export * from "@root/src/index";');
+  }, false, { specifier: '@root/src/index', target: 'ai/src/index.ts' }],
   ['broad wildcard alias import', f => {
     f.config({ compilerOptions: { paths: { '@local/*': ['../*'] } } });
     f.source('export * from "@local/ai/src/index";');
@@ -111,16 +146,6 @@ for (const [name, mutate, mustFail, tsResolution] of cases) {
       const output = result.stdout + result.stderr;
       assert.ifError(result.error);
       assert.equal(result.signal, null, output);
-      if (mustFail) {
-        assert.equal(result.status, 1, output);
-        assert.match(output, /FAIL \(G1\):/);
-        assert.match(output, /GATE_STATUS: FAIL/);
-        assert.doesNotMatch(output, /GATE_STATUS: PASS/);
-      } else {
-        assert.equal(result.status, 0, output);
-        assert.match(output, /GATE_STATUS: PASS/);
-        assert.doesNotMatch(output, /FAIL/);
-      }
       if (tsResolution) {
         const require = createRequire(path.join(repo, 'packages/book-core/package.json'));
         const tsc = path.join(path.dirname(require.resolve('typescript/package.json')), 'bin/tsc');
@@ -131,6 +156,16 @@ for (const [name, mutate, mustFail, tsResolution] of cases) {
         assert.equal(trace.status, 0, traceOutput);
         assert.ok(traceOutput.includes(path.join(root, tsResolution.target)), traceOutput);
         assert.ok(traceOutput.includes(`Module name '${tsResolution.specifier}' was successfully resolved to`), traceOutput);
+      }
+      if (mustFail) {
+        assert.equal(result.status, 1, output);
+        assert.match(output, /FAIL \(G1\):/);
+        assert.match(output, /GATE_STATUS: FAIL/);
+        assert.doesNotMatch(output, /GATE_STATUS: PASS/);
+      } else {
+        assert.equal(result.status, 0, output);
+        assert.match(output, /GATE_STATUS: PASS/);
+        assert.doesNotMatch(output, /FAIL/);
       }
       if (/^[ABCD] /.test(name) || name === 'clean') t.diagnostic(`${name}: exit=${result.status}\n${output.trim()}`);
     } finally {
