@@ -1,4 +1,5 @@
 import { isProductionEnvironment } from "../../db";
+import { signRelay } from "../../lib/relay-signature";
 
 /**
  * Site topology. One commit is deployed to three Sites projects. Each project
@@ -212,18 +213,59 @@ export async function delegateToBackend(request: Request, path: string): Promise
   for (const [key, value] of request.headers.entries()) {
     const lowerKey = key.toLowerCase();
     if (["host", "content-length", "cf-connecting-ip", "cf-ray"].includes(lowerKey)) continue;
+    // Only the platform identity below is eligible for a freshly signed relay.
+    if (lowerKey.startsWith("oai-") || lowerKey.startsWith("x-a01-relay-")) continue;
     forwardHeaders.set(key, value);
   }
 
   // x-forwarded-for is intentionally not stripped, so the primary sees the client chain.
   forwardHeaders.set("x-forwarded-host", reqUrl.hostname);
   forwardHeaders.set("x-forwarded-proto", reqUrl.protocol.replace(":", ""));
-  // Extension point: a signed relay header (x-a01-relay) for identity forwarding is
-  // deliberately not implemented in this version. See docs/ops/three-site-runbook.md.
+  const userId = request.headers.get("oai-authenticated-user-id");
+  const email = request.headers.get("oai-authenticated-user-email");
+  const hasIdentity = userId !== null || email !== null;
+  const runtime = globalThis as SiteRuntime;
+  // Read through the same runtime bindings as PRIMARY_ORIGIN; keep key bytes
+  // intact rather than trimming a secret into a different HMAC key.
+  const signingKey = runtime.A01_RELAY_SIGNING_KEY ?? runtime.__env__?.A01_RELAY_SIGNING_KEY;
+  const canSign = typeof signingKey === "string" && signingKey.length >= 32 &&
+    declaredValue("A01_RELAY_SITE") === declared.site;
+  const signingUnavailable = () => Response.json({ error: "relay_signing_unavailable" }, { status: 503 });
+  if (hasIdentity && !canSign) return signingUnavailable();
 
-  let body: BodyInit | undefined = undefined;
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    body = await request.arrayBuffer();
+  let body: ArrayBuffer | undefined;
+  try {
+    // Consume once: these exact bytes are both hashed and forwarded.
+    if (request.method !== "GET" && request.method !== "HEAD") body = await request.arrayBuffer();
+    if (canSign) {
+      const ts = String(Math.floor(Date.now() / 1000));
+      const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(18))))
+        .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const signature = await signRelay({
+        method: request.method,
+        pathname: backendTarget.pathname,
+        search: backendTarget.search,
+        body,
+        site: declared.site,
+        userId,
+        email,
+        role: "-",
+        ts,
+        nonce,
+      }, signingKey);
+      if (typeof signature !== "string") return signingUnavailable();
+      forwardHeaders.set("x-a01-relay-site", declared.site);
+      forwardHeaders.set("x-a01-relay-ts", ts);
+      forwardHeaders.set("x-a01-relay-nonce", nonce);
+      forwardHeaders.set("x-a01-relay-user-id", userId || "-");
+      forwardHeaders.set("x-a01-relay-user-email", email || "-");
+      // Administrator authorization belongs exclusively to the primary.
+      forwardHeaders.set("x-a01-relay-user-role", "-");
+      forwardHeaders.set("x-a01-relay-sig", signature);
+    }
+  } catch {
+    // No key, identity, or diagnostic from the signing path leaves this boundary.
+    return signingUnavailable();
   }
 
   try {
