@@ -56,7 +56,9 @@ all source files under `packages/book-core`, including package-level scripts and
 entry points; `node_modules` and `dist` are excluded. Package and directory
 symlinks are canonicalized, and source symlinks are rejected.
 
-This is static analysis, not a complete runtime sandbox. The gate does not model
+This is static analysis, not a complete runtime sandbox. The gate reads only
+`packages/book-core/tsconfig.json` as its entry; if another entry such as
+`tsconfig.build.json` is added, extend the gate. It does not model
 `rootDirs` or `typeRoots` (which only affects automatic `@types` package lookup),
 and cannot reliably intercept `eval`, `new Function` or
 `import.meta.resolve`. Indirect re-exports through another package (for example,

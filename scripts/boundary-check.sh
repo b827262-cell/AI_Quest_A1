@@ -51,8 +51,13 @@ try {
   api = new API();
   const forbidden = value => /^@ai-smartbook\/(ai|db)(?:\/|$)/.test(value);
   const configDirToken = "${configDir}";
-  const expandConfigDir = value => typeof value === "string" && value.startsWith(configDirToken)
-    ? path.resolve(rootConfigDir, "." + value.slice(configDirToken.length)) : value;
+  const expandConfigDir = value => {
+    if (typeof value !== "string") return value;
+    const normalized = value.replace(/\\/g, "/");
+    return normalized.startsWith(configDirToken)
+      ? path.resolve(rootConfigDir, "." + normalized.slice(configDirToken.length))
+      : normalized;
+  };
   // Resolve symlink ancestors too, including workspace links under node_modules.
   const canonical = value => {
     const absolute = path.resolve(value);

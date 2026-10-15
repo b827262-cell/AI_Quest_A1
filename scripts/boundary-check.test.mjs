@@ -38,6 +38,23 @@ const cases = [
     f.config({ compilerOptions: { paths: { '@store/*': ['${configDir}/../db/*'] } } });
     f.source('export * from "@store/src/index";');
   }, true, { specifier: '@store/src/index', target: 'packages/db/src/index.ts' }],
+  ['configDir paths with backslash separators into ai', f => {
+    f.config({ compilerOptions: { paths: { '@win-ai/*': ['${configDir}\\..\\\\ai\\*'] } } });
+    f.source('export * from "@win-ai/src/index";');
+  }, true, { specifier: '@win-ai/src/index', target: 'packages/ai/src/index.ts' }],
+  ['relative paths with repeated backslash separators into ai', f => {
+    f.config({ compilerOptions: { paths: { '@win-ai/*': ['..\\\\ai\\*'] } } });
+    f.source('export * from "@win-ai/src/index";');
+  }, true, { specifier: '@win-ai/src/index', target: 'packages/ai/src/index.ts' }],
+  ['mixed configDir and backslash separators into db', f => {
+    f.config({ compilerOptions: { paths: { '@win-db/*': ['${configDir}/..\\\\db/*'] } } });
+    f.source('export * from "@win-db/src/index";');
+  }, true, { specifier: '@win-db/src/index', target: 'packages/db/src/index.ts' }],
+  ['backslash paths outside blocked roots follow TypeScript resolution', f => {
+    f.write('packages/book-core/x/src/index.ts', 'export const ready = true;');
+    f.config({ compilerOptions: { paths: { '@safe/*': ['.\\\\x/*'] } } });
+    f.source('export { ready } from "@safe/src/index";');
+  }, false, { specifier: '@safe/src/index', target: 'packages/book-core/x/src/index.ts' }],
   ['configDir baseUrl into ai and alias import', f => {
     f.config({ compilerOptions: { baseUrl: '${configDir}/../ai' } });
     f.source('export { ready } from "src/index";');
