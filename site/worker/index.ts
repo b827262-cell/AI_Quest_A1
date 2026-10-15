@@ -2,7 +2,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { gateApiRequest } from "../app/api/backend-client";
+import { gatePrimaryApiRequest } from "../lib/relay-edge-gate";
 
 interface Env {
   // Static-assets binding; only fetch() is used, typed with the DOM Request/Response
@@ -28,6 +28,11 @@ interface Env {
   A01_RELAY_KEY_ADMIN?: string;
   A01_RELAY_KEY_ADMIN_PREV?: string;
   A01_RELAY_MODE?: string;
+  A01_RELAY_EDGE_SECRET_STUDENT?: string;
+  A01_RELAY_EDGE_SECRET_STUDENT_PREV?: string;
+  A01_RELAY_EDGE_SECRET_ADMIN?: string;
+  A01_RELAY_EDGE_SECRET_ADMIN_PREV?: string;
+  A01_RELAY_EDGE_MODE?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -56,7 +61,7 @@ const worker = {
       env.RELEASE_VALIDATION_SECRET;
     (globalThis as unknown as { SYNC_IMPORT_SECRET?: string }).SYNC_IMPORT_SECRET = env.SYNC_IMPORT_SECRET;
     (globalThis as unknown as { SYNC_MAX_PDF_BYTES?: string }).SYNC_MAX_PDF_BYTES = env.SYNC_MAX_PDF_BYTES;
-    const runtimeGlobals = globalThis as unknown as { GIT_SHA?: string; SITE_ROLE?: string; SITE_NAME?: string; PRIMARY_ORIGIN?: string; ADMIN_EMAILS?: string; A01_RELAY_SIGNING_KEY?: string; A01_RELAY_SITE?: string; A01_RELAY_KEY_STUDENT?: string; A01_RELAY_KEY_STUDENT_PREV?: string; A01_RELAY_KEY_ADMIN?: string; A01_RELAY_KEY_ADMIN_PREV?: string; A01_RELAY_MODE?: string };
+    const runtimeGlobals = globalThis as unknown as Partial<Env>;
     runtimeGlobals.GIT_SHA = env.GIT_SHA;
     runtimeGlobals.SITE_ROLE = env.SITE_ROLE;
     runtimeGlobals.SITE_NAME = env.SITE_NAME;
@@ -69,12 +74,17 @@ const worker = {
     runtimeGlobals.A01_RELAY_KEY_ADMIN = env.A01_RELAY_KEY_ADMIN;
     runtimeGlobals.A01_RELAY_KEY_ADMIN_PREV = env.A01_RELAY_KEY_ADMIN_PREV;
     runtimeGlobals.A01_RELAY_MODE = env.A01_RELAY_MODE;
+    runtimeGlobals.A01_RELAY_EDGE_SECRET_STUDENT = env.A01_RELAY_EDGE_SECRET_STUDENT;
+    runtimeGlobals.A01_RELAY_EDGE_SECRET_STUDENT_PREV = env.A01_RELAY_EDGE_SECRET_STUDENT_PREV;
+    runtimeGlobals.A01_RELAY_EDGE_SECRET_ADMIN = env.A01_RELAY_EDGE_SECRET_ADMIN;
+    runtimeGlobals.A01_RELAY_EDGE_SECRET_ADMIN_PREV = env.A01_RELAY_EDGE_SECRET_ADMIN_PREV;
+    runtimeGlobals.A01_RELAY_EDGE_MODE = env.A01_RELAY_EDGE_MODE;
     const url = new URL(request.url);
 
-    // The gate decides what counts as an API request; a second prefix test here would
-    // be a second path grammar that /API/ or //api// variants could slip past.
-    const gate = gateApiRequest(url.pathname);
-    if (gate) return gate;
+    // Keep path/topology errors ahead of the primary-only edge credential check.
+    const gate = gatePrimaryApiRequest(request, env);
+    if (gate instanceof Response) return gate;
+    request = gate;
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
