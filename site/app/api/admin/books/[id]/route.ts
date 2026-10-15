@@ -36,7 +36,10 @@ export async function GET(request: Request, context: RouteParams) {
     return delegateToBackend(request, `/api/admin/books/${id}`);
   }
 
-  const auth = getNormalizedAuth(request);
+  const auth = await getNormalizedAuth(request);
+  if (auth.relayRejected) {
+    return Response.json({ error: "unauthorized" }, { status: 401, headers: cors.corsHeaders });
+  }
   if (auth.isMalformed) {
     return Response.json(
       { error: "malformed_auth", message: auth.malformedReason },
@@ -96,7 +99,10 @@ export async function DELETE(request: Request, context: RouteParams) {
     return delegateToBackend(request, `/api/admin/books/${id}`);
   }
 
-  const auth = getNormalizedAuth(request);
+  const auth = await getNormalizedAuth(request);
+  if (auth.relayRejected) {
+    return Response.json({ error: "unauthorized" }, { status: 401, headers: cors.corsHeaders });
+  }
   if (auth.isMalformed) {
     return Response.json(
       { error: "malformed_auth", message: auth.malformedReason },

@@ -24,7 +24,10 @@ export async function GET(request: Request) {
     return delegateToBackend(request, "/api/student/progress");
   }
 
-  const auth = getNormalizedAuth(request);
+  const auth = await getNormalizedAuth(request);
+  if (auth.relayRejected) {
+    return Response.json({ error: "unauthorized" }, { status: 401, headers: cors.corsHeaders });
+  }
 
   if (auth.isMalformed) {
     return Response.json(
@@ -89,7 +92,10 @@ export async function PUT(request: Request) {
     return delegateToBackend(request, "/api/student/progress");
   }
 
-  const auth = getNormalizedAuth(request);
+  const auth = await getNormalizedAuth(request);
+  if (auth.relayRejected) {
+    return Response.json({ error: "unauthorized" }, { status: 401, headers: cors.corsHeaders });
+  }
 
   if (auth.isMalformed) {
     return Response.json(
