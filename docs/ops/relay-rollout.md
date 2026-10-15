@@ -84,7 +84,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 | 主站 | `A01_RELAY_EDGE_SECRET_STUDENT_PREV` | 輪替時使用 | 學生次站的舊 edge secret；重疊期與現行並存，兩把都接受。 |
 | 主站 | `A01_RELAY_EDGE_SECRET_ADMIN` | 啟用閘就必填 | 管理次站的 edge secret；與 relay 驗章金鑰分開。 |
 | 主站 | `A01_RELAY_EDGE_SECRET_ADMIN_PREV` | 輪替時使用 | 管理次站的舊 edge secret；重疊期與現行並存，兩把都接受。 |
-| 次站 | edge secret 送出變數 | 要送 secret 就必填 | 隨簽章請求送出 `x-a01-relay-edge-secret`（PR-B2）；變數名稱以 PR-B2 實作為準。 |
+| 次站 | `A01_RELAY_EDGE_SECRET_STUDENT`（student 站）／`A01_RELAY_EDGE_SECRET_ADMIN`（admin 站） | 要送 secret 就必填 | 隨簽章請求送出 `x-a01-relay-edge-secret`（#65，待合併）：student 站讀前者、admin 站讀後者。只送當前值、不送 `_PREV`；僅 `canSign` 時送；缺失或長度不在 32–512 時不送（行為同現狀，不拋錯、不記錄值）。 |
 | 主站 | `ADMIN_EMAILS` | 必填 | 管理員 allowlist，與簽章無關；簽章只決定身分，不決定管理員。 |
 
 規則：
@@ -192,7 +192,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 - [ ] migration `0003`（`relay_nonces`）已由 Owner 授權套用（見第 3(d) 節）。
 - [ ] staging 合成簽章請求：`valid` 被採用、`invalid` 被拒（受保護 API 回 401）。
 - [ ] O-1a 已通過，且該測試不是在 `strict` 下做的（見第 3(a) 節）。
-- [ ] edge secret 閘已部署並驗證：次站已送 `x-a01-relay-edge-secret`（PR-B2），主站 `A01_RELAY_EDGE_MODE=require` 生效，且 `require` 下缺失／錯誤 secret 記為 `relay.probe`、不產生 `invalid`（PR #64）。
+- [ ] edge secret 閘已部署並驗證：次站已送 `x-a01-relay-edge-secret`（#65，待合併），主站 `A01_RELAY_EDGE_MODE=require` 生效，且 `require` 下缺失／錯誤 secret 記為 `relay.probe`、不產生 `invalid`（PR #64）。
 - [ ] §4.4 全部達標：三站平台證據齊全、100% 日誌、連續 72 小時、雙站樣本與寫入覆蓋的建議值經 Owner 確認後達標、零異常、完整性及隱私檢查通過；建議值未確認即 `HOLD`。
 - [ ] 已確認所有使用者面向的來源是次站；主站頁面若被直接存取，其未簽章 API 呼叫在 `strict` 下會變 guest。
 - [ ] §5 的回滾門檻、基準、執行者與部署權限已確認，且 staging 回滾演練為 `PASS`。
@@ -243,7 +243,7 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 2. 留存實際可重跑的查詢或唯讀匯出／解析步驟，能依 `result`、`site`、`mode`、`identityPresent`、`method`、`pathClass` 篩選、分組計數；核對平台原始記錄、解析筆數及解析失敗筆數。只有「看得到一行」不算完成，解析失敗不得直接丟棄。平台原始記錄僅在平台權限控管下核對；對外分享／匯出前須先脫敏。
 3. 證明三站的 invocation logs 可用、應用及平台採集皆為 100%（不取樣），且保留期／經核准的證據保存方式足以重查完整 72 小時；若有配額、截斷、查詢筆數上限或延遲，須核對分頁／完整匯出後的總數；匯出證據須先脫敏；edge 閘的 `relay.probe` 亦須 100% 採集並可查詢。
 4. 將刻意異常的預檢時間與記錄獨立留存；預檢結束、管線驗證通過後，才記錄乾淨觀察視窗的起點。不得在乾淨視窗內刪除或事後排除 `invalid`。
-5. **Edge secret 閘（D9=B）須先部署並驗證（PR #64）：** P1-1 的解法是分站 edge secret header（`x-a01-relay-edge-secret`；主站綁定 `A01_RELAY_EDGE_SECRET_STUDENT`／`A01_RELAY_EDGE_SECRET_ADMIN`（＋`_PREV`），模式 `A01_RELAY_EDGE_MODE=accept|require`）。72 小時計時只能在「次站已隨簽章請求送出 secret（PR-B2）且主站 `A01_RELAY_EDGE_MODE=require` 已部署並驗證生效」之後起算；在此之前 Gate 維持 `HOLD`。`require` 下，缺少或錯誤 secret 的請求不進 relay 驗章、以 `evt=relay.probe` 記錄（不含敏感資料、不含 IP／query／完整路徑），且不計入 `invalid` 零容忍；secret 相符但簽章失敗仍為 `invalid`。
+5. **Edge secret 閘（D9=B）須先部署並驗證（PR #64）：** P1-1 的解法是分站 edge secret header（`x-a01-relay-edge-secret`；主站綁定 `A01_RELAY_EDGE_SECRET_STUDENT`／`A01_RELAY_EDGE_SECRET_ADMIN`（＋`_PREV`），模式 `A01_RELAY_EDGE_MODE=accept|require`）。72 小時計時只能在「次站已隨簽章請求送出 secret（#65，待合併）且主站 `A01_RELAY_EDGE_MODE=require` 已部署並驗證生效」之後起算；在此之前 Gate 維持 `HOLD`。`require` 下，缺少或錯誤 secret 的請求不進 relay 驗章、以 `evt=relay.probe` 記錄（不含敏感資料、不含 IP／query／完整路徑），且不計入 `invalid` 零容忍；secret 相符但簽章失敗仍為 `invalid`。
 
 上述是未來經授權的驗證程序，本 PR 不部署 staging、不製造平台流量，也不修改日誌程式或平台設定。證據尚缺即 `BLOCKED`／Gate `HOLD`。
 
@@ -341,7 +341,7 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 以「舊 secret → 新 secret」為例，student 與 admin 分開處理：
 
 1. **主站接受新舊兩把**：把 `A01_RELAY_EDGE_SECRET_<SITE>_PREV` 設為舊 secret，同時把現行 secret 換成新 secret；此時兩把都被接受。
-2. **次站換新 secret**：把次站送出的 edge secret 換成新值並部署。
+2. **次站換新 secret**：把次站送出的 edge secret 換成新值並部署。次站只送「當前」值、不送 `_PREV`，故此步驟後次站即全面使用新值；舊值仍由主站的 `_PREV` 接受。
 3. **觀察**：涵蓋一個部署週期，確認 `relay.probe` 未因 secret 不符而上升、`relay.verify` 的 `valid` 正常。
 4. **移除舊 secret**：確認次站已全面使用新 secret 後，移除主站的 `_PREV`。
 
@@ -409,10 +409,25 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 
 PR #61 交叉核對（`cc05e6e`）：`site/app/api/auth-helper.ts:82-101` 為 logger（含欄位分類、字串化與 try/catch），`:103-120` 為 per-Request 快取、mode 分流、驗章後記錄及拒絕／回退決策；`site/lib/relay-verification.ts:97-148` 為驗章快取及 nonce 後結果。應用日誌測試見 `site/tests/relay-logging.test.mjs`；本地測試不代替平台管線證據。
 
-Edge secret 閘（D9=B）由 PR #64 實作：主站在 `gateApiRequest` 層檢查 `x-a01-relay-edge-secret`，模式 `A01_RELAY_EDGE_MODE=accept|require`，`/api/health` 豁免；`accept` 只記 `relay.probe`、保留 relay／oai 標頭照舊進驗章並移除 edge header；`require` 下缺失／錯誤 secret 記 `relay.probe`、剝除 `x-a01-relay-*`／`oai-*`、不產生 `invalid`；secret 相符但簽章錯仍為 `invalid` 401。相關行號以 PR #64 合併後為準。
+Edge secret 閘（D9=B）由 PR #64 實作：主站在 `gateApiRequest` 層檢查 `x-a01-relay-edge-secret`，模式 `A01_RELAY_EDGE_MODE=accept|require`，`/api/health` 豁免；`accept` 只記 `relay.probe`、保留 relay／oai 標頭照舊進驗章並移除 edge header；`require` 下缺失／錯誤 secret 記 `relay.probe`、剝除 `x-a01-relay-*`／`oai-*`、不產生 `invalid`；secret 相符但簽章錯仍為 `invalid` 401。相關行號以 PR #64 合併後為準（#65 的位移待核，見下）。
+
+**#65 行號位移待核（待 #65 合併後再核）：** 全文對 `site/app/api/backend-client.ts` 的行號引用以 main `bc3cc586` 為準。#65（次站送出 edge secret）在該檔新增 13 行（入站剝除註解 +2、簽章區塊 edge secret 送出 +11），合併後下列引用將位移，屆時再據以更新（下列文件行號為 main `bc3cc586` 版本）：
+
+- 第 58 行：`:224-234`、`:240-265` → 待核 `:226-236`、`:242-278`
+- 第 69、358、386 行：`:236-269` → 待核 `:238-282`
+- 第 211、397 行：`:286` → 待核 `:299`
+- 第 222、398 行：`:293-301` → 待核 `:306-314`
+- 第 224、399 行：`:192-199` → 不變（`:192-199`）
+- 第 380 行：`:231` → 待核 `:233`
+- 第 381 行：`:231-232` → 待核 `:233-234`
+- 第 382 行：`:213-219` → 待核 `:213-221`
+- 第 383 行：`:240,260-261` → 待核 `:242,262-263`
+- 第 384 行：`:234,240` → 待核 `:236,242`
+- 第 385 行：`:233-234` → 待核 `:235-236`
+- 第 387 行：`:252,263` → 待核 `:254,265`
 
 ## 10. 本地驗證
 
 - `cd site && npm test`：涵蓋 `tests/relay-canonical.test.mjs`、`tests/relay-sign-verify.test.mjs`、`tests/relay-secondary.test.mjs`、`tests/relay-verify.test.mjs`、`tests/relay-logging.test.mjs`，在同一程序內模擬兩站與 D1，不需要網路。
-- PR #64 新增 edge 閘測試；`cd site && npm test` 會涵蓋。
+- PR #64 新增 edge 閘測試、#65 新增次站送出 edge secret 的測試（待合併）；`cd site && npm test` 會涵蓋。
 - 本手冊的 production 驗證只用 GET；不包含對 production 的寫入。
