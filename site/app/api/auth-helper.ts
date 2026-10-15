@@ -77,7 +77,17 @@ const GUEST_AUTH: NormalizedAuthContext = {
   isSynthetic: false, isDemo: false, userId: null, email: null, displayName: null,
 };
 
-export async function getNormalizedAuth(request: Request): Promise<NormalizedAuthContext> {
+const normalizedAuthByRequest = new WeakMap<Request, Promise<NormalizedAuthContext>>();
+
+export function getNormalizedAuth(request: Request): Promise<NormalizedAuthContext> {
+  const cached = normalizedAuthByRequest.get(request);
+  if (cached) return cached;
+  const result = normalizeRequestAuth(request);
+  normalizedAuthByRequest.set(request, result);
+  return result;
+}
+
+async function normalizeRequestAuth(request: Request): Promise<NormalizedAuthContext> {
   const mode = readRelayMode();
   if (mode === "off") return normalizeLegacyAuth(request);
   const relay = await verifyIncomingRelay(request);
