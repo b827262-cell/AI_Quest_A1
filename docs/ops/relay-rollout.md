@@ -31,10 +31,10 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 `A01_RELAY_MODE` 只在主站判讀。解析規則依程式碼版本而異：
 
-- **目前 main（`9898c1e`，`site/lib/relay-verification.ts:24-29`）**：`undefined`／`null`／`""`／`"off"` → `off`；`"transitional"` → `transitional`；其他任何值 → `strict`。此時**純空白字串（例如 `"  "`）、`OFF`、`Transitional` 都算未識別值，會落到 `strict`**。
-- **PR #59（`fix/relay-auth-hardening`，待合併）**：先 `trim()` 再轉小寫；`undefined`／`null` → `off`；非字串 → `strict`；正規化後 `""`／`"off"` → `off`；`"transitional"` → `transitional`；其他 → `strict`。因此**純空白 → `off`、`OFF` → `off`、`Transitional` → `transitional`**。
+- **舊版（#59 前，`9898c1e`，`site/lib/relay-verification.ts:24-29`）**：`undefined`／`null`／`""`／`"off"` → `off`；`"transitional"` → `transitional`；其他任何值 → `strict`。此時**純空白字串（例如 `"  "`）、`OFF`、`Transitional` 都算未識別值，會落到 `strict`**。
+- **目前 main（`bbe1cfe2`，含 #59，`site/lib/relay-verification.ts:24-31`）**：先 `trim()` 再轉小寫；`undefined`／`null` → `off`；非字串 → `strict`；正規化後 `""`／`"off"` → `off`；`"transitional"` → `transitional`；其他 → `strict`。因此**純空白 → `off`、`OFF` → `off`、`Transitional` → `transitional`**。
 
-兩種版本都維持「未識別值一律 `strict`（fail closed）」；差異只在空白與大小寫的正規化。請以實際部署的程式碼版本為準（#59 合併後即為後者）。
+兩種版本都維持「未識別值一律 `strict`（fail closed）」；差異只在空白與大小寫的正規化。目前部署的 main（`bbe1cfe2`）為後者。
 
 | 情境 | `off`（含未設定／空字串） | `transitional` | `strict`（含任何未識別值） |
 | --- | --- | --- | --- |
@@ -58,9 +58,11 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 | 有效（`A01_RELAY_SIGNING_KEY` ≥ 32 且 `A01_RELAY_SITE` == `SITE_NAME`） | 有 | 簽章轉送；`user-id`／`user-email` 為入站值。 |
 | 有效 | 無（匿名） | **仍簽章轉送**；`user-id`／`user-email` 以 `-` sentinel 帶入（`relay-secondary.test.mjs` 的 `configured anonymous requests sign missing identity sentinels`）。 |
 | 無效（缺鑰／< 32／站別不符） | 有 | 回 `503 {"error":"relay_signing_unavailable"}`，不對外呼叫。 |
-| 無效 | 無（匿名） | **不簽章**、不帶任何 `oai-*`／`x-a01-relay-*` 直接轉送；不會回 503。 |
+| 無效 | 無（匿名） | **不簽章**、不帶任何 `oai-*`／`x-a01-relay-*` 直接轉送；**不會僅因缺少簽章能力而回 `relay_signing_unavailable`**（但 body 讀取／簽章在 `try` 內拋錯仍會由 catch 回 503，見下）。 |
 
 因此：匿名請求在簽章設定有效時仍會被簽成 `-` sentinel；只有在沒有簽章能力時才完全不帶標頭。`canSign` 只看金鑰長度與站別，不看請求是否帶身分。
+
+例外：`delegateToBackend` 把「非 GET／HEAD 讀 body」與簽章放在同一個 `try`（`site/app/api/backend-client.ts:236-269`）。非 GET／HEAD 讀 body 失敗（或簽章過程拋錯）時，即使是匿名請求也會由 `catch` 回 `503 {"error":"relay_signing_unavailable"}`。所以「匿名不會 503」的準確說法是「**不會僅因缺少簽章能力而 503**」。
 
 ## 2. 執行期變數（只列名稱）
 
@@ -77,9 +79,9 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 規則：
 
-- **兩站金鑰不得相同（跨站）。** `siteKeys` 會拿 student 的每一把與 admin 的每一把互比；只要**任一** student 金鑰等於**任一** admin 金鑰（含現行對現行、現行對 `_PREV`、`_PREV` 對 `_PREV`），兩個站的金鑰清單都會被視為空，所有 relay 驗章一律失敗，`relayKeys` 為 0（`site/lib/relay-verification.ts:37-47`）。
+- **兩站金鑰不得相同（跨站）。** `siteKeys` 會拿 student 的每一把與 admin 的每一把互比；只要**任一** student 金鑰等於**任一** admin 金鑰（含現行對現行、現行對 `_PREV`、`_PREV` 對 `_PREV`），兩個站的金鑰清單都會被視為空，所有 relay 驗章一律失敗，`relayKeys` 為 0（`site/lib/relay-verification.ts:39-49`）。
 - 金鑰只在長度 ≥ 32 時計入；`_PREV` 與現行金鑰同時存在時，兩把都會被嘗試。
-- **`relayKeys` 是綁定項數，不是相異金鑰數。** `configuredKeys` 只是把「現行」與「`_PREV`」兩個綁定過濾後回傳（`site/lib/relay-verification.ts:31-35`），不先去重；因此同站的現行金鑰與 `_PREV` 若設成**相同字串**，會被重複計數（該站算 2）。請避免把兩者設成相同值。
+- **`relayKeys` 是綁定項數，不是相異金鑰數。** `configuredKeys` 只是把「現行」與「`_PREV`」兩個綁定過濾後回傳（`site/lib/relay-verification.ts:33-37`），不先去重；因此同站的現行金鑰與 `_PREV` 若設成**相同字串**，會被重複計數（該站算 2）。請避免把兩者設成相同值。
 - 本手冊只寫變數名稱，不寫任何值；變數的注入方式見三站運行手冊第 2 節。
 
 ## 3. 上線前閘門
@@ -90,12 +92,19 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 次站會替「入站的 `oai-*`」簽章。如果外部請求可以直接帶 `oai-*` 打到次站，就等於可以讓次站代簽任何身分；只要該 email 在主站 `ADMIN_EMAILS` 內，就能取得管理員。這是整套機制的安全前提。
 
-**測試必須在 `off` 或 `transitional` 下做，不可在 `strict` 下做。** 因為 `strict` 對「沒有 relay 標頭」的請求一律給 guest（`site/app/api/auth-helper.ts:85-87`），Worker 就算真的收到了偽造的 `oai-*` 也不會採用；此時看到 guest 會被誤判成「平台已剝除標頭」，其實只是 `strict` 忽略了它。
+**測試必須在 `off` 或 `transitional` 下做，不可在 `strict` 下做。** 因為 `strict` 對「沒有 relay 標頭」的請求一律給 guest（`site/app/api/auth-helper.ts:95-97`），Worker 就算真的收到了偽造的 `oai-*` 也不會採用；此時看到 guest 會被誤判成「平台已剝除標頭」，其實只是 `strict` 忽略了它。
 
-前置：確認 staging 上游不指向 production。
+前置 1：確認 staging 上游不指向 production。
 
-- 以 staging `/api/health` 確認 `role`／`site`／`primaryOrigin` 與 `d1`／`r2`：staging 應為 `standalone` 或獨立 staging 資源、D1／R2 `unbound`，且不得把 `PRIMARY_ORIGIN` 指向 production 主站（`https://ai-quest-a1-backend.b827262.chatgpt.site`）。依既有 staging manifest，staging 為 project `appgprj_6aaeb13a9930819186a64f6420ff65a4`（`role: standalone`、`d1/r2: unbound`），與 production 主站 project `appgprj_6aa80235182c8191a876361138ecbc36` 不同；測試時仍請重新確認，避免 manifest 過時。
+- 以 staging `/api/health` **實測**確認 `role`／`site`／`primaryOrigin` 與 `d1`／`r2`：staging 應為 `standalone` 或獨立 staging 資源、D1／R2 `unbound`，且不得把 `PRIMARY_ORIGIN` 指向 production 主站（`https://ai-quest-a1-backend.b827262.chatgpt.site`）。
+- 注意：既有 staging manifest 記為 `health_status: not_configured`、`worker.bindings: {}`；其中 `standalone`／`unbound` 來自較早的 recapture，**尚未經 live health 實測確認**。因此在進行 O-1a 之前，**必須先完成 staging `/api/health` 實測**並記錄結果。manifest 的 project 差異（staging `appgprj_6aaeb13a9930819186a64f6420ff65a4` vs production 主站 `appgprj_6aa80235182c8191a876361138ecbc36`）只能當線索，不能當已驗證事實。
 - 若 staging 是次站且 `PRIMARY_ORIGIN` 指向 production，**不得**進行此測試。
+
+前置 2：確認 staging 與 production 的 ingress（外部 `oai-*` 處理）行為等價。
+
+- **只有當 staging 與 production 的邊緣／ingress 對「外部帶入的 `oai-*`」處理方式等價時，staging 的 O-1a 結果才能作為 production 的閘門證據**；否則 staging 通過不能推論 production 通過。
+- 如何確認等價：比對兩個 project 的 hosting／edge 設定（同一個 Sites runtime、同一套身分注入與標頭剝除設定、相同的中介層／自訂網域），並確認兩者沒有不同的平台設定或額外 proxy。可由平台維運／Owner 提供設定對照，或以兩邊設定快照比對。
+- 若無法確認等價：**列為 Owner 決策點**——由 Owner 決定是否接受「以 staging 結果推論 production」、改以其他方式驗證 production ingress，或延後上線。
 
 測法（只在 staging，不碰 production）：
 
@@ -164,7 +173,8 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 ### 4.2 切 `strict` 前的檢查清單
 
 - [ ] 三個站（主站＋student＋admin）都已部署含簽章的版本，且各自的執行期變數已設定。
-- [ ] 主站 `/api/health`：`relayKeys` ≥ 2（student＋admin 各一把現行金鑰；輪替重疊期為 3 或 4），且不是 0。
+- [ ] 主站 `/api/health`：`relayKeys` ≥ 2，且不是 0。**這只是總量檢查，不能證明 student 與 admin 各自有有效金鑰**（例如 student 現行＋student `_PREV`、admin 無鑰時，總數仍是 2）。
+- [ ] **另行獨立確認 student 與 admin 各自至少有一把有效金鑰**（health 沒有分站金鑰數欄位，必須另外做）：(1) 由 Owner 檢視主站執行期綁定，確認 `A01_RELAY_KEY_STUDENT` 與 `A01_RELAY_KEY_ADMIN` 皆存在、長度 ≥ 32、互不相等；(2) 兩站各做一次有效簽章 smoke check（見 §4.3）。兩項都需 Owner 授權，本手冊不提供可直接複製執行的 production 指令。
 - [ ] 主站 `adminAllowlist` 為 `configured`。
 - [ ] migration `0003`（`relay_nonces`）已由 Owner 授權套用（見第 3(d) 節）。
 - [ ] staging 合成簽章請求：`valid` 被採用、`invalid` 被拒（受保護 API 回 401）。
@@ -178,6 +188,17 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 - `relayKeys` 的預期值：主站 student＋admin 兩把現行金鑰時為 2；輪替重疊期為 3 或 4；若跨站共用任一金鑰會是 0（視為設定錯誤）；同站現行與 `_PREV` 相同字串會重複計數。
 - health 是 GET，不寫 nonce；非 GET 的 D1 nonce 路徑請在 staging／測試驗證，不對 production 做寫入。
+
+### 4.3 兩站各自的有效簽章 smoke check
+
+目的：`relayKeys` 只是總數，無法區分是哪一站的金鑰；本節補足「student 與 admin 各自有有效金鑰」的確認。方法如下（只描述；實際執行需 Owner 逐站授權，本手冊不提供可直接複製執行的 production 指令）：
+
+1. 對 **student 次站**發出一次帶身分的 GET（例如該站的 `/api/student/me`）。判定：回應不是 `401 {"error":"unauthorized"}`，也不是 `503 relay_signing_unavailable`，代表 student 金鑰存在且被主站接受。
+2. 對 **admin 次站**發出一次帶身分的 GET（例如該站的 `/api/admin/auth/me`）。同樣以「非 401、非 503」判定 admin 金鑰被接受（admin 是否為管理員另由 `ADMIN_EMAILS` 決定，與金鑰有效性無關）。
+3. 負向對照：在 staging／合成環境以錯誤金鑰簽章，確認受保護 API 回 401（`tests/relay-verify.test.mjs` 已涵蓋），證明「非 401」不是因為驗章根本沒生效。
+4. 逐站判定：任一站若回 401，即該站金鑰未被接受（未設／< 32／與對站相同／與次站實際簽章金鑰不符）；若回 503，則是次站本身缺簽章能力。
+
+限制：若無法在不寫 production 的前提下取得各次站的身分請求，改用 staging／合成環境以相同綁定驗證，並把「production 兩站各自有效」列為 Owner 決策點。
 
 ## 5. 回滾
 
@@ -210,7 +231,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 | --- | --- | --- |
 | 受保護 API 回 401 `{"error":"unauthorized"}`（單一對外錯誤） | relay 驗章失敗：簽章不符、站別不符、時戳超出 ±300s、nonce 重放、path／query／body 被改、金鑰未設或 < 32、兩站共用金鑰、D1 不可用 | 看主站 `relaySeen`；確認次站 `A01_RELAY_SIGNING_KEY`／`A01_RELAY_SITE` 與主站對應金鑰。relay 失敗絕不回退 `oai-*`。 |
 | `GET /api/health` 回 `200` 但 `relaySeen: invalid` | health 不走 401 路徑；只表示本次 health 請求帶了 relay 標頭但驗章失敗 | 這是預期行為，不是漏回 401。要驗證受保護 API 的 401 請對 `/api/student/*`／`/api/admin/*` 測試。 |
-| 次站回 `503 {"error":"relay_signing_unavailable"}` | 次站缺簽章能力（`A01_RELAY_SIGNING_KEY` 未設／< 32，或 `A01_RELAY_SITE` 與 `SITE_NAME` 不符）**且**請求帶有 `oai-*` 身分 | 補齊次站變數後重新部署。注意：無簽章能力且**匿名**時不會 503，而是不帶任何 `oai-*`／`x-a01-relay-*` 直接轉送（見 §1.2）。 |
+| 次站回 `503 {"error":"relay_signing_unavailable"}` | (a) 次站缺簽章能力（`A01_RELAY_SIGNING_KEY` 未設／< 32，或 `A01_RELAY_SITE` 與 `SITE_NAME` 不符）**且**請求帶有 `oai-*` 身分；或 (b) 非 GET／HEAD 讀 body／簽章在 `try` 內拋錯（`site/app/api/backend-client.ts:236-269`） | 補齊次站變數後重新部署。注意：無簽章能力且**匿名**時**不會僅因缺少簽章能力而**回此錯誤，而是不帶任何 `oai-*`／`x-a01-relay-*` 直接轉送；但 (b) 的 body 讀取拋錯仍會回 503。 |
 | 身分間歇性失效 | 兩站時鐘偏差超過 ±300s | 校正次站與主站（平台）時鐘；確認時間同步。 |
 | 非 GET／HEAD 一律 401、GET 正常 | 非 GET 依賴 D1 `relay_nonces`：migration 0003 未套用、D1 binding 缺失或查詢失敗 | 套用 migration 0003（Owner 授權）；確認主站 D1 binding。D1 不可用時一律 401。 |
 | 大 body 回 401 而非 413 | 有 relay 標頭時，超過 body 上限（一般 8 MiB／upload 21 MiB）在簽章驗證階段就判 `invalid` | 這是預期行為；請在上游縮小 payload。無 relay 標頭時不走此檢查，平台層可能另有更早的限制。 |
@@ -227,30 +248,31 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 ## 9. 程式碼交叉核對
 
-行號以 main `9898c1e` 為準；PR #59（`fix/relay-auth-hardening`）另行標註。
+行號以目前 main `bbe1cfe2`（含 #59）為準；#59 前的舊行號另行標註。
 
-| 項目 | 值 | 程式碼位置（main `9898c1e`） |
+| 項目 | 值 | 程式碼位置（main `bbe1cfe2`） |
 | --- | --- | --- |
 | 次站簽章金鑰長度門檻 | ≥ 32 | `site/app/api/backend-client.ts:231` |
 | 次站站別必須相符 | `A01_RELAY_SITE === SITE_NAME` | `site/app/api/backend-client.ts:231-232` |
 | 次站刪除 `oai-*`／`x-a01-relay-*` | 全部刪除 | `site/app/api/backend-client.ts:213-219` |
 | 匿名且簽章有效時仍簽章 | `user-id`／`user-email` 用 `-` sentinel | `site/app/api/backend-client.ts:240,260-261` |
-| 匿名且無簽章能力時不帶標頭 | 不簽、不帶 `oai-*`／`x-a01-relay-*` | `site/app/api/backend-client.ts:234,240` |
+| 匿名且無簽章能力時不帶標頭 | 不簽、不帶 `oai-*`／`x-a01-relay-*`；不會僅因缺簽章能力而 503 | `site/app/api/backend-client.ts:234,240` |
 | 有身分且無簽章能力 | `503 relay_signing_unavailable` | `site/app/api/backend-client.ts:233-234` |
+| 次站簽章區塊例外（含匿名） | 非 GET／HEAD 讀 body／簽章拋錯 → catch 回 503 | `site/app/api/backend-client.ts:236-269` |
 | 次站 signed role 一律 `-` | `-` | `site/app/api/backend-client.ts:252,263` |
-| 模式解析（main） | 未設／`null`／空／`off`→`off`；`transitional`→`transitional`；其他（含純空白、`OFF`、`Transitional`）→`strict` | `site/lib/relay-verification.ts:24-29` |
-| 模式解析（#59 合併後） | trim＋轉小寫：純空白→`off`、`OFF`→`off`、`Transitional`→`transitional`、非字串→`strict` | `origin/fix/relay-auth-hardening`（`b6b8fb7`）`site/lib/relay-verification.ts` |
+| 模式解析（舊版，#59 前，`9898c1e`） | 未設／`null`／空／`off`→`off`；`transitional`→`transitional`；其他（含純空白、`OFF`、`Transitional`）→`strict` | `site/lib/relay-verification.ts:24-29` |
+| 模式解析（目前 main，含 #59） | trim＋轉小寫：純空白→`off`、`OFF`→`off`、`Transitional`→`transitional`、非字串→`strict` | `site/lib/relay-verification.ts:24-31`（`bbe1cfe2`） |
 | 時鐘偏差 | ±300s | `site/lib/relay-verification.ts:15` |
 | 一般 body 上限 | 8 MiB | `site/lib/relay-verification.ts:12` |
 | upload body 上限 | 21 MiB | `site/lib/relay-verification.ts:14` |
 | nonce 表 | `relay_nonces(nonce PK, expires_at)` | `site/drizzle/0003_superb_purifiers.sql:1-4`、`site/db/schema.ts:112-115` |
-| nonce 僅非 GET／HEAD 使用 | GET／HEAD 不寫表 | `site/lib/relay-verification.ts:122` |
-| 驗章失敗不回退 `oai-*` | `relayRejected` → 401 | `site/app/api/auth-helper.ts:84`；例 `site/app/api/student/me/route.ts:27-29` |
+| nonce 僅非 GET／HEAD 使用 | GET／HEAD 不寫表 | `site/lib/relay-verification.ts:124` |
+| 驗章失敗不回退 `oai-*` | `relayRejected` → 401 | `site/app/api/auth-helper.ts:94`；例 `site/app/api/student/me/route.ts:27-29` |
 | health 不走 401 | 一律 200，以 `relaySeen` 回報 | `site/app/api/health/route.ts:27,52-57` |
-| 管理員只由 allowlist 決定 | `ADMIN_EMAILS` | `site/app/api/auth-helper.ts:45-50,238-241` |
+| 管理員只由 allowlist 決定 | `ADMIN_EMAILS` | `site/app/api/auth-helper.ts:45-50,248-251` |
 | health 欄位 | `relayMode`／`relayKeys`／`relaySeen` | `site/app/api/health/route.ts:52,55-56` |
-| 兩站金鑰不得相同 | 跨站共用任一即兩站皆空 | `site/lib/relay-verification.ts:37-42` |
-| `relayKeys` 為綁定項數 | 同站現行與 `_PREV` 相同會重複計數 | `site/lib/relay-verification.ts:31-35,45-47` |
+| 兩站金鑰不得相同 | 跨站共用任一即兩站皆空 | `site/lib/relay-verification.ts:39-44` |
+| `relayKeys` 為綁定項數 | 同站現行與 `_PREV` 相同會重複計數 | `site/lib/relay-verification.ts:33-37,46-49` |
 | 未簽章標頭僅供顯示 | `chatgpt-auth.ts` | `site/app/chatgpt-auth.ts:11-13,21-40` |
 
 ## 10. 本地驗證
