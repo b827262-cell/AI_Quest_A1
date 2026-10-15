@@ -18,6 +18,8 @@ interface Env {
   SITE_ROLE?: string;
   SITE_NAME?: string;
   PRIMARY_ORIGIN?: string;
+  A01_RELAY_SIGNING_KEY?: string;
+  A01_RELAY_SITE?: string;
   // Comma-separated administrator allowlist (exact, case-insensitive). Unset
   // means nobody is an administrator. See app/api/auth-helper.ts.
   ADMIN_EMAILS?: string;
@@ -54,11 +56,13 @@ const worker = {
       env.RELEASE_VALIDATION_SECRET;
     (globalThis as unknown as { SYNC_IMPORT_SECRET?: string }).SYNC_IMPORT_SECRET = env.SYNC_IMPORT_SECRET;
     (globalThis as unknown as { SYNC_MAX_PDF_BYTES?: string }).SYNC_MAX_PDF_BYTES = env.SYNC_MAX_PDF_BYTES;
-    const runtimeGlobals = globalThis as unknown as { GIT_SHA?: string; SITE_ROLE?: string; SITE_NAME?: string; PRIMARY_ORIGIN?: string; ADMIN_EMAILS?: string; A01_RELAY_KEY_STUDENT?: string; A01_RELAY_KEY_STUDENT_PREV?: string; A01_RELAY_KEY_ADMIN?: string; A01_RELAY_KEY_ADMIN_PREV?: string; A01_RELAY_MODE?: string };
+    const runtimeGlobals = globalThis as unknown as { GIT_SHA?: string; SITE_ROLE?: string; SITE_NAME?: string; PRIMARY_ORIGIN?: string; ADMIN_EMAILS?: string; A01_RELAY_SIGNING_KEY?: string; A01_RELAY_SITE?: string; A01_RELAY_KEY_STUDENT?: string; A01_RELAY_KEY_STUDENT_PREV?: string; A01_RELAY_KEY_ADMIN?: string; A01_RELAY_KEY_ADMIN_PREV?: string; A01_RELAY_MODE?: string };
     runtimeGlobals.GIT_SHA = env.GIT_SHA;
     runtimeGlobals.SITE_ROLE = env.SITE_ROLE;
     runtimeGlobals.SITE_NAME = env.SITE_NAME;
     runtimeGlobals.PRIMARY_ORIGIN = env.PRIMARY_ORIGIN;
+    runtimeGlobals.A01_RELAY_SIGNING_KEY = env.A01_RELAY_SIGNING_KEY;
+    runtimeGlobals.A01_RELAY_SITE = env.A01_RELAY_SITE;
     runtimeGlobals.ADMIN_EMAILS = env.ADMIN_EMAILS;
     runtimeGlobals.A01_RELAY_KEY_STUDENT = env.A01_RELAY_KEY_STUDENT;
     runtimeGlobals.A01_RELAY_KEY_STUDENT_PREV = env.A01_RELAY_KEY_STUDENT_PREV;
