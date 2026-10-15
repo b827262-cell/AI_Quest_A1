@@ -22,6 +22,7 @@ async function requestWorker(pathname, options = {}) {
       // Administrator privilege is allowlist-driven (issue #47); the synthetic
       // admin identity used by these tests is configured here.
       ADMIN_EMAILS: options.adminEmails ?? "admin@synthetic.ai-smartbook.test",
+      ...(options.env ?? {}),
     },
     { waitUntil() {}, passThroughOnException() {} }
   );
@@ -37,6 +38,57 @@ test("GET /api/health returns 200 OK with worker edge metadata", async () => {
   // derived from the live worker environment reports unbound.
   assert.equal(data.d1, "unbound");
   assert.equal(data.phase, 2);
+});
+
+test("GET /api/health reports edge gate observability without exposing secrets", async () => {
+  // Unset: the gate defaults to accept and reports no usable secrets.
+  const resDefault = await requestWorker("/api/health");
+  const textDefault = await resDefault.text();
+  const dataDefault = JSON.parse(textDefault);
+  assert.equal(dataDefault.edgeMode, "accept");
+  assert.deepEqual(dataDefault.edgeSecrets, { student: 0, admin: 0 });
+  assert.equal(dataDefault.edgeSecretsDistinct, true);
+
+  const student = "health-student-edge-secret-for-local-tests-1234567";
+  const studentPrev = "health-student-previous-edge-secret-local-1234567";
+  const admin = "health-admin-edge-secret-for-local-tests-123456789";
+  const shared = "health-shared-edge-secret-for-local-tests-123456789";
+  const tooShort = "too-short";
+
+  // Configured: current + previous student secrets and one admin secret count;
+  // a too-short value never counts.
+  const resConfigured = await requestWorker("/api/health", {
+    env: {
+      A01_RELAY_EDGE_MODE: "require",
+      A01_RELAY_EDGE_SECRET_STUDENT: student,
+      A01_RELAY_EDGE_SECRET_STUDENT_PREV: studentPrev,
+      A01_RELAY_EDGE_SECRET_ADMIN: admin,
+    },
+  });
+  const textConfigured = await resConfigured.text();
+  const dataConfigured = JSON.parse(textConfigured);
+  assert.equal(dataConfigured.edgeMode, "require");
+  assert.deepEqual(dataConfigured.edgeSecrets, { student: 2, admin: 1 });
+  assert.equal(dataConfigured.edgeSecretsDistinct, true);
+
+  // Cross-site reuse invalidates both sites; too-short values are ignored.
+  const resReuse = await requestWorker("/api/health", {
+    env: {
+      A01_RELAY_EDGE_SECRET_STUDENT: shared,
+      A01_RELAY_EDGE_SECRET_STUDENT_PREV: tooShort,
+      A01_RELAY_EDGE_SECRET_ADMIN: shared,
+    },
+  });
+  const textReuse = await resReuse.text();
+  const dataReuse = JSON.parse(textReuse);
+  assert.deepEqual(dataReuse.edgeSecrets, { student: 0, admin: 0 });
+  assert.equal(dataReuse.edgeSecretsDistinct, false);
+
+  // The serialized response must never contain any configured secret string.
+  const serialized = [textDefault, textConfigured, textReuse].join("\n");
+  for (const secret of [student, studentPrev, admin, shared, tooShort]) {
+    assert.equal(serialized.includes(secret), false, `health response leaked "${secret}"`);
+  }
 });
 
 test("GET /api/student/me returns deterministic synthetic student or SIWC user", async () => {

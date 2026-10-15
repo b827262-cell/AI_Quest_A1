@@ -3,6 +3,7 @@ import { isAdminAllowlistConfigured } from "../auth-helper";
 import { isProductionEnvironment } from "../../../db";
 import { readRelayMode, relayKeyCount, verifyIncomingRelay } from "../../../lib/relay-verification";
 import { readInjectedIdentity, resolveBuildIdentity } from "../../runtime-diagnostics";
+import { countValidEdgeSecrets, readEdgeGateMode, type EdgeSecrets } from "../../../lib/relay-edge-gate";
 
 type RuntimeEnv = Record<string, unknown> | undefined;
 
@@ -13,6 +14,18 @@ function runtimeBinding(name: string): unknown {
     env?: RuntimeEnv;
   };
   return g?.[name] ?? g?.__env__?.[name] ?? g?.env?.[name] ?? null;
+}
+
+// The edge gate reads these from the same live worker environment. Only counts
+// are reported below; values, lengths, prefixes and hashes are never exposed.
+function edgeGateBindings(): EdgeSecrets {
+  return {
+    A01_RELAY_EDGE_SECRET_STUDENT: runtimeBinding("A01_RELAY_EDGE_SECRET_STUDENT") as string | undefined,
+    A01_RELAY_EDGE_SECRET_STUDENT_PREV: runtimeBinding("A01_RELAY_EDGE_SECRET_STUDENT_PREV") as string | undefined,
+    A01_RELAY_EDGE_SECRET_ADMIN: runtimeBinding("A01_RELAY_EDGE_SECRET_ADMIN") as string | undefined,
+    A01_RELAY_EDGE_SECRET_ADMIN_PREV: runtimeBinding("A01_RELAY_EDGE_SECRET_ADMIN_PREV") as string | undefined,
+    A01_RELAY_EDGE_MODE: runtimeBinding("A01_RELAY_EDGE_MODE") as string | undefined,
+  };
 }
 
 // Legacy field kept for existing consumers. The topology itself is reported by
@@ -50,11 +63,19 @@ export async function GET(request: Request) {
     );
   }
   const relaySeen = (await verifyIncomingRelay(request)).status;
+  // Read-only observability for the primary edge gate: operators can confirm
+  // the mode and per-site secret counts from health after switching to require.
+  // Health stays exempt from the gate and still does not write relay.verify.
+  const edgeGate = edgeGateBindings();
+  const edgeSecretCounts = countValidEdgeSecrets(edgeGate);
   return Response.json({
     status: "ok",
     relayMode: readRelayMode(),
     relayKeys: relayKeyCount(),
     relaySeen,
+    edgeMode: readEdgeGateMode(edgeGate.A01_RELAY_EDGE_MODE),
+    edgeSecrets: { student: edgeSecretCounts.student, admin: edgeSecretCounts.admin },
+    edgeSecretsDistinct: edgeSecretCounts.distinct,
     role: declared.role,
     site: declared.site,
     primaryOrigin: declared.primaryOrigin,

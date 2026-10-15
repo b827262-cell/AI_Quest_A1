@@ -18,18 +18,44 @@ export function readEdgeGateMode(value: unknown): EdgeGateMode {
   return normalized === "" || normalized === "accept" ? "accept" : "require";
 }
 
-function validSecrets(site: "student" | "admin", bindings: EdgeSecrets): string[] {
-  const own = site === "student"
+function ownSecrets(site: "student" | "admin", bindings: EdgeSecrets): unknown[] {
+  return site === "student"
     ? [bindings.A01_RELAY_EDGE_SECRET_STUDENT, bindings.A01_RELAY_EDGE_SECRET_STUDENT_PREV]
     : [bindings.A01_RELAY_EDGE_SECRET_ADMIN, bindings.A01_RELAY_EDGE_SECRET_ADMIN_PREV];
-  const other = site === "student"
+}
+
+function otherSecrets(site: "student" | "admin", bindings: EdgeSecrets): unknown[] {
+  return site === "student"
     ? [bindings.A01_RELAY_EDGE_SECRET_ADMIN, bindings.A01_RELAY_EDGE_SECRET_ADMIN_PREV]
     : [bindings.A01_RELAY_EDGE_SECRET_STUDENT, bindings.A01_RELAY_EDGE_SECRET_STUDENT_PREV];
-  const usable = (value: unknown): value is string => typeof value === "string" && value.length >= 32 && value.length <= 512;
-  const ownKeys = own.filter(usable);
-  const otherKeys = other.filter(usable);
+}
+
+function usableSecret(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 32 && value.length <= 512;
+}
+
+function validSecrets(site: "student" | "admin", bindings: EdgeSecrets): string[] {
+  const ownKeys = ownSecrets(site, bindings).filter(usableSecret);
+  const otherKeys = otherSecrets(site, bindings).filter(usableSecret);
   // Cross-site reuse invalidates both sites, including overlap keys.
   return ownKeys.some((key) => otherKeys.includes(key)) ? [] : ownKeys;
+}
+
+export type EdgeSecretCounts = { student: number; admin: number; distinct: boolean };
+
+/**
+ * Read-only counts of usable edge secrets per site for the health endpoint.
+ * Uses the same validity rule as `validSecrets`, so health and the gate cannot
+ * drift. Never returns a value, length, prefix or hash.
+ */
+export function countValidEdgeSecrets(bindings: EdgeSecrets): EdgeSecretCounts {
+  const studentOwn = ownSecrets("student", bindings).filter(usableSecret);
+  const adminOwn = ownSecrets("admin", bindings).filter(usableSecret);
+  return {
+    student: validSecrets("student", bindings).length,
+    admin: validSecrets("admin", bindings).length,
+    distinct: !studentOwn.some((key) => adminOwn.includes(key)),
+  };
 }
 
 function equalSecret(left: string, right: string): boolean {
