@@ -94,7 +94,19 @@ async function signedBody(request: Request, pathname: string): Promise<ArrayBuff
 }
 
 /** Validate only relay headers; every failure has the same caller-visible result. */
-export async function verifyIncomingRelay(request: Request): Promise<RelayVerification> {
+const verificationByRequest = new WeakMap<Request, Promise<RelayVerification>>();
+
+export function verifyIncomingRelay(request: Request): Promise<RelayVerification> {
+  // A Request is one verification attempt. Repeating a non-GET call returns its
+  // first result rather than treating its own nonce as a separate replay.
+  const cached = verificationByRequest.get(request);
+  if (cached) return cached;
+  const result = verifyRelayForRequest(request);
+  verificationByRequest.set(request, result);
+  return result;
+}
+
+async function verifyRelayForRequest(request: Request): Promise<RelayVerification> {
   if (!hasRelayHeaders(request.headers)) return { status: "none" };
   try {
     const parsed = parseRelayHeaders(request.headers);

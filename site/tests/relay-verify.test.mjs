@@ -175,14 +175,16 @@ for (const [label, change] of [
   });
 }
 
-test("body mutation, replay and expired timestamps fail; GET repeats without nonce storage", async () => {
+test("body mutation, distinct-request replay and expired timestamps fail; one Request reuses verification", async () => {
   await withRuntime({}, async (sqlite) => {
     const body = new Uint8Array([0, 255, 10, 13]);
     const signed = await signedRequest({ method: "POST", pathname: "/api/student/progress", body });
     assert.equal((await verifyIncomingRelay(signed.request)).status, "valid");
     assert.equal(signed.request.bodyUsed, false);
-    assert.equal((await verifyIncomingRelay(signed.request)).status, "invalid");
+    assert.equal((await verifyIncomingRelay(signed.request)).status, "valid");
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM relay_nonces").get().n, 1);
+    const replay = new Request(signed.request.url, { method: "POST", headers: signed.headers, body });
+    assert.equal((await verifyIncomingRelay(replay)).status, "invalid");
     const mutated = new Request(signed.request.url, { method: "POST", headers: signed.headers, body: new Uint8Array([1, 255, 10, 13]) });
     assert.equal((await verifyIncomingRelay(mutated)).status, "invalid");
     const old = await signedRequest({ ts: String(Math.floor(Date.now() / 1000) - 301) });
