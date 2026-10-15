@@ -1,5 +1,10 @@
 # PR #33 SSRF hardening port to main — 2026-10-14
 
+> Current policy: issue #49 stages 1/2 removed book-core ai/db dependencies.
+> Stage 3 makes their reintroduction a hard G1 failure; see
+> [ADR-002](../adr/ADR-002-browser-server-boundary.md). WARN results below are
+> historical evidence from the earlier SSRF port, not the current policy.
+
 Base: `ef1c14ec78a0c1d3aa7f3db683ceb677f1db685d` (remote main at clone time).
 Source: `ae5b351baf04af281c206005fed73c543e4e488b`.
 Destination branch: `fix/rag-ssrf-dns-pinning`.

@@ -63,7 +63,13 @@ async function signedRequest({ method = "GET", pathname = "/api/student/me", sea
 }
 const direct = (pathname, headers = {}) => new Request(`https://primary.example.test${pathname}`, { headers });
 
-for (const [label, value, expected] of [["unset", undefined, "off"], ["off", "off", "off"], ["transitional", "transitional", "transitional"], ["strict", "strict", "strict"], ["invalid", "typo", "strict"]]) {
+for (const [label, value, expected] of [
+  ["unset", undefined, "off"], ["null", null, "off"], ["empty", "", "off"],
+  ["whitespace", "  ", "off"], ["off", "off", "off"], ["spaced uppercase off", " OFF ", "off"],
+  ["transitional", "transitional", "transitional"], ["spaced mixed-case transitional", " Transitional ", "transitional"],
+  ["strict", "strict", "strict"], ["uppercase strict", "STRICT", "strict"],
+  ["invalid", "typo", "strict"], ["trueish", "trueish", "strict"], ["non-string", true, "strict"],
+]) {
   test(`relay mode ${label} resolves to ${expected}`, async () => {
     await withRuntime({ A01_RELAY_MODE: value }, async () => assert.equal(readRelayMode(), expected));
   });
@@ -101,6 +107,37 @@ test("valid signed student identity overrides forged oai and preserves canonical
     assert.equal(auth.email, "alice@example.test");
     assert.equal(auth.role, "student");
     assert.equal(auth.displayName, "alice@example.test");
+  });
+});
+
+test("one POST Request reuses normalized auth without replaying its nonce; a new Request is rejected", async () => {
+  await withRuntime({}, async (sqlite) => {
+    const signed = await signedRequest({ method: "POST", pathname: "/api/student/progress", body: "progress" });
+    const firstPromise = getNormalizedAuth(signed.request);
+    assert.strictEqual(getNormalizedAuth(signed.request), firstPromise);
+    const first = await firstPromise;
+    assert.equal(first.isAuthenticated, true);
+    assert.equal(first.userId, "user-123");
+    assert.strictEqual(await getNormalizedAuth(signed.request), first);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM relay_nonces").get().n, 1);
+
+    const replay = new Request(signed.request.url, { method: "POST", headers: signed.headers, body: "progress" });
+    const replayAuth = await getNormalizedAuth(replay);
+    assert.equal(replayAuth.isAuthenticated, false);
+    assert.equal(replayAuth.relayRejected, true);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM relay_nonces").get().n, 1);
+  });
+});
+
+test("one invalid Request caches its rejected auth result", async () => {
+  await withRuntime({}, async () => {
+    const signed = await signedRequest({ extra: { "x-a01-relay-sig": "invalid" } });
+    const firstPromise = getNormalizedAuth(signed.request);
+    assert.strictEqual(getNormalizedAuth(signed.request), firstPromise);
+    const first = await firstPromise;
+    assert.equal(first.relayRejected, true);
+    assert.equal(first.isAuthenticated, false);
+    assert.strictEqual(await getNormalizedAuth(signed.request), first);
   });
 });
 
