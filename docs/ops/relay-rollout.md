@@ -1,7 +1,7 @@
 # A-01 身分轉送簽章上線手冊（Relay Rollout Runbook）
 
 本手冊是三站運行手冊（`docs/ops/three-site-runbook.md`）的補充，說明次站簽章（PR #57）與主站驗章（PR #58）的上線、驗證、回滾、金鑰輪替與疑難排解。
-設計依據為 A-01 三站整合設計文件（該文件在 Project，不在本 repo）；協定與實作數值以程式碼為準，逐項對應見第 9 節；§4.4 的驗收門檻依 Owner 2026/10/15 決議，並非測試已通過的結果。程式碼位置：`site/lib/relay-signature.ts`、`site/lib/relay-verification.ts`、`site/app/api/backend-client.ts`、`site/app/api/auth-helper.ts`、`site/app/api/health/route.ts`、`site/worker/index.ts`、`site/drizzle/0003_superb_purifiers.sql`。
+設計依據為 A-01 三站整合設計文件（該文件在 Project，不在本 repo）；協定與實作數值以程式碼為準，逐項對應見第 9 節；§4.4 中連續 72 小時、100% 不取樣與 Gate `HOLD` 依 Owner 2026/10/15 決議，300／100／30 的樣本與覆蓋數字為建議值，待 Owner 確認，並非測試已通過的結果。程式碼位置：`site/lib/relay-signature.ts`、`site/lib/relay-verification.ts`、`site/app/api/backend-client.ts`、`site/app/api/auth-helper.ts`、`site/app/api/health/route.ts`、`site/worker/index.ts`、`site/drizzle/0003_superb_purifiers.sql`。
 
 本手冊不提供可直接複製執行的 production 寫入指令；任何對 production 的寫入（部署、migration、變數變更）都必須先取得 Owner 授權。
 
@@ -152,7 +152,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 1. **主站前置**：完成第 3 節閘門；套用 migration 0003；設定主站變數（模式先為 `transitional`）。
 2. **部署主站**（含 #58 驗章程式碼）。部署後驗證主站 health。
 3. **部署次站**：設定該站 `A01_RELAY_SIGNING_KEY`／`A01_RELAY_SITE` 後部署（含 #57 簽章程式碼）。學生與管理次站逐站部署、逐站驗證；每站都要 Owner 授權。
-4. **觀察期（`transitional`）**：先完成 §4.4 的平台管線驗證，再累計連續 72 小時的乾淨視窗；兩站有效樣本、逐路徑讀寫覆蓋、日誌完整性及回滾演練須全部達標。單純經過 72 小時或沒有日誌，不算通過。
+4. **觀察期（`transitional`）**：先完成 §4.4 的平台管線驗證，再累計連續 72 小時的乾淨視窗；兩站有效樣本、逐路徑讀寫覆蓋須待 Owner 確認建議值後達標，日誌完整性及回滾演練亦須通過。單純經過 72 小時或沒有日誌，不算通過。
 5. **主站切 `strict`**：§4.2、§4.4 全部通過並取得 Owner 此次切換授權後，設定主站 `A01_RELAY_MODE=strict` 並重新部署；核驗部署版本、生效設定、health 與兩站合法請求。設定值變更本身不代表部署完成。
 
 `GET /api/health` 的欄位意義（永遠不輸出金鑰）：
@@ -182,7 +182,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 - [ ] migration `0003`（`relay_nonces`）已由 Owner 授權套用（見第 3(d) 節）。
 - [ ] staging 合成簽章請求：`valid` 被採用、`invalid` 被拒（受保護 API 回 401）。
 - [ ] O-1a 已通過，且該測試不是在 `strict` 下做的（見第 3(a) 節）。
-- [ ] §4.4 全部達標：三站平台證據齊全、100% 日誌、連續 72 小時、雙站樣本與寫入覆蓋足夠、零異常、完整性及隱私檢查通過。
+- [ ] §4.4 全部達標：三站平台證據齊全、100% 日誌、連續 72 小時、雙站樣本與寫入覆蓋的建議值經 Owner 確認後達標、零異常、完整性及隱私檢查通過；建議值未確認即 `HOLD`。
 - [ ] 已確認所有使用者面向的來源是次站；主站頁面若被直接存取，其未簽章 API 呼叫在 `strict` 下會變 guest。
 - [ ] §5 的回滾門檻、基準、執行者與部署權限已確認，且 staging 回滾演練為 `PASS`。
 - [ ] AGY 已獨立審查本 Runbook PR；Hermes 已整合平台證據與審查結果回報 Gate 結論，並交 Owner 決定。
@@ -220,7 +220,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 限制：staging／合成環境的結果須明確標示環境，不得代替 production 雙站證據。若尚無授權或無法取得 production 各次站的有效身分請求，相關驗收保持 `HOLD`。單次 smoke check 不取代 §4.4 的樣本與覆蓋門檻。
 
-### 4.4 Strict Release Gate（Owner 2026/10/15 決議）
+### 4.4 Strict Release Gate（Owner 已決事項與待確認建議值）
 
 #### 平台證據與管線預檢（P0）
 
@@ -235,9 +235,9 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 
 上述是未來經授權的驗證程序，本 PR 不部署 staging、不製造平台流量，也不修改日誌程式或平台設定。證據尚缺即 `BLOCKED`／Gate `HOLD`。
 
-#### 連續觀察的硬門檻
+#### 連續觀察的驗收條件（樣本數待 Owner 確認）
 
-以下各項為 AND 條件，兩個次站分別驗收；時間採同一連續視窗，記錄 ISO 8601 起訖時間與時區。不得合併不同環境、版本或不連續區間湊滿門檻。
+以下各項為 AND 條件，兩個次站分別驗收；時間採同一連續視窗，記錄 ISO 8601 起訖時間與時區。Owner 已決事項為連續 72 小時、100% 不取樣及 Gate `HOLD`；有效樣本 300／100 與逐路徑／方法 30 次均為建議值，待 Owner 確認，未確認即 `HOLD`。不得合併不同環境、版本或不連續區間湊滿門檻。
 
 | 指標 | 驗收門檻與計數口徑 |
 | --- | --- |
@@ -245,14 +245,14 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | 日誌取樣 | 應用及三站相關平台採集均 100%，不取樣。 |
 | `invalid` | 完整觀察範圍內 `evt=relay.verify AND result=invalid` 為 0；包含 `site=unknown`／`pathClass=other`，無未經證實的例外。 |
 | 異常身分組合 | `result=none AND identityPresent=true` 為 0；其他無法解釋的站別／路徑／身分組合亦須先解決，不得自動排除。 |
-| 有效樣本 | `result=valid AND site=student` ≥300；`result=valid AND site=admin` ≥100，並分列 GET／HEAD／OTHER 與路由模板。`none`、health、gate、CORS 拒絕不計入。 |
-| 讀寫覆蓋 | 兩站均有帶平台身分的成功 GET（§4.3）；每站每個適用的非 GET 業務路徑／方法至少 30 次成功驗證。每次須有 `valid` 及預期授權／業務成功回應；匿名簽章或 HTTP 200 本身不能證明合法使用者成功。 |
+| 有效樣本 | 建議值，待 Owner 確認：`result=valid AND site=student` ≥300；`result=valid AND site=admin` ≥100，並分列 GET／HEAD／OTHER 與路由模板。`none`、health、gate、CORS 拒絕不計入。 |
+| 讀寫覆蓋 | 兩站均有帶平台身分的成功 GET（§4.3）；每站每個適用的非 GET 業務路徑／方法至少 30 次成功驗證（建議值，待 Owner 確認）。每次須有 `valid` 及預期授權／業務成功回應；匿名簽章或 HTTP 200 本身不能證明合法使用者成功。 |
 | 未分類受保護路徑 | 0 個未解決；`pathClass=other` 先核對完整路由表，受保護者必須納入。 |
 | 日誌完整性 | 與符合記錄條件的主站請求數逐區間核對，無未解釋缺口／重複／解析失敗；另完成無應用日誌路徑的 invocation 核對。 |
 | 敏感資訊外洩 | 0；檢查應用輸出、平台原始記錄及匯出證據，不含金鑰、簽章、nonce、email、user-id、Authorization、cookie、IP、含 ID 的完整路徑及查詢字串等。證據分享須脫敏，不為核對而加記敏感欄位。 |
 | 回滾演練 | 經授權的 staging 完成 §5 全流程並記為 `PASS`，附部署與合法請求恢復證據。 |
 
-最低樣本是工程驗收要求，不代表統計上證明異常率為零。72 小時到期但任一站不足，即 `INSUFFICIENT_SAMPLE`／Gate `HOLD`；持續觀察，選取同一連續且至少 72 小時的完整乾淨視窗重新結算，不得把低流量當成功。補樣只能使用另行授權、可辨識的測試流量，與真實流量分列；staging 樣本不得混入 production 計數。
+最低樣本數是工程建議值，待 Owner 確認，不代表統計上證明異常率為零；未確認即 Gate `HOLD`。72 小時到期但任一站未達 Owner 確認後的門檻，即 `INSUFFICIENT_SAMPLE`／Gate `HOLD`；持續觀察，選取同一連續且至少 72 小時的完整乾淨視窗重新結算，不得把低流量當成功。補樣只能使用另行授權、可辨識的測試流量，與真實流量分列；staging 樣本不得混入 production 計數。
 
 若視窗內出現異常、日誌缺口、採集失效或候選版本／相關設定變更，立即暫停晉級並保留原視窗證據。調查修復、重新驗證管線後，重新起算 72 小時；不得拼接前後區間，或直接豁免已出現的 `invalid`。
 
@@ -264,12 +264,12 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 
 | 來源站 | 路由模板／方法 | 分類與覆蓋要求 |
 | --- | --- | --- |
-| Student | GET `/api/student/me`；GET、PUT `/api/student/progress` | `student`；PUT 至少 30 次，GET 須證明登入身分成功。 |
+| Student | GET `/api/student/me`；GET、PUT `/api/student/progress` | `student`；PUT 至少 30 次（建議值，待 Owner 確認），GET 須證明登入身分成功。 |
 | Admin | GET `/api/admin/auth/me`、`/api/admin/overview`、`/api/admin/books`、`/api/admin/books/[id]` | `admin`；確認有效管理員可正常存取。 |
-| Admin | POST、DELETE `/api/admin/books`；POST `/api/admin/books/upload`；DELETE `/api/admin/books/[id]` | `admin`；四個路徑／方法分別至少 30 次；POST books 雖共用 upload handler，仍須獨立盤點。 |
+| Admin | POST、DELETE `/api/admin/books`；POST `/api/admin/books/upload`；DELETE `/api/admin/books/[id]` | `admin`；四個路徑／方法分別至少 30 次（建議值，待 Owner 確認）；POST books 雖共用 upload handler，仍須獨立盤點。 |
 | 三站其他路由 | student books／content、`/api/internal/sync/*`、health、OPTIONS、gate 等 | 不以名稱推斷 relay 保護；核對各自授權及實際控制流程。internal sync 使用獨立驗證，不能因沒有 `relay.verify` 就宣告無請求或安全。 |
 
-應用日誌的 `method=OTHER` 無法區分 PUT／POST／DELETE，`pathClass` 也不能區分各子路由；因此不能用 OTHER 總量代替逐路徑 30 次證據。以已授權的受控測試執行清單、路由模板與時間區間、平台可用的安全關聯資料核對；若無法區分或關聯，該項 `HOLD`，不得推算成功或擴充敏感日誌。
+應用日誌的 `method=OTHER` 無法區分 PUT／POST／DELETE，`pathClass` 也不能區分各子路由；因此不能用 OTHER 總量代替逐路徑 30 次證據（建議值，待 Owner 確認）。以已授權的受控測試執行清單、路由模板與時間區間、平台可用的安全關聯資料核對；若無法區分或關聯，該項 `HOLD`，不得推算成功或擴充敏感日誌。
 
 對每個固定時間區間，先從主站 invocation／路由證據求得應記錄請求數 E：觀察期僅計 primary、transitional（Strict 後監控改計 strict）、已達 `getNormalizedAuth` 且非 health 的不同請求；再求成功解析的 `relay.verify` 筆數 L，核對 E=L 且無重複抵銷缺漏。不能從 L 反推 E；logger 的 try/catch 可能吞掉記錄失敗，HTTP 正常不保證日誌完整。平台若只提供全站總數且無法拆分，仍為 `HOLD`。
 
