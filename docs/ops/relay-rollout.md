@@ -94,7 +94,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 次站會替「入站的 `oai-*`」簽章。如果外部請求可以直接帶 `oai-*` 打到次站，就等於可以讓次站代簽任何身分；只要該 email 在主站 `ADMIN_EMAILS` 內，就能取得管理員。這是整套機制的安全前提。
 
-**測試必須在 `off` 或 `transitional` 下做，不可在 `strict` 下做。** 因為 `strict` 對「沒有 relay 標頭」的請求一律給 guest（`site/app/api/auth-helper.ts:95-97`），Worker 就算真的收到了偽造的 `oai-*` 也不會採用；此時看到 guest 會被誤判成「平台已剝除標頭」，其實只是 `strict` 忽略了它。
+**測試必須在 `off` 或 `transitional` 下做，不可在 `strict` 下做。** 因為 `strict` 對「沒有 relay 標頭」的請求一律給 guest（`site/app/api/auth-helper.ts:117-119`），Worker 就算真的收到了偽造的 `oai-*` 也不會採用；此時看到 guest 會被誤判成「平台已剝除標頭」，其實只是 `strict` 忽略了它。
 
 前置 1：確認 staging 上游不指向 production。
 
@@ -367,8 +367,8 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | 一般 body 上限 | 8 MiB | `site/lib/relay-verification.ts:12` |
 | upload body 上限 | 21 MiB | `site/lib/relay-verification.ts:14` |
 | nonce 表 | `relay_nonces(nonce PK, expires_at)` | `site/drizzle/0003_superb_purifiers.sql:1-4`、`site/db/schema.ts:112-115` |
-| nonce 僅非 GET／HEAD 使用 | GET／HEAD 不寫表 | `site/lib/relay-verification.ts:124` |
-| 驗章失敗不回退 `oai-*` | `relayRejected` → 401 | `site/app/api/auth-helper.ts:94`；例 `site/app/api/student/me/route.ts:27-29` |
+| nonce 僅非 GET／HEAD 使用 | GET／HEAD 不寫表 | `site/lib/relay-verification.ts:136-143` |
+| 驗章失敗不回退 `oai-*` | `relayRejected` → 401 | `site/app/api/auth-helper.ts:116`；例 `site/app/api/student/me/route.ts:27-29` |
 | health 不走 401 | 一律 200，以 `relaySeen` 回報 | `site/app/api/health/route.ts:27,52-57` |
 | 代理成功回應標記 | `x-data-plane: primary`（含主站 401／403） | `site/app/api/backend-client.ts:286` |
 | 主站不可達 | `503 backend_unavailable`（無 `x-data-plane`） | `site/app/api/backend-client.ts:293-301` |
@@ -377,8 +377,8 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | student guest 也是 200 | `authenticated:false, guest:true` | `site/app/api/student/me/route.ts:56-67` |
 | student 驗證身分 200 | `authenticated:true, user, role, isSynthetic` | `site/app/api/student/me/route.ts:38-53` |
 | admin 非管理員 403 | `authenticated:true, error:"admin permission required"` | `site/app/api/admin/auth/me/route.ts:44-49` |
-| 管理員只由 allowlist 決定 | `ADMIN_EMAILS` | `site/app/api/auth-helper.ts:45-50,248-251` |
-| health 欄位 | `relayMode`／`relayKeys`／`relaySeen` | `site/app/api/health/route.ts:52,55-56` |
+| 管理員只由 allowlist 決定 | `ADMIN_EMAILS` | `site/app/api/auth-helper.ts:45-50,270-273` |
+| health 欄位 | `relayMode`／`relayKeys`／`relaySeen` | `site/app/api/health/route.ts:52,55-57` |
 | 兩站金鑰不得相同 | 跨站共用任一即兩站皆空 | `site/lib/relay-verification.ts:39-44` |
 | `relayKeys` 為綁定項數 | 同站現行與 `_PREV` 相同會重複計數 | `site/lib/relay-verification.ts:33-37,46-49` |
 | 未簽章標頭僅供顯示 | `chatgpt-auth.ts` | `site/app/chatgpt-auth.ts:11-13,21-40` |
