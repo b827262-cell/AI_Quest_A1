@@ -55,8 +55,9 @@ Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalT
 
 ## 4. health 契約
 
-`GET /api/health` 的契約欄位為 `status`、`role`、`site`、`primaryOrigin`、`gitSha`、`d1`、`r2`、`adminAllowlist`。
+`GET /api/health` 的契約欄位為 `status`、`role`、`site`、`primaryOrigin`、`gitSha`、`d1`、`r2`、`adminAllowlist`、`relayMode`、`relayKeys`、`relaySeen`。
 為相容既有使用者，仍保留 `edge`、`phase`、`storage`、`backendTarget`、`version`、`buildId`、`identitySource`、`time`。
+`relayMode`／`relayKeys`／`relaySeen` 是身分轉送簽章的觀測欄位，永不輸出金鑰；各值意義與上線步驟見 [`relay-rollout.md`](./relay-rollout.md)。
 
 `adminAllowlist` 只回報 `configured` 或 `unset`，永遠不含任何位址。當它為 `unset` 時，沒有任何帳號會是管理員。
 
@@ -103,7 +104,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://ai-quest-a1-student.b827262.ch
 
 ## 8. 開放問題與已知限制
 
-- **O-1 身分轉送尚未簽章。** `x-a01-relay` 簽章屬於本版的擴充點，尚未實作。主站仍信任 `oai-authenticated-user-id`、`oai-authenticated-user-email` 等標頭，次站會原樣轉送；上線前須先確認 Sites 會在主站入口清除外來的 `oai-*` 標頭。這是設計文件標示的最大風險，目前仍待驗證。管理員權限已不再由此類標頭推得：`oai-authenticated-user-role` 與 email 子字串都不再授予管理員，改由伺服器端 `ADMIN_EMAILS` allowlist 決定（issue #47）；`x-admin-key` 僅在非 production 的合成測試有效。
+- **O-1 身分轉送已改為簽章（PR #57／#58）。** 次站以每站金鑰對入站的 `oai-*` 做 HMAC-SHA256 簽章，刪除入站 `oai-*`／`x-a01-relay-*` 後帶 `x-a01-relay-*` 轉送；主站驗章通過才採用作身分。上線、驗證、回滾與金鑰輪替見 [`relay-rollout.md`](./relay-rollout.md)。管理員權限仍只由伺服器端 `ADMIN_EMAILS` allowlist 決定：`oai-authenticated-user-role` 與 email 子字串都不授予管理員（issue #47）；`x-admin-key` 僅在非 production 的合成測試有效。**O-1a 仍是上線前閘門**：次站會替入站 `oai-*` 簽章，上線前須先確認 Sites 會在請求抵達 Worker 前清除外來的 `oai-*`，否則直打次站即可偽造身分；未通過前不得進入 `transitional`／`strict`。
 - **O-2 平台注入方式待確認。** 需確認 Sites 是否支援每個專案注入自己的執行期變數與 secret。若只能於建置時寫入，則必須逐站建置，並寫入 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA`（不含 secret）。
 - **O-3 逐站部署工具未納入本版。** 設計文件第 5 節提到的 `deploy-target.mjs` 與 `npm run deploy:target` 未納入本版。在工具完成前，請依第 5 節手動部署。
 - **O-4 主站直接回應的標籤仍為舊值。** 主站本地路由仍標示 `x-data-plane: shared-backend`，本版未改動各路由。只有次站的代理回應標示 `primary`。
@@ -116,3 +117,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://ai-quest-a1-student.b827262.ch
 - `cd site && npm ci && npm run typecheck && npm test`。`tests/three-site-topology.test.mjs` 會在同一程序內模擬三站，不需要網路。
 - `npm run environment:align:production`，在 `site/` 目錄執行。
 - 本手冊的步驟不包含對 production 的寫入。所有 production 驗證僅使用 GET。
+
+## 10. 身分轉送簽章上線
+
+次站簽章（PR #57）與主站驗章（PR #58）的上線另見 [`relay-rollout.md`](./relay-rollout.md)：概念與三模式行為表、執行期變數清單、上線前閘門（含 O-1a）、部署順序與 `/api/health` 驗證、回滾、金鑰輪替與疑難排解。上線順序為主站 `transitional` → 次站 → 觀察 → 主站 `strict`；每站部署都需 Owner 逐站授權。
