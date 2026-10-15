@@ -191,12 +191,28 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 ### 4.3 兩站各自的有效簽章 smoke check
 
-目的：`relayKeys` 只是總數，無法區分是哪一站的金鑰；本節補足「student 與 admin 各自有有效金鑰」的確認。方法如下（只描述；實際執行需 Owner 逐站授權，本手冊不提供可直接複製執行的 production 指令）：
+目的：`relayKeys` 只是總數，無法區分是哪一站的金鑰；本節補足「student 與 admin 各自有有效金鑰」的確認。方法如下（只描述；實際執行需 Owner 逐站授權，本手冊不提供可直接複製執行的 production 指令）。
 
-1. 對 **student 次站**發出一次帶身分的 GET（例如該站的 `/api/student/me`）。判定：回應不是 `401 {"error":"unauthorized"}`，也不是 `503 relay_signing_unavailable`，代表 student 金鑰存在且被主站接受。
-2. 對 **admin 次站**發出一次帶身分的 GET（例如該站的 `/api/admin/auth/me`）。同樣以「非 401、非 503」判定 admin 金鑰被接受（admin 是否為管理員另由 `ADMIN_EMAILS` 決定，與金鑰有效性無關）。
-3. 負向對照：在 staging／合成環境以錯誤金鑰簽章，確認受保護 API 回 401（`tests/relay-verify.test.mjs` 已涵蓋），證明「非 401」不是因為驗章根本沒生效。
-4. 逐站判定：任一站若回 401，即該站金鑰未被接受（未設／< 32／與對站相同／與次站實際簽章金鑰不符）；若回 503，則是次站本身缺簽章能力。
+**共同前提：** 對各次站發出一次**帶平台身分**的 GET，並要求回應同時滿足 (i) 帶 `x-data-plane: primary`（證明確實經由次站代理、有走 relay 路徑；此標頭由 `site/app/api/backend-client.ts:286` 在代理取回主站回應時加上，401／403 也會帶），以及 (ii) 下列端點特定的預期回應。**只有「(i)＋(ii) 都成立」才算成功；其餘一律不算成功。**
+
+正向判定（成功條件）：
+
+- **student**：`GET /api/student/me` 回 **200**，且 body 為 `authenticated: true`、`user` 反映預期的登入身分（`site/app/api/student/me/route.ts:38-53`）。注意 guest 也是 200 但 body 為 `authenticated: false, guest: true`（`:56-67`），**guest 不算成功**（代表沒有可驗證的身分送到主站）。
+- **admin**：`GET /api/admin/auth/me` 回 **200**（body `authenticated: true, role: "admin"`，`site/app/api/admin/auth/me/route.ts:51-63`），**或**回 **403** 且 body 為 `authenticated: true`、`error: "admin permission required"`（`:44-49`；代表身分已被主站採用、只是不在 `ADMIN_EMAILS`，與金鑰有效性無關）。
+
+非成功判定：
+
+- **401**（`unauthorized`／`malformed_auth`／`admin authentication required`；`student/me/route.ts:27-36`、`admin/auth/me/route.ts:26-42`）：視為 **relay／身分驗證失敗「待診斷」**，不得直接歸因金鑰。可能原因包含金鑰不符、時戳超出 ±300s、nonce 重放、path／query／body 被改、D1 不可用等（見第 7 節）。
+- **其他任何狀態一律判為「未能驗證」、不得算成功**，包含：
+  - `503 backend_unavailable`（主站不可達；`site/app/api/backend-client.ts:293-301`，無 `x-data-plane`）；
+  - `503 relay_signing_unavailable`（次站缺簽章能力）；
+  - `503 backend_disabled`（次站未設定 `PRIMARY_ORIGIN`；`site/app/api/backend-client.ts:192-199`）；
+  - **CORS 403** `{"error":"cors_forbidden"}`（`admin/auth/me/route.ts:16-18`、`student/me/route.ts:17-19`；這是來源被拒，不是金鑰有效）；
+  - 其他非預期的 403、5xx，或 200 但 body 不符上述正向條件（例如 guest 200）。
+
+輔助對照：在 staging／合成環境以錯誤金鑰簽章，確認受保護 API 回 401（`tests/relay-verify.test.mjs` 已涵蓋），用來確認正向判定不是因為驗章根本沒生效。
+
+逐站判定：student 與 admin 各自獨立套用上述規則；任一站未達正向條件即該站「未能驗證」，不可用另一站的結果推論。
 
 限制：若無法在不寫 production 的前提下取得各次站的身分請求，改用 staging／合成環境以相同綁定驗證，並把「production 兩站各自有效」列為 Owner 決策點。
 
@@ -269,6 +285,13 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 | nonce 僅非 GET／HEAD 使用 | GET／HEAD 不寫表 | `site/lib/relay-verification.ts:124` |
 | 驗章失敗不回退 `oai-*` | `relayRejected` → 401 | `site/app/api/auth-helper.ts:94`；例 `site/app/api/student/me/route.ts:27-29` |
 | health 不走 401 | 一律 200，以 `relaySeen` 回報 | `site/app/api/health/route.ts:27,52-57` |
+| 代理成功回應標記 | `x-data-plane: primary`（含主站 401／403） | `site/app/api/backend-client.ts:286` |
+| 主站不可達 | `503 backend_unavailable`（無 `x-data-plane`） | `site/app/api/backend-client.ts:293-301` |
+| 次站未設 `PRIMARY_ORIGIN` | `503 backend_disabled` | `site/app/api/backend-client.ts:192-199` |
+| CORS 拒絕 | `403 {"error":"cors_forbidden"}` | `site/app/api/admin/auth/me/route.ts:16-18`、`site/app/api/student/me/route.ts:17-19` |
+| student guest 也是 200 | `authenticated:false, guest:true` | `site/app/api/student/me/route.ts:56-67` |
+| student 驗證身分 200 | `authenticated:true, user, role, isSynthetic` | `site/app/api/student/me/route.ts:38-53` |
+| admin 非管理員 403 | `authenticated:true, error:"admin permission required"` | `site/app/api/admin/auth/me/route.ts:44-49` |
 | 管理員只由 allowlist 決定 | `ADMIN_EMAILS` | `site/app/api/auth-helper.ts:45-50,248-251` |
 | health 欄位 | `relayMode`／`relayKeys`／`relaySeen` | `site/app/api/health/route.ts:52,55-56` |
 | 兩站金鑰不得相同 | 跨站共用任一即兩站皆空 | `site/lib/relay-verification.ts:39-44` |
