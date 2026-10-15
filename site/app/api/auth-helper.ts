@@ -1,5 +1,5 @@
 import { isProductionEnvironment } from "../../db";
-import { readRelayMode, verifyIncomingRelay } from "../../lib/relay-verification";
+import { readRelayMode, verifyIncomingRelay, type RelayVerification } from "../../lib/relay-verification";
 
 const ADMIN_EMAILS_ENV = "ADMIN_EMAILS";
 
@@ -79,6 +79,27 @@ const GUEST_AUTH: NormalizedAuthContext = {
 
 const normalizedAuthByRequest = new WeakMap<Request, Promise<NormalizedAuthContext>>();
 
+function logRelayVerification(request: Request, mode: "transitional" | "strict", result: RelayVerification["status"]): void {
+  try {
+    if (readRuntimeString("SITE_ROLE") !== "primary") return;
+    const path = new URL(request.url).pathname.replace(/\/{2,}/g, "/").toLowerCase();
+    const pathClass = path === "/api/health" ? "health"
+      : path === "/api/student" || path.startsWith("/api/student/") ? "student"
+      : path === "/api/admin" || path.startsWith("/api/admin/") ? "admin" : "other";
+    if (pathClass === "health") return;
+    const rawSite = request.headers.get("x-a01-relay-site");
+    const site = rawSite === "student" || rawSite === "admin" ? rawSite : "unknown";
+    const method = request.method === "GET" || request.method === "HEAD" ? request.method : "OTHER";
+    console.log(JSON.stringify({
+      evt: "relay.verify", result, site, mode,
+      identityPresent: request.headers.has("oai-authenticated-user-id") || request.headers.has("oai-authenticated-user-email"),
+      method, pathClass,
+    }));
+  } catch {
+    // Observability must not affect relay verification or authorization.
+  }
+}
+
 export function getNormalizedAuth(request: Request): Promise<NormalizedAuthContext> {
   const cached = normalizedAuthByRequest.get(request);
   if (cached) return cached;
@@ -91,6 +112,7 @@ async function normalizeRequestAuth(request: Request): Promise<NormalizedAuthCon
   const mode = readRelayMode();
   if (mode === "off") return normalizeLegacyAuth(request);
   const relay = await verifyIncomingRelay(request);
+  logRelayVerification(request, mode, relay.status);
   if (relay.status === "invalid") return { ...GUEST_AUTH, relayRejected: true };
   if (relay.status === "none") {
     return mode === "transitional" ? normalizeLegacyAuth(request) : { ...GUEST_AUTH };
