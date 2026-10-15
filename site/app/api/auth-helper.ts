@@ -1,4 +1,5 @@
 import { isProductionEnvironment } from "../../db";
+import { readRelayMode, verifyIncomingRelay } from "../../lib/relay-verification";
 
 const ADMIN_EMAILS_ENV = "ADMIN_EMAILS";
 
@@ -58,6 +59,7 @@ export type NormalizedUser = {
 
 export type NormalizedAuthContext = {
   isAuthenticated: boolean;
+  relayRejected?: boolean;
   isMalformed: boolean;
   malformedReason?: string;
   user: NormalizedUser | null;
@@ -70,8 +72,33 @@ export type NormalizedAuthContext = {
   displayName: string | null;
 };
 
-export function getNormalizedAuth(request: Request): NormalizedAuthContext {
-  const headers = request.headers;
+const GUEST_AUTH: NormalizedAuthContext = {
+  isAuthenticated: false, isMalformed: false, user: null, role: "guest",
+  isSynthetic: false, isDemo: false, userId: null, email: null, displayName: null,
+};
+
+export async function getNormalizedAuth(request: Request): Promise<NormalizedAuthContext> {
+  const mode = readRelayMode();
+  if (mode === "off") return normalizeLegacyAuth(request);
+  const relay = await verifyIncomingRelay(request);
+  if (relay.status === "invalid") return { ...GUEST_AUTH, relayRejected: true };
+  if (relay.status === "none") {
+    return mode === "transitional" ? normalizeLegacyAuth(request) : { ...GUEST_AUTH };
+  }
+  if (relay.userId === "-") return { ...GUEST_AUTH };
+  const headers = new Headers(request.headers);
+  for (const name of [...headers.keys()]) {
+    if (name.startsWith("oai-") || name.startsWith("x-a01-relay-")) headers.delete(name);
+  }
+  headers.delete("authorization");
+  headers.delete("x-admin-key");
+  headers.delete("x-validation-gate");
+  headers.set("oai-authenticated-user-id", relay.userId);
+  headers.set("oai-authenticated-user-email", relay.email);
+  return normalizeLegacyAuth(request, headers);
+}
+
+function normalizeLegacyAuth(request: Request, headers: Headers = request.headers): NormalizedAuthContext {
   const isProd = isProductionEnvironment();
   const demoHeader = headers.get("x-demo-mode") === "true";
 

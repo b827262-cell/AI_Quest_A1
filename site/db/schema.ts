@@ -108,3 +108,8 @@ export const syncNonces = sqliteTable("sync_nonces", {
   nonce: text("nonce").primaryKey(),
   expiresAt: integer("expires_at").notNull(),
 });
+
+export const relayNonces = sqliteTable("relay_nonces", {
+  nonce: text("nonce").primaryKey(),
+  expiresAt: integer("expires_at").notNull(),
+});

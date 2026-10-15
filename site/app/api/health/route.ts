@@ -1,6 +1,7 @@
 import { readSiteDeclaration, type SiteDeclaration } from "../backend-client";
 import { isAdminAllowlistConfigured } from "../auth-helper";
 import { isProductionEnvironment } from "../../../db";
+import { readRelayMode, relayKeyCount, verifyIncomingRelay } from "../../../lib/relay-verification";
 import { readInjectedIdentity, resolveBuildIdentity } from "../../runtime-diagnostics";
 
 type RuntimeEnv = Record<string, unknown> | undefined;
@@ -23,7 +24,7 @@ const BACKEND_TARGET: Record<SiteDeclaration["role"], string> = {
   misconfigured: "disabled",
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   const declared = readSiteDeclaration();
   const d1Bound = Boolean(runtimeBinding("DB"));
   const r2Bound = Boolean(runtimeBinding("BOOKS_BUCKET"));
@@ -48,8 +49,12 @@ export async function GET() {
       "[auth] ADMIN_EMAILS allowlist is not configured; no user can be an administrator",
     );
   }
+  const relaySeen = (await verifyIncomingRelay(request)).status;
   return Response.json({
     status: "ok",
+    relayMode: readRelayMode(),
+    relayKeys: relayKeyCount(),
+    relaySeen,
     role: declared.role,
     site: declared.site,
     primaryOrigin: declared.primaryOrigin,

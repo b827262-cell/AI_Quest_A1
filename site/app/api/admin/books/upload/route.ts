@@ -38,7 +38,10 @@ export async function POST(request: Request) {
   }
 
   // 2. Authenticate admin user
-  const auth = getNormalizedAuth(request);
+  const auth = await getNormalizedAuth(request);
+  if (auth.relayRejected) {
+    return Response.json({ error: "unauthorized" }, { status: 401, headers: cors.corsHeaders });
+  }
   if (auth.isMalformed) {
     return Response.json(
       { error: "malformed_auth", message: auth.malformedReason },
