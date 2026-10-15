@@ -4,9 +4,11 @@ import { delegateToBackend } from "../app/api/backend-client.ts";
 import { checkTimestamp, parseRelayHeaders, verifyRelay } from "../lib/relay-signature.ts";
 
 const KEY = "local-test-relay-key-at-least-32-characters";
+const EDGE = "local-test-edge-secret-at-least-32-characters";
 const ORIGIN = "https://primary.example.test";
 const IDENTITY = { "oai-authenticated-user-id": "test-user", "oai-authenticated-user-email": "Alice@Example.COM" };
-const BINDINGS = ["SITE_ROLE", "SITE_NAME", "PRIMARY_ORIGIN", "A01_RELAY_SIGNING_KEY", "A01_RELAY_SITE", "__env__"];
+const BINDINGS = ["SITE_ROLE", "SITE_NAME", "PRIMARY_ORIGIN", "A01_RELAY_SIGNING_KEY", "A01_RELAY_SITE",
+  "A01_RELAY_EDGE_SECRET_STUDENT", "A01_RELAY_EDGE_SECRET_ADMIN", "__env__"];
 
 async function withRelay(bindings, run) {
   const saved = BINDINGS.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
@@ -43,7 +45,8 @@ async function validSignature(sent, key = KEY) {
     body: sent.init.body, site: parsed.site, userId: parsed.userId, email: parsed.email,
     role: parsed.role, ts: parsed.ts, nonce: parsed.nonce };
   assert.equal(await verifyRelay(signed, parsed.signature, [key]), true);
-  assert.equal([...sent.headers.keys()].filter((name) => name.startsWith("x-a01-relay-")).length, 7);
+  const relayHeaders = [...sent.headers.keys()].filter((name) => name.startsWith("x-a01-relay-"));
+  assert.equal(relayHeaders.filter((name) => name !== "x-a01-relay-edge-secret").length, 7);
   return { parsed, signed };
 }
 
@@ -195,11 +198,128 @@ test("built Worker injects signing bindings per request and clears a missing key
       assert.equal(response.status, 201);
       assert.equal(arrived.length, 1);
       await validSignature(arrived[0]);
-      const { A01_RELAY_SIGNING_KEY: omitted, ...missingKey } = env;
+      const missingKey = { ...env };
+      delete missingKey.A01_RELAY_SIGNING_KEY;
       const unavailable = await worker.fetch(request({ path: "/api/student/me" }), missingKey, ctx);
       assert.equal(unavailable.status, 503);
       assert.deepEqual(await unavailable.json(), { error: "relay_signing_unavailable" });
       assert.equal(arrived.length, 1, "no stale key from the previous request");
+    });
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+});
+
+test("signed request carries the current per-site edge secret and still signs seven headers", async () => {
+  await withRelay({ A01_RELAY_EDGE_SECRET_STUDENT: EDGE }, async (arrived) => {
+    await delegateToBackend(request(), "/api/student/me");
+    const sent = arrived[0];
+    assert.equal(sent.headers.get("x-a01-relay-edge-secret"), EDGE);
+    await validSignature(sent);
+  });
+});
+
+test("admin site reads only the admin edge secret", async () => {
+  await withRelay({ SITE_NAME: "admin", A01_RELAY_SITE: "admin", A01_RELAY_EDGE_SECRET_ADMIN: EDGE }, async (arrived) => {
+    await delegateToBackend(request({ path: "/api/admin/auth/me" }), "/api/admin/auth/me");
+    assert.equal(arrived[0].headers.get("x-a01-relay-edge-secret"), EDGE);
+  });
+});
+
+test("a secret bound to the other site is never sent", async () => {
+  await withRelay({ A01_RELAY_EDGE_SECRET_ADMIN: EDGE }, async (arrived) => {
+    await delegateToBackend(request(), "/api/student/me");
+    assert.equal(arrived[0].headers.has("x-a01-relay-edge-secret"), false);
+  });
+});
+
+test("anonymous request without signing capability forwards no edge secret", async () => {
+  await withRelay({ A01_RELAY_SIGNING_KEY: undefined, A01_RELAY_EDGE_SECRET_STUDENT: EDGE }, async (arrived) => {
+    const response = await delegateToBackend(request({ headers: {} }), "/api/student/me");
+    assert.equal(response.status, 201);
+    assert.equal(arrived.length, 1);
+    assert.equal(arrived[0].headers.has("x-a01-relay-edge-secret"), false);
+    for (const name of arrived[0].headers.keys()) assert.equal(name.startsWith("x-a01-relay-"), false);
+  });
+});
+
+test("forged inbound edge secret is stripped and replaced by the real per-site value", async () => {
+  await withRelay({ A01_RELAY_EDGE_SECRET_STUDENT: EDGE }, async (arrived) => {
+    await delegateToBackend(request({ headers: { ...IDENTITY, "x-a01-relay-edge-secret": "forged",
+      "X-A01-Relay-Edge-Secret": "forged-too" } }), "/api/student/me");
+    assert.equal(arrived[0].headers.get("x-a01-relay-edge-secret"), EDGE);
+  });
+});
+
+test("forged inbound edge secret is dropped when no local secret is configured", async () => {
+  await withRelay({}, async (arrived) => {
+    await delegateToBackend(request({ headers: { ...IDENTITY, "x-a01-relay-edge-secret": "forged" } }), "/api/student/me");
+    assert.equal(arrived[0].headers.has("x-a01-relay-edge-secret"), false);
+    await validSignature(arrived[0]);
+  });
+});
+
+for (const [label, value] of [
+  ["missing", undefined],
+  ["31-character", "s".repeat(31)],
+  ["513-character", "s".repeat(513)],
+  ["non-string", 123],
+]) {
+  test(`${label} edge secret is omitted without failing the request`, async () => {
+    await withRelay({ A01_RELAY_EDGE_SECRET_STUDENT: value }, async (arrived) => {
+      const response = await delegateToBackend(request(), "/api/student/me");
+      assert.equal(response.status, 201);
+      assert.equal(arrived[0].headers.has("x-a01-relay-edge-secret"), false);
+      await validSignature(arrived[0]);
+    });
+  });
+}
+
+test("edge secret falls back to the runtime __env__ binding", async () => {
+  await withRelay({ A01_RELAY_EDGE_SECRET_STUDENT: undefined,
+    __env__: { A01_RELAY_EDGE_SECRET_STUDENT: EDGE } }, async (arrived) => {
+    await delegateToBackend(request(), "/api/student/me");
+    assert.equal(arrived[0].headers.get("x-a01-relay-edge-secret"), EDGE);
+  });
+});
+
+test("edge secret never appears in a failure response or console output", async () => {
+  const original = { log: console.log, error: console.error, warn: console.warn };
+  const lines = [];
+  console.log = console.error = console.warn = (...args) => lines.push(args.map(String).join(" "));
+  try {
+    await withRelay({ A01_RELAY_EDGE_SECRET_STUDENT: EDGE }, async (arrived) => {
+      const response = await delegateToBackend(request({ headers: { "oai-authenticated-user-id": "invalid\u0085id" } }), "/api/student/me");
+      assert.equal(response.status, 503);
+      assert.equal((await response.text()).includes(EDGE), false);
+      assert.equal(arrived.length, 0);
+    });
+  } finally {
+    console.log = original.log; console.error = original.error; console.warn = original.warn;
+  }
+  assert.equal(lines.join("\n").includes(EDGE), false);
+});
+
+test("built Worker injects the secondary edge secret binding and clears a missing one", async () => {
+  const { default: worker } = await import(new URL("../dist/server/index.js?relay-secondary-edge=1", import.meta.url).href);
+  const ctx = { waitUntil() {}, passThroughOnException() {} };
+  const assets = { fetch: async () => new Response("not found", { status: 404 }) };
+  await worker.fetch(new Request("https://primary.example.test/api/health"),
+    { ASSETS: assets, SITE_ROLE: "primary", SITE_NAME: "backend" }, ctx);
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  try {
+    await withRelay({}, async (arrived) => {
+      const env = { ASSETS: assets, SITE_ROLE: "secondary", SITE_NAME: "student", PRIMARY_ORIGIN: ORIGIN,
+        A01_RELAY_SIGNING_KEY: KEY, A01_RELAY_SITE: "student", A01_RELAY_EDGE_SECRET_STUDENT: EDGE };
+      const response = await worker.fetch(request({ path: "/api/student/me" }), env, ctx);
+      assert.equal(response.status, 201);
+      assert.equal(arrived[0].headers.get("x-a01-relay-edge-secret"), EDGE);
+      const withoutEdge = { ...env };
+      delete withoutEdge.A01_RELAY_EDGE_SECRET_STUDENT;
+      await worker.fetch(request({ path: "/api/student/me" }), withoutEdge, ctx);
+      assert.equal(arrived[1].headers.has("x-a01-relay-edge-secret"), false, "no stale edge secret from the previous request");
     });
   } finally {
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
