@@ -23,9 +23,11 @@ function binding(name: string): unknown {
 /** An unset mode preserves existing deployments; a typo fails closed. */
 export function readRelayMode(): RelayMode {
   const value = binding("A01_RELAY_MODE");
-  return value === undefined || value === null || value === "" || value === "off"
-    ? "off"
-    : value === "transitional" ? "transitional" : "strict";
+  if (value === undefined || value === null) return "off";
+  if (typeof value !== "string") return "strict";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "" || normalized === "off") return "off";
+  return normalized === "transitional" ? "transitional" : "strict";
 }
 
 function configuredKeys(site: "student" | "admin"): string[] {
