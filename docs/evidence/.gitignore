@@ -1,0 +1,4 @@
+# Ignore generated evidence artifacts; only this directory's contract is tracked.
+*
+!.gitignore
+!README.md
