@@ -21,7 +21,8 @@
  *      the allowlist after the window).
  *   5. Emits only a redacted summary + manifest (masked IPs, hashed ids, no raw
  *      request content) under `docs/evidence/`.
- *   6. Supports `--dry-run` (no network).
+ *   6. Dry-run by default (no network); requires explicit --execute and
+ *      necessary environment variables to inject live traffic.
  *
  * This tool never deploys, never targets production, never reads real secrets
  * at authoring time, never touches migration 0003, and never force-pushes.
@@ -54,7 +55,8 @@ const HELP = `A-01 synthetic traffic driver (staging only)
 Usage: node scripts/a01-synthetic/index.mjs [options]
 
 Options:
-  --dry-run            Validate config and print the plan; make no requests.
+  --execute            Actually inject traffic (must be explicitly provided; default is dry-run).
+  --dry-run            Dry-run mode (default); validate config and print the plan.
   --per-target <n>     Requests per target (default ${DEFAULT_PER_TARGET}).
   --rate <n>           Max requests per second (default 5).
   --out <dir>          Evidence output directory (default docs/evidence).
@@ -79,11 +81,16 @@ Optional environment (values are never printed):
 `;
 
 function parseArgs(argv) {
-  const options = { dryRun: false, perTarget: DEFAULT_PER_TARGET, rate: 5, out: "docs/evidence", stopFile: null, cleanup: false };
+  const options = { dryRun: true, execute: false, perTarget: DEFAULT_PER_TARGET, rate: 5, out: "docs/evidence", stopFile: null, cleanup: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--dry-run") options.dryRun = true;
-    else if (arg === "--cleanup") options.cleanup = true;
+    if (arg === "--execute") {
+      options.execute = true;
+      options.dryRun = false;
+    } else if (arg === "--dry-run") {
+      options.dryRun = true;
+      options.execute = false;
+    } else if (arg === "--cleanup") options.cleanup = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--per-target") options.perTarget = Number(argv[++index]);
     else if (arg === "--rate") options.rate = Number(argv[++index]);
@@ -265,7 +272,7 @@ async function main() {
 
   const missingIds = templatesRequiringId().length > 0 && !env.A01_SYNTHETIC_BOOK_ID;
   if (!options.dryRun && missingIds) {
-    console.error("[refused] A01_SYNTHETIC_BOOK_ID is required for [id] routes; use --dry-run to preview");
+    console.error("[refused] A01_SYNTHETIC_BOOK_ID is required for [id] routes; run without --execute to preview in dry-run mode");
     process.exitCode = 2;
     return;
   }

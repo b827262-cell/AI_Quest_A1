@@ -5,6 +5,10 @@
  * No network, no filesystem, no real credentials.
  */
 
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -27,6 +31,7 @@ import {
   redactText,
   resolveTargetConfig,
 } from "./core.mjs";
+import { parseArgs } from "./index.mjs";
 import { SYNTHETIC_TARGETS, nonGetTargets, resolvePath, templatesRequiringId } from "./targets.mjs";
 
 const STAGING_ENV = {
@@ -164,3 +169,71 @@ test("resolvePath substitutes the [id] template with the test id", () => {
   assert.throws(() => resolvePath(target, {}));
   assert.deepEqual(templatesRequiringId(), ["/api/admin/books/[id]", "/api/admin/books/[id]"]);
 });
+
+test("parseArgs defaults to dryRun=true and execute=false", () => {
+  const options = parseArgs([]);
+  assert.equal(options.dryRun, true);
+  assert.equal(options.execute, false);
+});
+
+test("parseArgs enables execute and disables dryRun only when --execute is passed", () => {
+  const options = parseArgs(["--execute"]);
+  assert.equal(options.execute, true);
+  assert.equal(options.dryRun, false);
+});
+
+test("parseArgs keeps dryRun=true when --dry-run is explicitly passed", () => {
+  const options = parseArgs(["--dry-run"]);
+  assert.equal(options.dryRun, true);
+  assert.equal(options.execute, false);
+});
+
+test("parseArgs respects precedence between --execute and --dry-run", () => {
+  assert.equal(parseArgs(["--execute", "--dry-run"]).dryRun, true);
+  assert.equal(parseArgs(["--execute", "--dry-run"]).execute, false);
+  assert.equal(parseArgs(["--dry-run", "--execute"]).dryRun, false);
+  assert.equal(parseArgs(["--dry-run", "--execute"]).execute, true);
+});
+
+test("parseArgs preserves configuration options alongside --execute", () => {
+  const options = parseArgs(["--execute", "--per-target", "50", "--rate", "10", "--stop-file", "/tmp/stop"]);
+  assert.equal(options.execute, true);
+  assert.equal(options.dryRun, false);
+  assert.equal(options.perTarget, 50);
+  assert.equal(options.rate, 10);
+  assert.equal(options.stopFile, "/tmp/stop");
+});
+
+test("parseArgs throws ConfigError on unknown options", () => {
+  assert.throws(() => parseArgs(["--unknown-flag"]), ConfigError);
+});
+
+test("CLI execution defaults to dry-run (no live requests) without --execute", () => {
+  const tmpOut = mkdtempSync(join(tmpdir(), "a01-dry-"));
+  try {
+    const res = spawnSync(process.execPath, [resolve(import.meta.dirname, "index.mjs"), "--out", tmpOut], {
+      env: { ...process.env, ...STAGING_ENV },
+      encoding: "utf8",
+    });
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /\[dry-run\]/);
+    assert.match(res.stdout, /attempted=0 failures=0/);
+  } finally {
+    rmSync(tmpOut, { recursive: true, force: true });
+  }
+});
+
+test("CLI execution with --execute requires necessary env (refuses when book ID missing)", () => {
+  const tmpOut = mkdtempSync(join(tmpdir(), "a01-exec-"));
+  try {
+    const res = spawnSync(process.execPath, [resolve(import.meta.dirname, "index.mjs"), "--execute", "--out", tmpOut], {
+      env: { ...process.env, ...STAGING_ENV },
+      encoding: "utf8",
+    });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /\[refused\] A01_SYNTHETIC_BOOK_ID is required/);
+  } finally {
+    rmSync(tmpOut, { recursive: true, force: true });
+  }
+});
+

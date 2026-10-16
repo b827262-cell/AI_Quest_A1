@@ -21,23 +21,26 @@
 3. **覆蓋矩陣。** 每個適用的非 GET 路徑／動詞與 GET（Owner 18:00 決議含 GET）皆納入；每路徑目標筆數預設 30，速率上限可設定。
 4. **停止條件。** 錯誤率／5xx 比例超閾值，或存在手動 stop 檔即停止；並記錄清理步驟。
 5. **輸出脫敏。** 僅寫出彙總與 manifest（IP 遮罩、ID 雜湊、無原始請求內容）至 `docs/evidence/`。
-6. **dry-run。** `--dry-run` 只驗證設定並列印計畫，不發任何請求。
+6. **預設 dry-run。** 預設為 dry-run 模式（亦可明確帶 `--dry-run`），只驗證設定並列印計畫，不發任何網路請求。必須明確指定 `--execute` 且同時具備必要環境變數（如 `A01_SYNTHETIC_BOOK_ID` 等）才會發出實際網路請求。
 
 ## 使用
 
 ```bash
-# 僅預覽（不發請求）
+# 預設預覽（預設 dry-run，不發請求）
 A01_SYNTHETIC_BASE_URL=https://<staging-host> \
 A01_SYNTHETIC_ALLOWED_HOSTS=<staging-host> \
-node scripts/a01-synthetic/index.mjs --dry-run --per-target 30 --rate 5
+node scripts/a01-synthetic/index.mjs --per-target 30 --rate 5
 
-# 實際注入
+# 或明確帶 --dry-run
+node scripts/a01-synthetic/index.mjs --dry-run
+
+# 實際注入（必須明確帶 --execute 並具備必要環境變數）
 A01_SYNTHETIC_BASE_URL=https://<staging-host> \
 A01_SYNTHETIC_ALLOWED_HOSTS=<staging-host> \
 A01_SYNTHETIC_STUDENT_RELAY_KEY=*** A01_SYNTHETIC_ADMIN_RELAY_KEY=*** \
 A01_SYNTHETIC_BOOK_ID=<test-book-id> \
 A01_SYNTHETIC_ERROR_RATE_LIMIT=0.05 A01_SYNTHETIC_5XX_RATE_LIMIT=0.02 \
-node scripts/a01-synthetic/index.mjs --per-target 30 --rate 5 --stop-file /tmp/a01-synthetic.stop
+node scripts/a01-synthetic/index.mjs --execute --per-target 30 --rate 5 --stop-file /tmp/a01-synthetic.stop
 
 # 清理（視窗結束後）
 node scripts/a01-synthetic/index.mjs --cleanup
@@ -51,7 +54,7 @@ node scripts/a01-synthetic/index.mjs --cleanup
 | `A01_SYNTHETIC_ALLOWED_HOSTS` | 是 | 逗號分隔的 staging 主機白名單（拒絕預設）。 |
 | `A01_SYNTHETIC_PRODUCTION_SUFFIXES` | 否 | 覆寫 production 後綴，預設 `.chatgpt.site`。 |
 | `A01_SYNTHETIC_STUDENT_*` / `A01_SYNTHETIC_ADMIN_*` | 否 | `_USER_ID` / `_EMAIL` / `_RELAY_KEY` 身分與簽章金鑰。 |
-| `A01_SYNTHETIC_BOOK_ID` | 是（live） | `[id]` 路由的測試資料 id。 |
+| `A01_SYNTHETIC_BOOK_ID` | 是（--execute 時） | `[id]` 路由的測試資料 id。 |
 | `A01_SYNTHETIC_ERROR_RATE_LIMIT` / `A01_SYNTHETIC_5XX_RATE_LIMIT` | 否 | 0..1 比例，`0` 停用該檢查。 |
 | `A01_SYNTHETIC_CLEANUP_ACCOUNT_PATH` | 否 | 停用測試帳號的 POST 路徑。 |
 | `A01_SYNTHETIC_RUN_ID` | 否 | 覆寫 run id。 |
