@@ -13,7 +13,7 @@ import {
   resolveStudentAuthConfig,
   type StudentAuthRuntime
 } from "@ai-smartbook/auth/server";
-import { createStudentAuthRouter, createStudentSessionMiddleware } from "@ai-smartbook/auth/express";
+import { createStudentAuthRouter, createStudentSessionMiddleware, createStudentLearningHistoryRouter } from "@ai-smartbook/auth/express";
 import type { StudentDataSource } from "@ai-smartbook/student-runtime";
 import type { Book, BookContent } from "@ai-smartbook/schema";
 import { createStudentRagRouter } from "./student-rag";
@@ -174,6 +174,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   }
   app.use("/api/student/auth", createStudentAuthRouter(runtime.auth, config));
   app.use("/api/student", createStudentSessionMiddleware(runtime.auth, config));
+  app.use("/api/student", createStudentLearningHistoryRouter(runtime.learningHistory, config));
   app.use("/api/student", createStudentRagRouter({
     getDataSource: () => dataSource,
     env: { provider: "fake" }

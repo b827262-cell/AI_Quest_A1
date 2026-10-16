@@ -1,0 +1,105 @@
+import express, { type RequestHandler } from "express";
+import type { LearningHistoryRecord, StudentLearningHistoryRepo } from "@ai-smartbook/db";
+import { studentOriginAllowed, type StudentAuthConfig } from "./server";
+
+const CATEGORIES = new Set(["auto", "programming", "math", "humanities", "cybersecurity", "教材問答"]);
+const SOURCES = new Set(["manual", "image", "file"]);
+const MAX_BATCH = 25;
+const MAX_BODY = 256 * 1024;
+
+function validTime(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value));
+}
+
+function optionalText(value: unknown, max: number): value is string | undefined {
+  return value === undefined || (typeof value === "string" && value.length <= max);
+}
+
+/** Match the front-end allowlist without ever fetching a supplied URL. */
+export function safeLearningSourceUrl(sourceUrl: string, question: string): boolean {
+  try {
+    const url = new URL(sourceUrl);
+    const normalize = (text: string) => text.normalize("NFKC").toLocaleLowerCase("zh-TW").replace(/[\s\p{P}\p{S}_]+/gu, "");
+    return url.protocol === "https:" && url.hostname === "www.google.com" && !url.username && !url.password
+      && !url.port && url.pathname === "/search" && url.searchParams.get("udm") === "50"
+      && normalize(url.searchParams.get("q") || "") === normalize(question);
+  } catch {
+    return false;
+  }
+}
+
+function validRecord(value: unknown): value is LearningHistoryRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  const text = (name: string, max: number) => typeof item[name] === "string" && (item[name] as string).length > 0 && (item[name] as string).length <= max;
+  if ("studentId" in item || "deletedAt" in item) return false;
+  if (!text("id", 128) || !/^[a-zA-Z0-9_-]+$/.test(item.id as string)) return false;
+  if (!validTime(item.askedAt) || !text("question", 2000)) return false;
+  if (!CATEGORIES.has(item.category as string) || !SOURCES.has(item.sourceType as string)) return false;
+  if (item.strategy !== "api" && item.strategy !== "google-ai") return false;
+  if (!Number.isSafeInteger(item.syncVersion) || (item.syncVersion as number) < 1 || (item.syncVersion as number) > 1_000_000_000) return false;
+  if (!optionalText(item.answer, 20_000) || !optionalText(item.rawAnswer, 20_000) || !optionalText(item.organizedAnswer, 20_000)) return false;
+  if (!optionalText(item.sourceUrl, 2048) || !optionalText(item.answerUpdatedAt, 40) || !optionalText(item.rawAnswerCapturedAt, 40)) return false;
+  if (item.answerUpdatedAt !== undefined && !validTime(item.answerUpdatedAt)) return false;
+  if (item.rawAnswerCapturedAt !== undefined && !validTime(item.rawAnswerCapturedAt)) return false;
+  if (item.sourceUrl && (item.strategy !== "google-ai" || !safeLearningSourceUrl(item.sourceUrl as string, item.question as string))) return false;
+  return true;
+}
+
+function originGuard(config: StudentAuthConfig): RequestHandler {
+  return (req, res, next) => {
+    if (req.method === "GET" || req.method === "HEAD") return next();
+    const origin = req.header("origin");
+    const host = req.header("host");
+    let sameOrigin = false;
+    try { sameOrigin = Boolean(origin && host && new URL(origin).host === host); } catch { /* reject */ }
+    const explicitlyAllowed = Boolean(origin && config.allowedOrigins.has(origin));
+    if (!origin || (!sameOrigin && !explicitlyAllowed) || !studentOriginAllowed(config, origin)
+      || (req.header("sec-fetch-site") === "cross-site" && !explicitlyAllowed)) {
+      res.status(403).json({ error: "STUDENT_ORIGIN_NOT_ALLOWED" });
+      return;
+    }
+    next();
+  };
+}
+
+export function createStudentLearningHistoryRouter(repo: StudentLearningHistoryRepo, config: StudentAuthConfig) {
+  const router = express.Router();
+  router.use("/learning-history", originGuard(config));
+  router.use("/learning-history", (_req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); });
+  router.get("/learning-history", (req, res) => {
+    const studentId = req.studentAuth?.user.id;
+    if (!studentId) return res.status(401).json({ error: "AUTH_REQUIRED" });
+    const offset = Number(req.query.offset ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 100_000) return res.status(400).json({ error: "INVALID_OFFSET" });
+    const entries = repo.listStudent(studentId, offset, 101);
+    return res.json({ entries: entries.slice(0, 100), nextOffset: entries.length > 100 ? offset + 100 : null });
+  });
+  const upsert: RequestHandler = (req, res) => {
+    const studentId = req.studentAuth?.user.id;
+    if (!studentId) return res.status(401).json({ error: "AUTH_REQUIRED" });
+    const body = req.body as { entries?: unknown } | undefined;
+    const entries = body?.entries;
+    if (!Array.isArray(entries) || entries.length < 1 || entries.length > MAX_BATCH) return res.status(400).json({ error: "INVALID_BATCH" });
+    if (JSON.stringify(req.body).length > MAX_BODY) return res.status(413).json({ error: "BATCH_TOO_LARGE" });
+    if (!entries.every(validRecord) || new Set(entries.map((entry: LearningHistoryRecord) => entry.id)).size !== entries.length) {
+      return res.status(400).json({ error: "INVALID_ENTRY" });
+    }
+    return res.json({ entries: repo.upsertBatch(studentId, entries) });
+  };
+  router.post("/learning-history", upsert);
+  router.put("/learning-history", upsert);
+  router.delete("/learning-history/:id", (req, res) => {
+    const studentId = req.studentAuth?.user.id;
+    if (!studentId) return res.status(401).json({ error: "AUTH_REQUIRED" });
+    const id = String(req.params.id);
+    const version = (req.body as { syncVersion?: unknown } | undefined)?.syncVersion;
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id) || !Number.isSafeInteger(version) || (version as number) < 1 || (version as number) > 1_000_000_000) {
+      return res.status(400).json({ error: "INVALID_DELETE" });
+    }
+    const entry = repo.tombstone(studentId, id, version as number);
+    if (!entry) return res.status(404).json({ error: "ENTRY_NOT_FOUND" });
+    return res.json({ entry });
+  });
+  return router;
+}

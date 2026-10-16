@@ -14,6 +14,7 @@ import type {
   StudentAuthMeResponse,
   StudentProfile
 } from "@ai-smartbook/auth/browser";
+import type { LearningHistoryEntry } from "./learningHistory";
 
 export { type StudentAuthMeResponse, type StudentProfile } from "@ai-smartbook/auth/browser";
 
@@ -240,6 +241,13 @@ async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
  * an API key and never calls an AI SDK directly.
  */
 export const studentClient = {
+  listLearningHistory: (offset = 0) => http<{ entries: Array<LearningHistoryEntry & { updatedAt: string; deletedAt: string | null }>; nextOffset: number | null }>(`/api/student/learning-history?offset=${offset}`),
+  upsertLearningHistory: (entries: LearningHistoryEntry[]) => http<{ entries: Array<LearningHistoryEntry & { deletedAt: string | null }> }>("/api/student/learning-history", {
+    method: "POST", body: JSON.stringify({ entries }), headers: { "Content-Type": "application/json" }
+  }),
+  deleteLearningHistory: (id: string, syncVersion: number) => http<{ entry: { id: string; syncVersion: number; deletedAt: string | null } }>(`/api/student/learning-history/${encodeURIComponent(id)}`, {
+    method: "DELETE", body: JSON.stringify({ syncVersion }), headers: { "Content-Type": "application/json" }
+  }),
   getStudentMe: () => http<StudentAuthMeResponse>("/api/student/auth/me"),
 
   logoutStudent: () => http<void>("/api/student/auth/logout", { method: "POST" }),

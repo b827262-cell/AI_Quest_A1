@@ -16,6 +16,12 @@ import {
   hasPlausibleAnswerRelation,
   isHistoryEntry,
   readLearningHistory,
+  readGuestLearningHistory,
+  readLearningTombstones,
+  setLearningHistoryScope,
+  importGuestLearningHistory,
+  mergeLearningHistory,
+  removeLearningHistoryEntry,
   readPendingRawAnswer,
   savePendingRawAnswerOnce,
   saveGoogleAiSourceUrl,
@@ -36,7 +42,45 @@ function makeStorage(): Storage {
   } as Storage;
 }
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); setLearningHistoryScope(null); });
+
+describe("account learning history sync state", () => {
+  it("keeps guest entries separate until explicit import, increments revisions and retains a retry tombstone", () => {
+    const storage = makeStorage();
+    const guest = addLearningHistoryEntry({ question: "AI agents", category: "auto", sourceType: "manual", strategy: "google-ai" }, storage).entry;
+    setLearningHistoryScope("student-a");
+    expect(readLearningHistory(storage)).toEqual([]);
+    expect(readGuestLearningHistory(storage)).toHaveLength(1);
+    expect(importGuestLearningHistory(storage)).toMatchObject([{ id: guest.id, syncVersion: 1 }]);
+    expect(importGuestLearningHistory(storage)).toHaveLength(1);
+    updateLearningHistoryAnswer(guest.id, "fixture answer", storage);
+    expect(readLearningHistory(storage)[0].syncVersion).toBe(2);
+    const removed = removeLearningHistoryEntry(guest.id, storage);
+    expect(removed).toEqual([]);
+    expect(readLearningTombstones(storage)).toEqual([{ id: guest.id, syncVersion: 3 }]);
+    mergeLearningHistory([{ ...guest, syncVersion: 2, deletedAt: null }], storage);
+    expect(readLearningHistory(storage)).toEqual([]);
+    mergeLearningHistory([{ ...guest, syncVersion: 2, deletedAt: "2026-10-16T10:00:00.000Z" }], storage);
+    expect(readLearningHistory(storage)).toEqual([]);
+    setLearningHistoryScope("student-b");
+    expect(readLearningHistory(storage)).toEqual([]);
+    expect(readGuestLearningHistory(storage)).toHaveLength(1);
+  });
+
+  it("does not lose an account entry when the device cannot save a deletion marker", () => {
+    const storage = makeStorage();
+    setLearningHistoryScope("student-a");
+    const item = addLearningHistoryEntry({ question: "保留這題", category: "auto", sourceType: "manual", strategy: "api" }, storage).entry;
+    const originalSet = storage.setItem.bind(storage);
+    storage.setItem = (key: string, value: string) => {
+      if (key.includes("tombstones")) throw new Error("storage full");
+      originalSet(key, value);
+    };
+    expect(removeLearningHistoryEntry(item.id, storage)).toHaveLength(1);
+    expect(clearLearningHistory(storage)).toHaveLength(1);
+    expect(readLearningHistory(storage)).toHaveLength(1);
+  });
+});
 
 describe("Google AI URL", () => {
   it("uses the zh-TW Google AI Mode URL and encodes the question", () => {

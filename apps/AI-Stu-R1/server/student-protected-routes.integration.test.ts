@@ -40,6 +40,20 @@ async function startAndLogin(options: { sessionTtlMs: number; completeProfile?: 
 }
 
 describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () => {
+  it("exposes learning-history through the standalone student server with the same session gate", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    const path = `${baseUrl}/api/student/learning-history`;
+    const anonymous = await originalFetch(path);
+    expect(anonymous.status).toBe(401);
+    const record = { id: "standalone-fixture", askedAt: "2026-10-16T10:24:00.000Z", question: "AI agents", category: "auto", sourceType: "manual", strategy: "google-ai", syncVersion: 1 };
+    const rejected = await browser.fetch(path, { method: "POST", headers: { "content-type": "application/json", origin: "https://untrusted.example.test" }, body: JSON.stringify({ entries: [record] }) });
+    expect(rejected.status).toBe(403);
+    const saved = await browser.fetch(path, { method: "POST", headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN }, body: JSON.stringify({ entries: [record] }) });
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).entries).toMatchObject([{ id: "standalone-fixture", syncVersion: 1 }]);
+    const listed = await browser.fetch(path);
+    expect((await listed.json()).entries).toMatchObject([{ id: "standalone-fixture" }]);
+  });
   it("rejects unauthenticated and forged-cookie access to every private student route", async () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
     const protectedPaths: Array<[string, RequestInit | undefined]> = [

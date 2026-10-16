@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, primaryKey } from "drizzle-orm/sqlite-core";
 
 export const books = sqliteTable("books", {
   id: text("id").primaryKey(),
@@ -407,6 +407,27 @@ export const studentSessions = sqliteTable("student_sessions", {
   ipAddress: text("ip_address"),
   userAgent: text("user_agent")
 });
+
+/** Owned learning records. A tombstone preserves deletion across offline retries. */
+export const studentLearningHistory = sqliteTable("student_learning_history", {
+  studentId: text("student_id").notNull(),
+  entryId: text("entry_id").notNull(),
+  askedAt: text("asked_at").notNull(),
+  question: text("question").notNull(),
+  category: text("category").notNull(),
+  sourceType: text("source_type").notNull(),
+  strategy: text("strategy").notNull(),
+  answer: text("answer"),
+  answerUpdatedAt: text("answer_updated_at"),
+  rawAnswer: text("raw_answer"),
+  rawAnswerCapturedAt: text("raw_answer_captured_at"),
+  sourceUrl: text("source_url"),
+  organizedAnswer: text("organized_answer"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  deletedAt: text("deleted_at"),
+  syncVersion: integer("sync_version").notNull()
+}, (table) => ({ pk: primaryKey({ columns: [table.studentId, table.entryId] }) }));
 
 /** One-time OAuth state and encrypted PKCE verifier; expires quickly. */
 export const studentOAuthStates = sqliteTable("student_oauth_states", {
@@ -1001,6 +1022,7 @@ export type DbSchema = {
   aiCredentialDailyReservations: typeof aiCredentialDailyReservations;
   studentUsers: typeof studentUsers;
   studentSessions: typeof studentSessions;
+  studentLearningHistory: typeof studentLearningHistory;
   studentOAuthStates: typeof studentOAuthStates;
 };
 
@@ -1051,5 +1073,6 @@ export const schema = {
   aiCredentialDailyReservations,
   studentUsers,
   studentSessions,
+  studentLearningHistory,
   studentOAuthStates
 };

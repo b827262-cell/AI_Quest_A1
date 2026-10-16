@@ -4,6 +4,7 @@ import { AdminAuthProvider, RequireAdmin } from "./admin-auth";
 import { AdminShell } from "./components/admin/AdminShell";
 import { AdminDashboardPage } from "./pages/AdminDashboardPage";
 import { AdminAccountsPage } from "./pages/AdminAccountsPage";
+import { AdminLearningHistoryPage } from "./pages/AdminLearningHistoryPage";
 import { AppearanceSettingsPage } from "./pages/AppearanceSettingsPage";
 import { SiteConfigPage } from "./pages/SiteConfigPage";
 import { AiAnalyticsPage } from "./pages/AiAnalyticsPage";
@@ -40,6 +41,7 @@ function ProtectedAdminRoutes() {
             <Route path="/" element={<Navigate to="/admin" replace />} />
             <Route path="/admin" element={<AdminDashboardPage />} />
             <Route path="/admin/accounts" element={<AdminAccountsPage />} />
+            <Route path="/admin/learning-history" element={<AdminLearningHistoryPage />} />
             <Route path="/admin/appearance" element={<AppearanceSettingsPage />} />
             <Route path="/admin/site-config" element={<SiteConfigPage />} />
             <Route path="/admin/exam-snapshots" element={<ExamSnapshotsPage />} />

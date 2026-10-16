@@ -358,7 +358,26 @@ const examSnapshotRequest: ExamSnapshotRequest = <T>(path: string, init?: { meth
 
 export const examSnapshotApi: ExamSnapshotClient = createExamSnapshotHttpClient(examSnapshotRequest);
 
+export interface AdminLearningHistorySummary {
+  id: string; studentId: string; student: string; askedAt: string;
+  questionSummary: string; strategy: "api" | "google-ai"; sourceType: "manual" | "image" | "file";
+  hasRawAnswer: boolean; answerSummary: string; updatedAt: string; deletedAt: string | null; syncVersion: number;
+}
+
+export interface AdminLearningHistoryDetail {
+  id: string; studentId: string; student: string; askedAt: string; question: string;
+  category: string; sourceType: string; strategy: string; answer?: string;
+  answerUpdatedAt?: string; rawAnswer?: string; rawAnswerCapturedAt?: string;
+  sourceUrl?: string; organizedAnswer?: string; updatedAt: string; deletedAt: string | null; syncVersion: number;
+}
+
 export const adminApi = {
+  listLearningHistory: (input: { q?: string; strategy?: string; sourceType?: string; status?: string; from?: string; to?: string; offset: number; limit: number }) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(input)) if (value !== undefined && value !== "") params.set(key, String(value));
+    return http<{ total: number; entries: AdminLearningHistorySummary[] }>(`/api/admin/learning-history?${params}`);
+  },
+  getLearningHistoryDetail: (studentId: string, entryId: string) => http<{ entry: AdminLearningHistoryDetail }>(`/api/admin/learning-history/${encodeURIComponent(studentId)}/${encodeURIComponent(entryId)}`),
   login: (username: string, password: string) => http<{ authenticated: true; user: { username: string } }>("/api/admin/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   getAdminMe: () => http<{ authenticated: true; authType: "session" | "token"; user: { username: string } | null }>("/api/admin/auth/me"),
   logout: () => http<void>("/api/admin/auth/logout", { method: "POST", headers: { "X-CSRF-Token": readCsrfCookie() } }),
