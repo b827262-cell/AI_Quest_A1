@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { getNormalizedAuth } from "../app/api/auth-helper.ts";
-import { gatePrimaryApiRequest, readEdgeGateMode } from "../lib/relay-edge-gate.ts";
+import { countValidEdgeSecrets, gatePrimaryApiRequest, readEdgeGateMode } from "../lib/relay-edge-gate.ts";
 import { signRelay } from "../lib/relay-signature.ts";
 
 const STUDENT = "student-edge-secret-for-local-tests-123456";
@@ -46,6 +46,31 @@ test("edge mode defaults to accept and recognizes require", () => {
   assert.equal(readEdgeGateMode("  "), "accept");
   assert.equal(readEdgeGateMode(" REQUIRE "), "require");
   assert.equal(readEdgeGateMode("typo"), "require");
+});
+
+test("countValidEdgeSecrets reports only counts and cross-site distinctness", () => {
+  const SHORT = "x".repeat(31);
+  const SHARED = "shared-edge-secret-for-local-tests-123456789";
+
+  assert.deepEqual(countValidEdgeSecrets({}), { student: 0, admin: 0, distinct: true });
+  assert.deepEqual(
+    countValidEdgeSecrets({ A01_RELAY_EDGE_SECRET_STUDENT: STUDENT, A01_RELAY_EDGE_SECRET_ADMIN: ADMIN }),
+    { student: 1, admin: 1, distinct: true },
+  );
+  assert.deepEqual(countValidEdgeSecrets(bindings), { student: 2, admin: 1, distinct: true });
+  assert.deepEqual(
+    countValidEdgeSecrets({ A01_RELAY_EDGE_SECRET_STUDENT: SHORT, A01_RELAY_EDGE_SECRET_ADMIN: ADMIN }),
+    { student: 0, admin: 1, distinct: true },
+  );
+  assert.deepEqual(
+    countValidEdgeSecrets({ A01_RELAY_EDGE_SECRET_STUDENT: SHARED, A01_RELAY_EDGE_SECRET_ADMIN: SHARED }),
+    { student: 0, admin: 0, distinct: false },
+  );
+  // The result is counts/booleans only; it must not carry any secret material.
+  const serialized = JSON.stringify(countValidEdgeSecrets(bindings));
+  for (const secret of [STUDENT, STUDENT_PREV, ADMIN]) {
+    assert.equal(serialized.includes(secret), false, `counts leaked "${secret}"`);
+  }
 });
 
 test("matching current and previous site secrets preserve relay headers but never expose the edge secret downstream", () => {
