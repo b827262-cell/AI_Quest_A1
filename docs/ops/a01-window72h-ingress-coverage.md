@@ -81,6 +81,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 
 - **【決議】transitional 窗口**：72 小時觀察窗口在主站 `A01_RELAY_MODE=transitional` 下進行。
 - **【決議】strict 另開**：Strict 切換為另一個獨立窗口／決策，不與 transitional 觀察窗口混算。
+- 窗口長度**下限 24 小時【提案，未經 Owner 確認】**：僅當流量足以在 24 小時內覆蓋所有主要路徑與站別時才可接受；低流量時 24 小時可能完全沒有樣本（見 §5.2 盲區）。
 - 起算前置不變【現況】：須次站已送 edge secret 且主站 `A01_RELAY_EDGE_MODE=require` 已部署並驗證生效（`relay-rollout.md` §4.4；`site/lib/relay-edge-gate.ts:105-112`）。
 
 ### 2.2 樣本門檻（採用）
@@ -162,6 +163,74 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 
 ---
 
+## 5. 補充：合成補樣清單、盲區、停止條件與覆蓋分量（併入 WorkBuddy #79）
+
+> 本節由 PR #80 追加 commit 併入（內容原見 WorkBuddy #79）。標**【提案，未經 Owner 確認】**者不得作為 Gate 通過或回滾依據。
+
+### 5.1 合成補樣清單（非 GET 路徑 × 動詞，各 ≥30 `valid`）
+
+門檻「每非 GET 路徑 × 動詞 ≥ 30」為**【決議】**（見 §2.2）。下列為依 `relay-rollout.md` §4.3／§4.4 路由盤點所得的**受保護且低頻非 GET 路由【現況】**：
+
+| 站別 | 路由模板 | 方法 | `pathClass` | 目標（合成） |
+| --- | --- | --- | --- | --- |
+| Student | `/api/student/progress` | PUT | student | ≥ 30 |
+| Admin | `/api/admin/books` | POST | admin | ≥ 30 |
+| Admin | `/api/admin/books` | DELETE | admin | ≥ 30 |
+| Admin | `/api/admin/books/[id]` | DELETE | admin | ≥ 30 |
+| Admin | `/api/admin/books/upload` | POST | admin | ≥ 30 |
+
+- GET 路徑以自然流量為主；**Owner 已決：合成含 GET**（依指示納入），其餘 GET 預設不補。
+- **注意**：`relay.verify` 的 `pathClass` 只分 `student`／`admin`／`other`，**無法區分同方法的不同子路由**（例：`POST /api/admin/books` 與 `POST /api/admin/books/upload` 同為 `method=POST`、`pathClass=admin`）。補樣清單與計數須**輔以主站 invocation／路由證據（含 URL 模板）**交叉比對；無法區分即該項 `HOLD`（與 `relay-rollout.md` 路由盤點一致）。
+- `OPTIONS`（CORS 預檢）不呼叫 `getNormalizedAuth`、不產生 `relay.verify`；`/api/internal/sync/*` 走獨立驗證；health 不記錄——皆不在本清單。
+
+### 5.2 盲區清單（日誌看不到的）【現況】
+
+| # | 盲區 | 等級 | 說明 |
+| --- | --- | --- | --- |
+| B1 | 平台日誌可用性未確認 | **HIGH** | 若平台不暴露日誌，整個門檻無法量測；**切 strict 前的阻塞項** |
+| B2 | `off` 模式 0 行 | HIGH | `off` 時 auth-helper 提前 return，完全不記錄；窗內誤設 `off` 會無聲無資料 |
+| B3 | health 0 行 | MED | health 於程式內即排除（`pathClass=health` 提前 return） |
+| B4 | 次站 delegate 0 行 | MED | `none & identityPresent` 只在主站可見 |
+| B5 | 快取／CDN 繞過 | MED | 未到 Worker 的請求不記錄 |
+| B6 | 抽樣 | MED | 破壞缺席證明 |
+| B7 | 保留期上限 | LOW | 觀察窗須小於保留期，否則資料淘汰（Owner：14 天） |
+| B8 | 主站直連流量 | LOW | 會被記為 `none & identityPresent=true`（可抓），但需流量確實到主站 |
+| B9 | 時鐘偏差 | LOW | ±300s 外的合法請求會被記為 `invalid`，可能誤觸回滾 |
+
+### 5.3 合成執行：節奏與停止條件【提案，未經 Owner 確認】
+
+- **節奏【提案】**：逐「路由模板 × 方法」執行，每項目標 ≥ 30 `valid`；分時段（例：每小時一批）避免瞬間灌量；每批前後留空窗，便於以時間窗切分合成樣本；全程在 staging。
+- **停止條件【提案】**（任一成立即暫停並回報）：
+  1. 出現非預期狀態碼（非 2xx／非預期 4xx）或 `relay.verify result=invalid` 上升。
+  2. `synthetic=true` 出現在**非**白名單帳號，或白名單帳號出現 `synthetic=false`（標記異常）。
+  3. 觀察到影響真實使用者（真實流量錯誤率上升）。
+  4. 觸及任何 production 資源（立即停止）。
+  5. 授權窗到期或 Owner／維運指示停止。
+- **清理【決議】**（對應 §3.4「窗口後清除測試帳號與白名單」）：刪除本次建立的合成資料列（以 run manifest 記錄的 ID 為準，先建後刪）、刪除 staging R2 合成物件、移除／停用測試帳號與 `A01_SYNTHETIC_ACCOUNTS`；保留脫敏彙總與 manifest。
+
+### 5.4 覆蓋等式「分量 ⇄ 入口」對照表【提案，未經 Owner 確認】
+
+對每個固定時間區間，先求應記錄請求數 E、再求成功解析的 `relay.verify` 筆數 L，核對 **E=L**（`relay-rollout.md` §4.4）。覆蓋等式（**提案，未經 Owner 確認**；實作見 `scripts/a01-coverage/core.mjs:177-192`）：
+
+```
+ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
+差值須為 0
+```
+
+| 分量 | 對應入口 | 是否產生 `relay.verify` |
+| --- | --- | --- |
+| `verify` | 主站 `getNormalizedAuth`、通過 edge 閘、非 health 的受保護請求（即 L） | 是 |
+| `probe` 剝除 | `require` 下缺／錯 edge secret、被剝除的請求 | 否（記 `relay.probe`） |
+| `health` | `/api/health` | 否 |
+| `books`／`content` | 次站公開 GET（不呼叫 `getNormalizedAuth`） | 否 |
+| `sync` | `/api/internal/sync/*`（獨立驗證） | 否 |
+| `cors` | `OPTIONS` 預檢 | 否 |
+| `static` | 靜態資源 | 否 |
+
+缺任一分量即 `HOLD`，不推估。
+
+---
+
 ## 附錄 A：`b9ee98e3` 引用清單（file:line）
 
 | 主題 | 位置 |
@@ -202,3 +271,8 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 | nonce 去重 | 【提案】 |
 | 失敗原因碼彙總分類 | 【提案】 |
 | 覆蓋等式 `ingress = verify + probe + health + books + sync + cors + static` | 【提案】 |
+| 窗口長度下限 24 小時（§2.1） | 【提案】 |
+| 合成補樣清單（5 個非 GET 路徑 × 動詞；§5.1） | 【現況】（路由盤點；門檻 ≥30 為【決議】） |
+| 盲區清單 B1–B9（§5.2） | 【現況】 |
+| 合成節奏與停止條件 5 條（§5.3） | 【提案】 |
+| 覆蓋等式「分量 ⇄ 入口」對照表（§5.4） | 【提案】 |
