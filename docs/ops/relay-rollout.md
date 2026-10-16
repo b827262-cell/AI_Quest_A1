@@ -55,7 +55,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 ### 1.2 次站簽章的精確條件
 
-「匿名請求是否仍簽章」與「無簽章能力時的行為」是兩個不同情況，兩者都成立（`site/app/api/backend-client.ts:226-236`、`242-278`；`site/tests/relay-secondary.test.mjs`）：
+「匿名請求是否仍簽章」與「無簽章能力時的行為」是兩個不同情況，兩者都成立（`site/app/api/backend-client.ts:227-237`、`251-283`；`site/tests/relay-secondary.test.mjs`）：
 
 | 簽章設定（`canSign`） | 入站有無 `oai-*` 身分 | 次站行為 |
 | --- | --- | --- |
@@ -66,13 +66,15 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 因此：匿名請求在簽章設定有效時仍會被簽成 `-` sentinel；只有在沒有簽章能力時才完全不帶標頭。`canSign` 只看金鑰長度與站別，不看請求是否帶身分。
 
-例外：`delegateToBackend` 把「非 GET／HEAD 讀 body」與簽章放在同一個 `try`（`site/app/api/backend-client.ts:238-282`）。非 GET／HEAD 讀 body 失敗（或簽章過程拋錯）時，即使是匿名請求也會由 `catch` 回 `503 {"error":"relay_signing_unavailable"}`。所以「匿名不會 503」的準確說法是「**不會僅因缺少簽章能力而 503**」。
+另外，次站若自行判讀 `A01_RELAY_EDGE_MODE=require` 卻沒有可用的當前 edge secret，會在讀取 body 前直接回 `503 {"error":"relay_edge_secret_unavailable"}`，不轉送主站；這是 `require` 下的 fail-fast 就緒檢查（詳見 §1.4，C1）。
+
+例外：`delegateToBackend` 把「非 GET／HEAD 讀 body」與簽章放在同一個 `try`（`site/app/api/backend-client.ts:247-287`）。非 GET／HEAD 讀 body 失敗（或簽章過程拋錯）時，即使是匿名請求也會由 `catch` 回 `503 {"error":"relay_signing_unavailable"}`。所以「匿名不會 503」的準確說法是「**不會僅因缺少簽章能力而 503**」。
 
 ### 1.3 Edge secret 閘的解析與有效性（D9=B，PR #64／#67）
 
-主站在既有路徑／拓樸閘（`gateApiRequest`）之後、relay 驗章之前，對非 `/api/health` 的 API 路徑做分站 edge secret 檢查：`gatePrimaryApiRequest` 先做路徑與拓樸判定，再呼叫 `gateRelayEdgeRequest`（`site/lib/relay-edge-gate.ts:95-123`）。規則以程式碼為準。
+主站在既有路徑／拓樸閘（`gateApiRequest`）之後、relay 驗章之前，對非 `/api/health` 的 API 路徑做分站 edge secret 檢查：`gatePrimaryApiRequest` 先做路徑與拓樸判定，再呼叫 `gateRelayEdgeRequest`（`site/lib/relay-edge-gate.ts:86-114`）。規則以程式碼為準。
 
-**模式解析（`readEdgeGateMode`，`site/lib/relay-edge-gate.ts:14-19`）：**
+**模式解析（`readEdgeGateMode`，`site/lib/relay-edge-config.ts:4-9`；由 `site/lib/relay-edge-gate.ts:3-5` 匯入並轉出）：**
 
 - `undefined`／`null` → `accept`（未設定＝沿用既有行為，**不會**自動變成 `require`）。
 - 非字串 → `require`。
@@ -80,21 +82,27 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 因此**未設定＝`accept`，無法辨識的值一律 `require`（fail closed）**：`"require"`、`"REQUIRE"`、`" require "` 皆為 `require`；拼錯的值（例如 `"requrie"`）也會落到 `require`，不會靜默退回 `accept`。反過來說，未設定不會自動升級為嚴格閘，**啟用嚴格閘必須明確設定 `A01_RELAY_EDGE_MODE=require`，不得假設預設即為 `require`**。
 
-**secret 有效性（`usableSecret`，`site/lib/relay-edge-gate.ts:33-35`）：**
+**secret 有效性（`isUsableEdgeSecret`，`site/lib/relay-edge-config.ts:11-13`；`site/lib/relay-edge-gate.ts` 以 `usableSecret` 名字匯入，見 `:3`）：**
 
 - edge secret 必須是字串且長度介於 **32–512 字元（含端點）**；`< 32`、`> 512`、非字串或未設定者一律視為無效，等同未設定。
-- 無效值不匹配也不計數：主站閘不採用（`require` 下落 `relay.probe`），次站不送出該 header（`site/app/api/backend-client.ts:275`），health 的 `edgeSecrets` 也不計入。
+- 無效值不匹配也不計數：主站閘不採用（`require` 下落 `relay.probe`），次站不送出該 header（`site/lib/relay-edge-config.ts:16-21`、`site/app/api/backend-client.ts:280`），health 的 `edgeSecrets` 也不計入。
 - 與 relay 驗章金鑰不同：驗章金鑰只有 `≥ 32` 下限、沒有上限（`site/lib/relay-verification.ts:36`）；32–512 的上下限只適用於 edge secret。
 
 **跨站重複 secret 會讓兩站同時失效：**
 
-- `validSecrets` 會把 student 的每一把與 admin 的每一把互比（含現行對現行、現行對 `_PREV`、`_PREV` 對 `_PREV`）；只要**任一** student secret 等於**任一** admin secret，兩站的 secret 清單都會被視為空（`site/lib/relay-edge-gate.ts:37-42`）。
-- 後果：`require` 下所有帶 secret 的請求都不匹配，一律記 `relay.probe` 並剝除 `x-a01-relay-*`／`oai-*`，使用者掉成 guest／401；health 的 `edgeSecrets` 兩站皆為 `0`、`edgeSecretsDistinct=false`（`site/lib/relay-edge-gate.ts:51-59`）。**兩站 secret 必須互不相同，`_PREV` 也不得跨站重用。**
+- `validSecrets` 會把 student 的每一把與 admin 的每一把互比（含現行對現行、現行對 `_PREV`、`_PREV` 對 `_PREV`）；只要**任一** student secret 等於**任一** admin secret，兩站的 secret 清單都會被視為空（`site/lib/relay-edge-gate.ts:28-33`）。
+- 後果：`require` 下所有帶 secret 的請求都不匹配，一律記 `relay.probe` 並剝除 `x-a01-relay-*`／`oai-*`，使用者掉成 guest／401；health 的 `edgeSecrets` 兩站皆為 `0`、`edgeSecretsDistinct=false`（`site/lib/relay-edge-gate.ts:42-50`）。**兩站 secret 必須互不相同，`_PREV` 也不得跨站重用。**
 
 **`require` 下的直連主站禁令（lockout 風險）：**
 
 - `require` 生效時，**不得讓使用者直接命中主站的 admin／student API**（不經次站代理、因而沒有 `x-a01-relay-edge-secret`）。主站會先剝除 `x-a01-relay-*`／`oai-*`，請求在 `transitional`／`strict` 下視同無身分：`/api/admin/*` 回 401、`/api/student/*` 掉成 guest，使用者會被鎖在門外（lockout）。
 - 所有使用者面向入口（主站頁面、書籤、直接連結與任何繞過次站的呼叫）都必須確認改走次站；主站頁面本身若被直連，其未簽章 API 呼叫在 `require`／`strict` 下同樣失效。此項須在切 `require` 前完成盤點與驗證（見 §4.2）。
+
+### 1.4 次站在 `require` 下的 edge secret 就緒（C1／C2，PR #69）
+
+**C1：`require` 下次站缺可用 secret 時 fail-fast 回 `503 relay_edge_secret_unavailable`。** 次站 `delegateToBackend` 先以 `readEdgeSenderSecret` 取得本站「當前」edge secret（只讀 `A01_RELAY_EDGE_SECRET_STUDENT` 或 `A01_RELAY_EDGE_SECRET_ADMIN`，不讀 `_PREV`；`site/lib/relay-edge-config.ts:16-21`），再以**次站自己的** `A01_RELAY_EDGE_MODE` 判讀模式（`readEdgeGateMode`，`site/lib/relay-edge-config.ts:4-9`）。當 `canSign` 成立、模式為 `require`、且 `edgeSecret === undefined`（未設定或長度不在 32–512）時，次站在讀取 body 與呼叫主站**之前**直接回 `503 {"error":"relay_edge_secret_unavailable"}`（`site/app/api/backend-client.ts:239,243-244`）。此檢查與請求是否帶身分無關，因此**已簽章的匿名請求也適用**；`accept`（未設定／空字串／`accept`）行為不變，只是略過 header 照常轉送。錯誤回應只含固定錯誤碼，不含 secret 值、長度、前綴或雜湊，也不記錄 secret。
+
+**C2：次站 health 新增唯讀 `edgeSenderSecret`。** 只有 `role === "secondary"` 的 health 會回報 `edgeSenderSecret: "present" | "missing"`（主站／standalone 不輸出此欄位；`site/app/api/health/route.ts:75-77,94`）；`present` 代表本站有可用的當前 edge secret（與 C1 同一套 `readEdgeSenderSecret` 判定），`missing` 則是無可用值。同一 isolate 內首次看到 `missing` 時另記一次 `console.warn`（`site/app/api/health/route.ts:78-85`）。此欄位**只回報 `present`／`missing`，永不輸出值、長度、前綴或雜湊**，屬唯讀觀測，不得當作 Gate 通過依據；用途是在主站切 `require` 前先確認各次站已具備送出 secret 的就緒狀態。
 
 ## 2. 執行期變數（只列名稱）
 
@@ -112,7 +120,8 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 | 主站 | `A01_RELAY_EDGE_SECRET_STUDENT_PREV` | 輪替時使用 | 學生次站的舊 edge secret；重疊期與現行並存，兩把都接受。 |
 | 主站 | `A01_RELAY_EDGE_SECRET_ADMIN` | 啟用閘就必填 | 管理次站的 edge secret；與 relay 驗章金鑰分開。 |
 | 主站 | `A01_RELAY_EDGE_SECRET_ADMIN_PREV` | 輪替時使用 | 管理次站的舊 edge secret；重疊期與現行並存，兩把都接受。 |
-| 次站 | `A01_RELAY_EDGE_SECRET_STUDENT`（student 站）／`A01_RELAY_EDGE_SECRET_ADMIN`（admin 站） | 要送 secret 就必填 | 隨簽章請求送出 `x-a01-relay-edge-secret`（#65 已合併）：student 站讀前者、admin 站讀後者。只送當前值、不送 `_PREV`；僅 `canSign` 時送；缺失或長度不在 32–512 時不送（行為同現狀，不拋錯、不記錄值）。 |
+| 次站 | `A01_RELAY_EDGE_SECRET_STUDENT`（student 站）／`A01_RELAY_EDGE_SECRET_ADMIN`（admin 站） | 要送 secret 就必填 | 隨簽章請求送出 `x-a01-relay-edge-secret`（#65 已合併）：student 站讀前者、admin 站讀後者。只送當前值、不送 `_PREV`；僅 `canSign` 時送；缺失或長度不在 32–512 時不送，且次站 `A01_RELAY_EDGE_MODE=require` 時改回 `503 relay_edge_secret_unavailable`（C1，見 §1.4），否則行為同現狀（不拋錯、不記錄值）。 |
+| 次站 | `A01_RELAY_EDGE_MODE` | 次站啟用嚴格送出就必填 | 次站**自行**判讀：`require` 且無可用當前 edge secret 時，於讀 body 前回 `503 relay_edge_secret_unavailable`（C1，見 §1.4）；未設定／空字串＝`accept`（只略過 header，不擋請求）。 |
 | 主站 | `ADMIN_EMAILS` | 必填 | 管理員 allowlist，與簽章無關；簽章只決定身分，不決定管理員。 |
 
 規則：
@@ -120,8 +129,8 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 - **兩站金鑰不得相同（跨站）。** `siteKeys` 會拿 student 的每一把與 admin 的每一把互比；只要**任一** student 金鑰等於**任一** admin 金鑰（含現行對現行、現行對 `_PREV`、`_PREV` 對 `_PREV`），兩個站的金鑰清單都會被視為空，所有 relay 驗章一律失敗，`relayKeys` 為 0（`site/lib/relay-verification.ts:39-49`）。
 - 金鑰只在長度 ≥ 32 時計入；`_PREV` 與現行金鑰同時存在時，兩把都會被嘗試。
 - **`relayKeys` 是綁定項數，不是相異金鑰數。** `configuredKeys` 只是把「現行」與「`_PREV`」兩個綁定過濾後回傳（`site/lib/relay-verification.ts:33-37`），不先去重；因此同站的現行金鑰與 `_PREV` 若設成**相同字串**，會被重複計數（該站算 2）。請避免把兩者設成相同值。
-- edge secret 與 relay 驗章金鑰分開；edge secret 有效長度為 **32–512 字元**（`site/lib/relay-edge-gate.ts:33-35`），超出範圍視同未設定。relay 驗章金鑰只有 `≥ 32` 下限（`site/lib/relay-verification.ts:36`），兩者規則不同。
-- **兩站 edge secret 不得相同（跨站）：** 只要 student 任一 secret 等於 admin 任一 secret（含 `_PREV`），兩站 secret 清單都失效；`require` 下所有請求落入 `relay.probe` 並被剝除，health `edgeSecrets` 兩站皆 `0`、`edgeSecretsDistinct=false`（`site/lib/relay-edge-gate.ts:37-42,51-59`）。同站 `_PREV` 與現行設成相同字串不影響有效性，但會讓 health 計數重複（同 relay 金鑰模式）。詳見 §1.3。
+- edge secret 與 relay 驗章金鑰分開；edge secret 有效長度為 **32–512 字元**（`site/lib/relay-edge-config.ts:11-13`），超出範圍視同未設定。relay 驗章金鑰只有 `≥ 32` 下限（`site/lib/relay-verification.ts:36`），兩者規則不同。
+- **兩站 edge secret 不得相同（跨站）：** 只要 student 任一 secret 等於 admin 任一 secret（含 `_PREV`），兩站 secret 清單都失效；`require` 下所有請求落入 `relay.probe` 並被剝除，health `edgeSecrets` 兩站皆 `0`、`edgeSecretsDistinct=false`（`site/lib/relay-edge-gate.ts:28-33,42-50`）。同站 `_PREV` 與現行設成相同字串不影響有效性，但會讓 health 計數重複（同 relay 金鑰模式）。詳見 §1.3。
 - 本手冊只寫變數名稱，不寫任何值；變數的注入方式見三站運行手冊第 2 節。
 
 ## 3. 上線前閘門
@@ -200,15 +209,16 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 | `relayMode` | 該站目前判讀到的模式：`off`／`transitional`／`strict`。次站通常未設定，回報 `off`。 |
 | `relayKeys` | 主站可用的驗章綁定項數（student＋admin 的現行與 `_PREV`，跨站共用衝突後）。`0` 代表沒有任何可用金鑰：未設定、長度 < 32，或兩站共用任一金鑰。永不輸出金鑰本身。注意它**不是相異金鑰數**：同站現行與 `_PREV` 設成相同字串會被重複計數（見第 2 節）。 |
 | `relaySeen` | **只代表本次 health 請求**的 relay 驗章結果：`none`（沒有 relay 標頭）／`valid`（驗章通過）／`invalid`（有 relay 標頭但驗章失敗）。不是全站統計，見 §4.1。 |
-| `edgeMode` | 主站目前判讀到的 edge 閘模式：`accept`／`require`（`site/lib/relay-edge-gate.ts:14-19`）。未設定回報 `accept`。 |
+| `edgeMode` | 主站目前判讀到的 edge 閘模式：`accept`／`require`（`site/lib/relay-edge-config.ts:4-9`）。未設定回報 `accept`。 |
 | `edgeSecrets` | `{ student, admin }`，分別為該站可用 edge secret 的**綁定項數**（現行＋`_PREV`，跨站共用衝突後）。`0` 代表該站沒有可用 secret：未設定、長度不在 32–512，或跨站重用任一 secret 導致兩站皆失效。**只輸出計數**，永不輸出值、長度、前綴或雜湊。 |
 | `edgeSecretsDistinct` | 布林：student 與 admin 的可用 secret 是否互不重複。`false` 代表跨站重用、兩站 secret 皆失效（見 §1.3）。**只輸出布林**。 |
+| `edgeSenderSecret` | **僅次站**輸出：`"present"`／`"missing"`，代表本站有無可用的當前 edge secret（與 C1 同一套 `readEdgeSenderSecret` 判定；`site/app/api/health/route.ts:75-77,94`）。主站／standalone 不輸出此欄位。**只回報 `present`／`missing`**，永不輸出值、長度、前綴或雜湊。見 §1.4（C2）。 |
 
-#67 的 health 欄位與 `relaySeen` 一樣只是唯讀觀測：health 仍豁免 edge 閘（`site/lib/relay-edge-gate.ts:121`）且不寫 `relay.verify`；`edgeSecrets`／`edgeSecretsDistinct` 不得當作 Gate 通過依據，只能輔助確認 `require` 是否生效與 secret 是否被跨站重用。
+#67 的 health 欄位與 `relaySeen` 一樣只是唯讀觀測：health 仍豁免 edge 閘（`site/lib/relay-edge-gate.ts:112`）且不寫 `relay.verify`；`edgeSecrets`／`edgeSecretsDistinct` 不得當作 Gate 通過依據，只能輔助確認 `require` 是否生效與 secret 是否被跨站重用。#69 的 `edgeSenderSecret` 同屬唯讀觀測（見 §1.4）。
 
 ### 4.1 `relaySeen` 的真實語意與限制
 
-`relaySeen` 是對**本次 `/api/health` 請求**呼叫 `verifyIncomingRelay` 的結果（`site/app/api/health/route.ts:65`），不是任何形式的彙總或計數：
+`relaySeen` 是對**本次 `/api/health` 請求**呼叫 `verifyIncomingRelay` 的結果（`site/app/api/health/route.ts:69`），不是任何形式的彙總或計數：
 
 - 主站直打 `/api/health` 通常是 `none`，因為 health 由各站本地回應、不經次站簽章代理。**看到 `none` 不代表全站已無未簽章請求**，只代表這次 health 沒帶 relay 標頭。
 - PR #61 在主站 `getNormalizedAuth` 路徑加入 `relay.verify` 應用日誌；程式仍沒有全站聚合計數器。是否已部署、平台是否完整保存及可查詢，必須依 §4.4 取得實測證據。
@@ -226,7 +236,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 - [ ] migration `0003`（`relay_nonces`）已由 Owner 授權套用（見第 3(d) 節）。
 - [ ] staging 合成簽章請求：`valid` 被採用、`invalid` 被拒（受保護 API 回 401）。
 - [ ] O-1a 已通過，且該測試不是在 `strict` 下做的（見第 3(a) 節）。
-- [ ] edge secret 閘已部署並驗證：次站已送 `x-a01-relay-edge-secret`（#65 已合併），主站 `A01_RELAY_EDGE_MODE=require` 生效，且 `require` 下缺失／錯誤 secret 記為 `relay.probe`、不產生 `invalid`（PR #64）。主站 health 須回報 `edgeMode=require`、`edgeSecrets.student` 與 `edgeSecrets.admin` 皆 ≥ 1、`edgeSecretsDistinct=true`（#67；僅計數／布林，見 §1.3、第 4 節）。
+- [ ] edge secret 閘已部署並驗證：次站已送 `x-a01-relay-edge-secret`（#65 已合併），主站 `A01_RELAY_EDGE_MODE=require` 生效，且 `require` 下缺失／錯誤 secret 記為 `relay.probe`、不產生 `invalid`（PR #64）。主站 health 須回報 `edgeMode=require`、`edgeSecrets.student` 與 `edgeSecrets.admin` 皆 ≥ 1、`edgeSecretsDistinct=true`（#67；僅計數／布林，見 §1.3、第 4 節）；**各次站** health 須回報 `edgeSenderSecret="present"`，且次站 `A01_RELAY_EDGE_MODE=require` 時不會出現 `503 relay_edge_secret_unavailable`（#69；C1／C2，見 §1.4）。
 - [ ] §4.4 全部達標：三站平台證據齊全、100% 日誌、連續 72 小時、雙站樣本與寫入覆蓋的建議值經 Owner 確認後達標、零異常、完整性及隱私檢查通過；建議值未確認即 `HOLD`。
 - [ ] 已確認所有使用者面向的來源是次站，且 `require` 下**沒有**直連主站 admin／student API 的路徑（主站頁面、書籤、直接連結、外部整合皆改走次站）；否則該類請求會被剝除身分而 lockout（`/api/admin/*` 401、`/api/student/*` guest，見 §1.3）。
 - [ ] §5 的回滾門檻、基準、執行者與部署權限已確認，且 staging 回滾演練為 `PASS`。
@@ -242,7 +252,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 目的：`relayKeys` 只是總數，無法區分是哪一站的金鑰；本節補足「student 與 admin 各自有有效金鑰」的確認。方法如下（只描述；實際執行需 Owner 逐站授權，本手冊不提供可直接複製執行的 production 指令）。
 
-**共同前提：** 對各次站發出一次**帶平台身分**的 GET，並要求回應同時滿足 (i) 帶 `x-data-plane: primary`（證明確實經由次站代理、有走 relay 路徑；此標頭由 `site/app/api/backend-client.ts:299` 在代理取回主站回應時加上，401／403 也會帶），以及 (ii) 下列端點特定的預期回應。**只有「(i)＋(ii) 都成立」才算成功；其餘一律不算成功。**
+**共同前提：** 對各次站發出一次**帶平台身分**的 GET，並要求回應同時滿足 (i) 帶 `x-data-plane: primary`（證明確實經由次站代理、有走 relay 路徑；此標頭由 `site/app/api/backend-client.ts:304` 在代理取回主站回應時加上，401／403 也會帶），以及 (ii) 下列端點特定的預期回應。**只有「(i)＋(ii) 都成立」才算成功；其餘一律不算成功。**
 
 正向判定（成功條件）：
 
@@ -253,15 +263,16 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 - **401**（`unauthorized`／`malformed_auth`／`admin authentication required`；`student/me/route.ts:27-36`、`admin/auth/me/route.ts:26-42`）：視為 **relay／身分驗證失敗「待診斷」**，不得直接歸因金鑰。可能原因包含金鑰不符、時戳超出 ±300s、nonce 重放、path／query／body 被改、D1 不可用等（見第 7 節）。
 - **其他任何狀態一律判為「未能驗證」、不得算成功**，包含：
-  - `503 backend_unavailable`（主站不可達；`site/app/api/backend-client.ts:306-314`，無 `x-data-plane`）；
+  - `503 backend_unavailable`（主站不可達；`site/app/api/backend-client.ts:311-319`，無 `x-data-plane`）；
   - `503 relay_signing_unavailable`（次站缺簽章能力）；
-  - `503 backend_disabled`（次站未設定 `PRIMARY_ORIGIN`；`site/app/api/backend-client.ts:192-199`）；
+  - `503 relay_edge_secret_unavailable`（次站 `A01_RELAY_EDGE_MODE=require` 下缺可用當前 edge secret，於讀 body 前即拒絕；`site/app/api/backend-client.ts:243-244`，見 §1.4）；
+  - `503 backend_disabled`（次站未設定 `PRIMARY_ORIGIN`；`site/app/api/backend-client.ts:193-200`）；
   - **CORS 403** `{"error":"cors_forbidden"}`（`admin/auth/me/route.ts:16-18`、`student/me/route.ts:17-19`；這是來源被拒，不是金鑰有效）；
   - 其他非預期的 403、5xx，或 200 但 body 不符上述正向條件（例如 guest 200）。
 
 輔助對照：在 staging／合成環境以錯誤金鑰簽章，確認受保護 API 回 401（`tests/relay-verify.test.mjs` 已涵蓋），用來確認正向判定不是因為驗章根本沒生效。
 
-使用者失敗率：上述 `503 relay_signing_unavailable`（次站缺簽章能力）與 `require` 下因缺 edge secret 被剝除身分而造成的 guest／401，都屬使用者面向失敗，須依 §4.4 Owner 驗收規則第 4 條計入失敗率、標記原因並跨站去重。
+使用者失敗率：上述 `503 relay_signing_unavailable`（次站缺簽章能力）、`503 relay_edge_secret_unavailable`（次站 `require` 下缺可用當前 edge secret）與 `require` 下因缺 edge secret 被剝除身分而造成的 guest／401，都屬使用者面向失敗，須依 §4.4 Owner 驗收規則第 4 條計入失敗率、標記原因並跨站去重。
 
 逐站判定：student 與 admin 各自獨立套用上述規則；任一站未達正向條件即該站「未能驗證」，不可用另一站的結果推論。
 
@@ -311,13 +322,13 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 1. **逐一合併並對更新後 main 重驗；`PASS` 對應實際 head。** 每個 PR 單獨合併，不得批次或交叉合併後再補驗；每次合併後必須在**更新後的 main** 重新驗證（重跑本地測試、重算行號與引用、重做受影響的量測），不得沿用合併前或前一顆 head 的結果。任何 `PASS` 結論都必須綁定當時**實際的 head commit sha** 並寫入交接記錄；不得以「大致相同」或跨 PR 推定代替。
 2. **未簽章量測須涵蓋直連主站與繞過 relay 的入口。** 未簽章（無 `x-a01-relay-*`）請求的計數與量測，必須同時涵蓋 (a) 直連主站、不經次站代理的請求，以及 (b) 任何繞過 relay 的入口（例如直接命中主站 API、非次站代理路徑、edge 閘豁免的 health 等）。只量次站來源會低估未簽章流量；量測範圍須在候選版本的路由盤點中明列，無法區分即 `HOLD`。
 3. **72 小時窗口須明定起算版本／設定／站點，影響驗章或量測的變更後重評。** 每個觀察窗口都必須記錄起算時的候選版本（commit sha）、三站生效設定（`A01_RELAY_MODE`、`A01_RELAY_EDGE_MODE`、金鑰／secret 綁定版本）與站點範圍。任何會影響驗章或量測的變更（程式碼、執行期變數、路由、日誌程式或採集設定）之後，該窗口即失效，必須重新驗證管線並重新起算；不得沿用舊窗口的 72 小時。
-4. **次站缺 secret 的使用者失敗（含 `503`）計入使用者失敗率、標原因、跨站去重。** 次站因缺少 edge secret 而無法完成使用者請求者一律計入**使用者面向失敗率**，不得只算主站 `relay.verify` 的 `invalid`。依現行程式碼，這類失敗包含：(a) 次站缺簽章能力時回 `503 relay_signing_unavailable`（`site/app/api/backend-client.ts:235-236`）；(b) 次站缺 secret（不送 header）而在主站 `require` 下被剝除身分，導致 `/api/admin/*` 401、`/api/student/*` guest（`site/lib/relay-edge-gate.ts:110`）。每筆須標記失敗原因（例如 `edge_secret_missing`／`relay_signing_unavailable`／`edge_gate_stripped`），跨站彙總時對同一使用者請求去重，避免 student／admin 或次站／主站重複計數。此計數與 §5.1 的 401／403／5xx 回滾門檻分開登記，但須一併納入失敗率證據。
+4. **次站缺 secret 的使用者失敗（含 `503`）計入使用者失敗率、標原因、跨站去重。** 次站因缺少 edge secret 而無法完成使用者請求者一律計入**使用者面向失敗率**，不得只算主站 `relay.verify` 的 `invalid`。依現行程式碼，這類失敗包含：(a) 次站缺簽章能力時回 `503 relay_signing_unavailable`（`site/app/api/backend-client.ts:236-237`）；(b) 次站 `A01_RELAY_EDGE_MODE=require` 下缺可用當前 edge secret，於讀 body 前回 `503 relay_edge_secret_unavailable`（`site/app/api/backend-client.ts:243-244`；見 §1.4）；(c) 次站缺 secret（不送 header）而在主站 `require` 下被剝除身分，導致 `/api/admin/*` 401、`/api/student/*` guest（`site/lib/relay-edge-gate.ts:101`）。每筆須標記失敗原因（例如 `relay_edge_secret_unavailable`／`relay_signing_unavailable`／`edge_secret_missing`／`edge_gate_stripped`），跨站彙總時對同一使用者請求去重，避免 student／admin 或次站／主站重複計數。此計數與 §5.1 的 401／403／5xx 回滾門檻分開登記，但須一併納入失敗率證據。
 
 #### 路由盤點與無應用日誌路徑
 
 以候選版本的 Worker 路由表、`site/app/api/**/route.ts`、`gateApiRequest`、CORS、delegate 及 `getNormalizedAuth` 呼叫點建立清單。每列記錄環境、來源站、方法、路由模板（使用 `[id]`，不記實際 ID）、授權機制、`pathClass`、是否應產生應用日誌、成功定義、應計請求數與證據連結。無適用非 GET 路徑時，必須附路由盤點及審查證據才可標記 N/A；不能以沒流量為由略過。
 
-目前基準 `5afbcb9` 的 relay 受保護路徑起始清單（自 `cc05e6e` 以來未新增路由；部署前仍須完整盤點核對）：
+目前基準 `d4d5c026` 的 relay 受保護路徑起始清單（#69 未新增路由；自 `cc05e6e` 以來未新增路由，部署前仍須完整盤點核對）：
 
 | 來源站 | 路由模板／方法 | 分類與覆蓋要求 |
 | --- | --- | --- |
@@ -347,10 +358,10 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | 通過 edge 閘後的 `evt=relay.verify AND result=invalid` ≥1，或 `none AND identityPresent=true` 等異常身分組合 ≥1 | 立即暫停晉級，調查並保留證據；不得設未經證實的例外。被 edge 閘擋下的 `relay.probe` 不觸發本列，但須保留並計數。 |
 | Strict 導致原本合法的使用者被拒 | 確認可重現後，立即依已核准的應變授權回滾。 |
 | 401／403 相對 transitional 基準異常升高 | 暫停並評估回滾；分站與路徑評估，區分預期非管理員 403、CORS、gate 與 relay 拒絕。 |
-| 5xx 持續升高 | 依預先登記的基準、最低樣本及連續區間門檻觸發回滾。 |
+| 5xx 持續升高（含次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`） | 依預先登記的基準、最低樣本及連續區間門檻觸發回滾；每筆須標記失敗原因（如 `relay_edge_secret_unavailable`／`relay_signing_unavailable`）並跨站去重，與 §4.4 Owner 驗收規則第 4 條一致。 |
 | 日誌不可用、取樣或出現無法解釋的缺口 | 停止 Strict 推進、保存已有證據；已切 Strict 時依影響必要回滾。 |
 
-401／403 與 5xx 的數值不可事後挑選。進入 Strict 前，Owner／平台負責人須登記並由 AGY 核對：基準環境／版本／時窗、每站每路徑的請求總數 N 與錯誤數、觀測區間長度 W、每區間最低樣本 Nmin、相對基準的增幅門檻 Δ（百分點）、觸發所需連續區間數 K，以及執行者／授權。錯誤率 r=錯誤數/N；N≥Nmin 且 r−基準率≥Δ 連續 K 個區間即達已登記門檻（401／403 暫停評估，5xx 回滾）。兩類各自填入實際數值；本決議未提供這些數字，未填即 `HOLD`，不得憑空宣稱已可量測。N=0／低樣本不算零錯誤；不妨礙可重現合法使用者被拒時立即回滾。
+401／403 與 5xx 的數值不可事後挑選。進入 Strict 前，Owner／平台負責人須登記並由 AGY 核對：基準環境／版本／時窗、每站每路徑的請求總數 N 與錯誤數、觀測區間長度 W、每區間最低樣本 Nmin、相對基準的增幅門檻 Δ（百分點）、觸發所需連續區間數 K，以及執行者／授權。錯誤率 r=錯誤數/N；N≥Nmin 且 r−基準率≥Δ 連續 K 個區間即達已登記門檻（401／403 暫停評估，5xx 回滾）。5xx 基準的錯誤數須明確納入次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`，並依 §4.4 Owner 驗收規則第 4 條標記失敗原因、跨站去重，不得將這些 503 排除在 5xx 基準之外；300／100／30 等建議值與本節回滾數字不因納入而改變（仍為提案，待 Owner 確認）。兩類各自填入實際數值；本決議未提供這些數字，未填即 `HOLD`，不得憑空宣稱已可量測。N=0／低樣本不算零錯誤；不妨礙可重現合法使用者被拒時立即回滾。
 
 ### 5.2 回滾操作與成功判定
 
@@ -394,13 +405,14 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 
 ## 7. 疑難排解
 
-對**受保護 API**（會呼叫 `getNormalizedAuth` 並檢查 `relayRejected` 的路由，例如 `/api/student/*`、`/api/admin/*`）而言，relay 驗章失敗一律只回單一 `401 {"error":"unauthorized"}`，不洩漏失敗原因。**`/api/health` 是例外**：health 不走 401 路徑，無論 `relaySeen` 是 `none`／`valid`／`invalid` 都回 `200`，並以 `relaySeen` 回報本次驗章結果（`site/app/api/health/route.ts:65-78`）。診斷請看主站 health 的 `relaySeen` 與次站設定。
+對**受保護 API**（會呼叫 `getNormalizedAuth` 並檢查 `relayRejected` 的路由，例如 `/api/student/*`、`/api/admin/*`）而言，relay 驗章失敗一律只回單一 `401 {"error":"unauthorized"}`，不洩漏失敗原因。**`/api/health` 是例外**：health 不走 401 路徑，無論 `relaySeen` 是 `none`／`valid`／`invalid` 都回 `200`，並以 `relaySeen` 回報本次驗章結果（`site/app/api/health/route.ts:69-94`）。診斷請看主站 health 的 `relaySeen` 與次站設定。
 
 | 症狀 | 可能原因 | 檢查與處置 |
 | --- | --- | --- |
 | 受保護 API 回 401 `{"error":"unauthorized"}`（單一對外錯誤） | relay 驗章失敗：簽章不符、站別不符、時戳超出 ±300s、nonce 重放、path／query／body 被改、金鑰未設或 < 32、兩站共用金鑰、D1 不可用 | 看主站 `relaySeen`；確認次站 `A01_RELAY_SIGNING_KEY`／`A01_RELAY_SITE` 與主站對應金鑰。relay 失敗絕不回退 `oai-*`。 |
 | `GET /api/health` 回 `200` 但 `relaySeen: invalid` | health 不走 401 路徑；只表示本次 health 請求帶了 relay 標頭但驗章失敗 | 這是預期行為，不是漏回 401。要驗證受保護 API 的 401 請對 `/api/student/*`／`/api/admin/*` 測試。 |
-| 次站回 `503 {"error":"relay_signing_unavailable"}` | (a) 次站缺簽章能力（`A01_RELAY_SIGNING_KEY` 未設／< 32，或 `A01_RELAY_SITE` 與 `SITE_NAME` 不符）**且**請求帶有 `oai-*` 身分；或 (b) 非 GET／HEAD 讀 body／簽章在 `try` 內拋錯（`site/app/api/backend-client.ts:238-282`） | 補齊次站變數後重新部署。注意：無簽章能力且**匿名**時**不會僅因缺少簽章能力而**回此錯誤，而是不帶任何 `oai-*`／`x-a01-relay-*` 直接轉送；但 (b) 的 body 讀取拋錯仍會回 503。 |
+| 次站回 `503 {"error":"relay_signing_unavailable"}` | (a) 次站缺簽章能力（`A01_RELAY_SIGNING_KEY` 未設／< 32，或 `A01_RELAY_SITE` 與 `SITE_NAME` 不符）**且**請求帶有 `oai-*` 身分；或 (b) 非 GET／HEAD 讀 body／簽章在 `try` 內拋錯（`site/app/api/backend-client.ts:247-287`） | 補齊次站變數後重新部署。注意：無簽章能力且**匿名**時**不會僅因缺少簽章能力而**回此錯誤，而是不帶任何 `oai-*`／`x-a01-relay-*` 直接轉送；但 (b) 的 body 讀取拋錯仍會回 503。 |
+| 次站回 `503 {"error":"relay_edge_secret_unavailable"}` | 次站 `A01_RELAY_EDGE_MODE=require` 且本站無可用當前 edge secret（未設定或長度不在 32–512；`site/app/api/backend-client.ts:243-244`） | 為該次站設定正確的 `A01_RELAY_EDGE_SECRET_STUDENT`／`_ADMIN`（32–512，兩站互不相同）後重新部署；以該次站 health `edgeSenderSecret` 確認回到 `present`（§1.4、§2）。這是 fail-fast，請求未轉送主站。 |
 | 身分間歇性失效 | 兩站時鐘偏差超過 ±300s | 校正次站與主站（平台）時鐘；確認時間同步。 |
 | 非 GET／HEAD 一律 401、GET 正常 | 非 GET 依賴 D1 `relay_nonces`：migration 0003 未套用、D1 binding 缺失或查詢失敗 | 套用 migration 0003（Owner 授權）；確認主站 D1 binding。D1 不可用時一律 401。 |
 | 大 body 回 401 而非 413 | 有 relay 標頭時，超過 body 上限（一般 8 MiB／upload 21 MiB）在簽章驗證階段就判 `invalid` | 這是預期行為；請在上游縮小 payload。無 relay 標頭時不走此檢查，平台層可能另有更早的限制。 |
@@ -415,57 +427,60 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 - **`site/app/chatgpt-auth.ts` 仍讀未簽章標頭。** 它直接讀 `oai-authenticated-user-id`／`-email`／`-full-name`，只用於顯示（`getChatGPTUser`）；不得用於授權。授權一律走 `getNormalizedAuth` 與 `ADMIN_EMAILS`。
 - **CORS allow-headers 殘留宣告待清理（PR-E）。** `site/app/api/backend-client.ts` 的 `handleCors` 仍在 `Access-Control-Allow-Headers` 宣告 `oai-authenticated-user-*` 系列；這些是瀏覽器端的舊宣告，待 PR-E 清理。
 - **主站直打 health 的 `relaySeen` 多為 `none`。** 它只代表本次 health 請求，不是 PR #61 日誌的彙總；詳見 §4.1、§4.4。要觀察 `valid` 需在 staging／合成環境送出帶簽章請求。
-- **Edge secret 閘（D9=B）為 `gatePrimaryApiRequest` → `gateRelayEdgeRequest`（PR #64）。** 它在主站、API 路徑、非 `/api/health` 生效；`accept`（預設）只記 `relay.probe`、其餘行為不變，`require` 才剝除 relay／oai 標頭並靜默忽略。secret 有效長度 32–512、跨站重用會讓兩站失效；`require` 下直連主站 admin／student 會 lockout，見 §1.3。PR #67 另在 health 增加唯讀 `edgeMode`／`edgeSecrets`／`edgeSecretsDistinct`（僅計數／布林），secret 輪替與 relay 金鑰輪替分開，見 §6.1。
+- **Edge secret 閘（D9=B）為 `gatePrimaryApiRequest` → `gateRelayEdgeRequest`（PR #64）。** 它在主站、API 路徑、非 `/api/health` 生效；`accept`（預設）只記 `relay.probe`、其餘行為不變，`require` 才剝除 relay／oai 標頭並靜默忽略。secret 有效長度 32–512、跨站重用會讓兩站失效；`require` 下直連主站 admin／student 會 lockout，見 §1.3。PR #67 另在 health 增加唯讀 `edgeMode`／`edgeSecrets`／`edgeSecretsDistinct`（僅計數／布林），secret 輪替與 relay 金鑰輪替分開，見 §6.1。PR #69 把模式與 secret 有效性抽到 `site/lib/relay-edge-config.ts`（`readEdgeGateMode`／`isUsableEdgeSecret`／`readEdgeSenderSecret`），並在次站 `require` 下缺可用當前 secret 時回 `503 relay_edge_secret_unavailable`、次站 health 增加唯讀 `edgeSenderSecret`（`present`／`missing`），見 §1.4（C1／C2）。
 - **設計文件不在 repo。** A-01 三站整合設計文件在 Project；本手冊以程式碼為準。
 - **O-1a 未通過前不得上線。** 見第 3(a) 節。
 
 ## 9. 程式碼交叉核對
 
-以下交叉核對的行號以 main `5afbcb9`（#64、#65、#67 已合併）為準；標為 `bbe1cfe2`／`9898c1e` 的列為歷史基準，不代表部署版本。PR #61 新增與移動的行號另列於表後，基準 `cc05e6e`；#67 只改動 `site/app/api/health/route.ts` 與 `site/lib/relay-edge-gate.ts`，故僅這兩處行號位移，其餘檔案行號沿用 `7c8f851e`。
+以下交叉核對的行號以 main `d4d5c026`（#64、#65、#67、#69 已合併）為準；標為 `bbe1cfe2`／`9898c1e` 的列為歷史基準，不代表部署版本。PR #61 新增與移動的行號另列於表後，基準 `cc05e6e`。#67 改動 `site/app/api/health/route.ts` 與 `site/lib/relay-edge-gate.ts`；#69 新增 `site/lib/relay-edge-config.ts`（移入 `readEdgeGateMode`／`isUsableEdgeSecret`／`readEdgeSenderSecret`）並改動 `site/app/api/backend-client.ts`、`site/app/api/health/route.ts`、`site/lib/relay-edge-gate.ts`。上述檔案的行號已依 `d4d5c026` 重算；未受 #67／#69 影響的檔案行號與 `5afbcb9` 相同。
 
-| 項目 | 值 | 程式碼位置（基準 main `5afbcb9`） |
+| 項目 | 值 | 程式碼位置（基準 main `d4d5c026`） |
 | --- | --- | --- |
-| 次站簽章金鑰長度門檻 | ≥ 32 | `site/app/api/backend-client.ts:233` |
-| 次站站別必須相符 | `A01_RELAY_SITE === SITE_NAME` | `site/app/api/backend-client.ts:233-234` |
-| 次站刪除 `oai-*`／`x-a01-relay-*` | 全部刪除 | `site/app/api/backend-client.ts:213-221` |
-| 匿名且簽章有效時仍簽章 | `user-id`／`user-email` 用 `-` sentinel | `site/app/api/backend-client.ts:242,262-263` |
-| 匿名且無簽章能力時不帶標頭 | 不簽、不帶 `oai-*`／`x-a01-relay-*`；不會僅因缺簽章能力而 503 | `site/app/api/backend-client.ts:236,242` |
-| 有身分且無簽章能力 | `503 relay_signing_unavailable` | `site/app/api/backend-client.ts:235-236` |
-| 次站簽章區塊例外（含匿名） | 非 GET／HEAD 讀 body／簽章拋錯 → catch 回 503 | `site/app/api/backend-client.ts:238-282` |
-| 次站 signed role 一律 `-` | `-` | `site/app/api/backend-client.ts:254,265` |
+| 次站簽章金鑰長度門檻 | ≥ 32 | `site/app/api/backend-client.ts:234` |
+| 次站站別必須相符 | `A01_RELAY_SITE === SITE_NAME` | `site/app/api/backend-client.ts:234-235` |
+| 次站刪除 `oai-*`／`x-a01-relay-*` | 全部刪除 | `site/app/api/backend-client.ts:214-222` |
+| 匿名且簽章有效時仍簽章 | `user-id`／`user-email` 用 `-` sentinel | `site/app/api/backend-client.ts:251,271-272` |
+| 匿名且無簽章能力時不帶標頭 | 不簽、不帶 `oai-*`／`x-a01-relay-*`；不會僅因缺簽章能力而 503 | `site/app/api/backend-client.ts:237,251` |
+| 有身分且無簽章能力 | `503 relay_signing_unavailable` | `site/app/api/backend-client.ts:236-237` |
+| 次站 `require` 缺當前 edge secret（含匿名） | 讀 body 前回 `503 relay_edge_secret_unavailable`（C1） | `site/app/api/backend-client.ts:239,243-244` |
+| 次站簽章區塊例外（含匿名） | 非 GET／HEAD 讀 body／簽章拋錯 → catch 回 503 | `site/app/api/backend-client.ts:247-287` |
+| 次站 signed role 一律 `-` | `-` | `site/app/api/backend-client.ts:263,274` |
 | 模式解析（舊版，#59 前，`9898c1e`） | 未設／`null`／空／`off`→`off`；`transitional`→`transitional`；其他（含純空白、`OFF`、`Transitional`）→`strict` | `site/lib/relay-verification.ts:24-29` |
-| 模式解析（目前 main，含 #59） | trim＋轉小寫：純空白→`off`、`OFF`→`off`、`Transitional`→`transitional`、非字串→`strict` | `site/lib/relay-verification.ts:24-31`（`5afbcb9`） |
+| 模式解析（目前 main，含 #59） | trim＋轉小寫：純空白→`off`、`OFF`→`off`、`Transitional`→`transitional`、非字串→`strict` | `site/lib/relay-verification.ts:24-31`（`d4d5c026`） |
 | 時鐘偏差 | ±300s | `site/lib/relay-verification.ts:15` |
 | 一般 body 上限 | 8 MiB | `site/lib/relay-verification.ts:12` |
 | upload body 上限 | 21 MiB | `site/lib/relay-verification.ts:14` |
 | nonce 表 | `relay_nonces(nonce PK, expires_at)` | `site/drizzle/0003_superb_purifiers.sql:1-4`、`site/db/schema.ts:112-115` |
 | nonce 僅非 GET／HEAD 使用 | GET／HEAD 不寫表 | `site/lib/relay-verification.ts:136-143` |
 | 驗章失敗不回退 `oai-*` | `relayRejected` → 401 | `site/app/api/auth-helper.ts:116`；例 `site/app/api/student/me/route.ts:27-29` |
-| health 不走 401 | 一律 200，以 `relaySeen` 回報 | `site/app/api/health/route.ts:40,65-78` |
-| 代理成功回應標記 | `x-data-plane: primary`（含主站 401／403） | `site/app/api/backend-client.ts:299` |
-| 主站不可達 | `503 backend_unavailable`（無 `x-data-plane`） | `site/app/api/backend-client.ts:306-314` |
-| 次站未設 `PRIMARY_ORIGIN` | `503 backend_disabled` | `site/app/api/backend-client.ts:192-199` |
+| health 不走 401 | 一律 200，以 `relaySeen` 回報 | `site/app/api/health/route.ts:44,69-94` |
+| 代理成功回應標記 | `x-data-plane: primary`（含主站 401／403） | `site/app/api/backend-client.ts:304` |
+| 主站不可達 | `503 backend_unavailable`（無 `x-data-plane`） | `site/app/api/backend-client.ts:311-319` |
+| 次站未設 `PRIMARY_ORIGIN` | `503 backend_disabled` | `site/app/api/backend-client.ts:193-200` |
 | CORS 拒絕 | `403 {"error":"cors_forbidden"}` | `site/app/api/admin/auth/me/route.ts:16-18`、`site/app/api/student/me/route.ts:17-19` |
 | student guest 也是 200 | `authenticated:false, guest:true` | `site/app/api/student/me/route.ts:56-67` |
 | student 驗證身分 200 | `authenticated:true, user, role, isSynthetic` | `site/app/api/student/me/route.ts:38-53` |
 | admin 非管理員 403 | `authenticated:true, error:"admin permission required"` | `site/app/api/admin/auth/me/route.ts:44-49` |
 | 管理員只由 allowlist 決定 | `ADMIN_EMAILS` | `site/app/api/auth-helper.ts:45-50,270-273` |
-| health 欄位（#67 後） | `relayMode`／`relayKeys`／`relaySeen`／`edgeMode`／`edgeSecrets`／`edgeSecretsDistinct` | `site/app/api/health/route.ts:73-78` |
-| edge 閘模式解析（未設→`accept`、無法辨識→`require`） | `undefined`／`null`→`accept`；非字串→`require`；trim＋轉小寫後 `""`／`"accept"`→`accept`，其他→`require` | `site/lib/relay-edge-gate.ts:14-19` |
-| edge secret 有效長度 | 32–512 字元（含端點），超出視同未設定 | `site/lib/relay-edge-gate.ts:33-35`；次站送出判斷 `site/app/api/backend-client.ts:275` |
-| edge secret 跨站重用 | 任一 student secret 等於任一 admin secret → 兩站皆空 | `site/lib/relay-edge-gate.ts:37-42` |
-| health edge 欄位僅計數／布林 | `edgeSecrets` 為項數、`edgeSecretsDistinct` 為布林；不輸出值／長度／前綴／雜湊 | `site/lib/relay-edge-gate.ts:51-59`、`site/app/api/health/route.ts:76-78` |
+| health 欄位（#67／#69 後） | `relayMode`／`relayKeys`／`relaySeen`／`edgeMode`／`edgeSecrets`／`edgeSecretsDistinct`（＋次站 `edgeSenderSecret`） | `site/app/api/health/route.ts:88-94` |
+| edge 閘模式解析（未設→`accept`、無法辨識→`require`） | `undefined`／`null`→`accept`；非字串→`require`；trim＋轉小寫後 `""`／`"accept"`→`accept`，其他→`require` | `site/lib/relay-edge-config.ts:4-9` |
+| edge secret 有效長度 | 32–512 字元（含端點），超出視同未設定 | `site/lib/relay-edge-config.ts:11-13`；次站送出判斷 `site/lib/relay-edge-config.ts:16-21`、`site/app/api/backend-client.ts:280` |
+| edge secret 跨站重用 | 任一 student secret 等於任一 admin secret → 兩站皆空 | `site/lib/relay-edge-gate.ts:28-33` |
+| health edge 欄位僅計數／布林 | `edgeSecrets` 為項數、`edgeSecretsDistinct` 為布林；次站 `edgeSenderSecret` 僅 `present`／`missing`；皆不輸出值／長度／前綴／雜湊 | `site/lib/relay-edge-gate.ts:42-50`、`site/app/api/health/route.ts:91-94` |
+| 次站 `require` 缺 secret fail-fast（C1） | 次站無可用當前 edge secret 且 `A01_RELAY_EDGE_MODE=require` → 讀 body 前回 `503 relay_edge_secret_unavailable` | `site/app/api/backend-client.ts:239,243-244` |
+| 次站 health `edgeSenderSecret`（C2） | 僅次站輸出 `present`／`missing`；與 C1 同一判定，首次 `missing` 記一次 warn | `site/app/api/health/route.ts:75-85,94` |
 | 兩站金鑰不得相同 | 跨站共用任一即兩站皆空 | `site/lib/relay-verification.ts:39-44` |
 | `relayKeys` 為綁定項數 | 同站現行與 `_PREV` 相同會重複計數 | `site/lib/relay-verification.ts:33-37,46-49` |
 | 未簽章標頭僅供顯示 | `chatgpt-auth.ts` | `site/app/chatgpt-auth.ts:11-13,21-40` |
 
 PR #61 交叉核對（`cc05e6e`）：`site/app/api/auth-helper.ts:82-101` 為 logger（含欄位分類、字串化與 try/catch），`:103-120` 為 per-Request 快取、mode 分流、驗章後記錄及拒絕／回退決策；`site/lib/relay-verification.ts:97-148` 為驗章快取及 nonce 後結果。應用日誌測試見 `site/tests/relay-logging.test.mjs`；本地測試不代替平台管線證據。
 
-Edge secret 閘（D9=B）由 PR #64 實作：主站在 `gateApiRequest` 之後、非 `/api/health` 的 API 路徑檢查 `x-a01-relay-edge-secret`（`gatePrimaryApiRequest` → `gateRelayEdgeRequest`，`site/lib/relay-edge-gate.ts:95-123`），模式 `A01_RELAY_EDGE_MODE=accept|require`，`/api/health` 豁免（`:121`）；`accept` 只記 `relay.probe`、保留 relay／oai 標頭照舊進驗章並移除 edge header；`require` 下缺失／錯誤 secret 記 `relay.probe`、剝除 `x-a01-relay-*`／`oai-*`、不產生 `invalid`；secret 相符但簽章錯仍為 `invalid` 401。PR #67 另在 health 增加唯讀 `edgeMode`／`edgeSecrets`／`edgeSecretsDistinct`（僅計數／布林），並匯出 `countValidEdgeSecrets` 共用同一套 32–512 與跨站重用規則（`site/lib/relay-edge-gate.ts:51-59`、`site/app/api/health/route.ts:76-78`）。相關行號以 main `5afbcb9`（#64、#65、#67 已合併）為準。
+Edge secret 閘（D9=B）由 PR #64 實作：主站在 `gateApiRequest` 之後、非 `/api/health` 的 API 路徑檢查 `x-a01-relay-edge-secret`（`gatePrimaryApiRequest` → `gateRelayEdgeRequest`，`site/lib/relay-edge-gate.ts:86-114`），模式 `A01_RELAY_EDGE_MODE=accept|require`，`/api/health` 豁免（`:112`）；`accept` 只記 `relay.probe`、保留 relay／oai 標頭照舊進驗章並移除 edge header；`require` 下缺失／錯誤 secret 記 `relay.probe`、剝除 `x-a01-relay-*`／`oai-*`、不產生 `invalid`；secret 相符但簽章錯仍為 `invalid` 401。PR #67 另在 health 增加唯讀 `edgeMode`／`edgeSecrets`／`edgeSecretsDistinct`（僅計數／布林），並匯出 `countValidEdgeSecrets` 共用同一套 32–512 與跨站重用規則（`site/lib/relay-edge-gate.ts:42-50`、`site/app/api/health/route.ts:91-93`）。PR #69 把 `readEdgeGateMode`／`isUsableEdgeSecret`／`readEdgeSenderSecret` 抽到 `site/lib/relay-edge-config.ts`（`:4-9`／`:11-13`／`:16-21`），次站 `require` 下缺可用當前 secret 於讀 body 前回 `503 relay_edge_secret_unavailable`（`site/app/api/backend-client.ts:239,243-244`），次站 health 增加唯讀 `edgeSenderSecret`（`site/app/api/health/route.ts:75-85,94`）。相關行號以 main `d4d5c026`（#64、#65、#67、#69 已合併）為準。
 
 ## 10. 本地驗證
 
 - `cd site && npm test`：涵蓋 `tests/relay-canonical.test.mjs`、`tests/relay-sign-verify.test.mjs`、`tests/relay-secondary.test.mjs`、`tests/relay-verify.test.mjs`、`tests/relay-logging.test.mjs`，在同一程序內模擬兩站與 D1，不需要網路。
-- PR #64 新增 edge 閘測試、#65 新增次站送出 edge secret 的測試、#67 新增 health edge 觀測與 `countValidEdgeSecrets` 測試（已合併）；`cd site && npm test` 會涵蓋 `tests/relay-edge-gate.test.mjs`、`tests/api-runtime.test.mjs`。
+- PR #64 新增 edge 閘測試、#65 新增次站送出 edge secret 的測試、#67 新增 health edge 觀測與 `countValidEdgeSecrets` 測試、#69 新增次站 `require` 缺 secret 的 `503 relay_edge_secret_unavailable` 與次站 health `edgeSenderSecret` 測試（均已合併）；`cd site && npm test` 會涵蓋 `tests/relay-edge-gate.test.mjs`、`tests/api-runtime.test.mjs`、`tests/relay-secondary.test.mjs`。
 - 本手冊的 production 驗證只用 GET；不包含對 production 的寫入。
 - 依 §4.4 Owner 驗收規則第 1 條，每次合併後須在更新後的 main 重跑 `cd site && npm test` 並重算本文件行號引用；`PASS` 須對應實際 head sha。
