@@ -79,7 +79,7 @@ const GUEST_AUTH: NormalizedAuthContext = {
 
 const normalizedAuthByRequest = new WeakMap<Request, Promise<NormalizedAuthContext>>();
 
-function logRelayVerification(request: Request, mode: "transitional" | "strict", result: RelayVerification["status"]): void {
+function logRelayVerification(request: Request, mode: "transitional" | "strict", relay: RelayVerification): void {
   try {
     if (readRuntimeString("SITE_ROLE") !== "primary") return;
     const path = new URL(request.url).pathname.replace(/\/{2,}/g, "/").toLowerCase();
@@ -91,9 +91,9 @@ function logRelayVerification(request: Request, mode: "transitional" | "strict",
     const site = rawSite === "student" || rawSite === "admin" ? rawSite : "unknown";
     const method = request.method === "GET" || request.method === "HEAD" ? request.method : "OTHER";
     console.log(JSON.stringify({
-      evt: "relay.verify", result, site, mode,
+      evt: "relay.verify", result: relay.status, site, mode,
       identityPresent: request.headers.has("oai-authenticated-user-id") || request.headers.has("oai-authenticated-user-email"),
-      method, pathClass,
+      method, pathClass, synthetic: relay.status === "valid" && isSyntheticIdentity(relay.userId, relay.email),
     }));
   } catch {
     // Observability must not affect relay verification or authorization.
@@ -112,7 +112,7 @@ async function normalizeRequestAuth(request: Request): Promise<NormalizedAuthCon
   const mode = readRelayMode();
   if (mode === "off") return normalizeLegacyAuth(request);
   const relay = await verifyIncomingRelay(request);
-  logRelayVerification(request, mode, relay.status);
+  logRelayVerification(request, mode, relay);
   if (relay.status === "invalid") return { ...GUEST_AUTH, relayRejected: true };
   if (relay.status === "none") {
     return mode === "transitional" ? normalizeLegacyAuth(request) : { ...GUEST_AUTH };
@@ -302,3 +302,50 @@ function normalizeLegacyAuth(request: Request, headers: Headers = request.header
 }
 
 export const getAuthFromRequest = getNormalizedAuth;
+
+// --- Synthetic-traffic tagging (non-secret) --------------------------------
+// `A01_SYNTHETIC_ACCOUNTS` lists verified-identity identifiers (email or relay
+// user id) for controlled synthetic traffic. It is deliberately not a secret
+// and never authorizes anything: it only tags the `relay.verify` log so
+// synthetic samples can be separated from natural ones. It can only ever be
+// set from a *verified* relay identity, so no request header or body value can
+// forge it.
+
+const SYNTHETIC_ACCOUNTS_ENV = "A01_SYNTHETIC_ACCOUNTS";
+
+/**
+ * Parses the `A01_SYNTHETIC_ACCOUNTS` list: comma-separated identifiers,
+ * surrounding whitespace trimmed, case folded. An unset or blank value yields
+ * an empty list, which tags nothing as synthetic (fail-closed). The `-`
+ * placeholder used for signed-anonymous identities is dropped so it can never
+ * be matched by accident.
+ */
+export function parseSyntheticAccounts(raw: string | undefined): string[] {
+  if (typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0 && entry !== "-");
+}
+
+/** True when a synthetic-traffic allowlist is configured. Never exposes an entry. */
+export function isSyntheticAllowlistConfigured(): boolean {
+  return parseSyntheticAccounts(readRuntimeString(SYNTHETIC_ACCOUNTS_ENV)).length > 0;
+}
+
+/**
+ * A *verified* relay identity is synthetic only when it exactly matches a
+ * configured non-secret test account. Callers must pass the verified relay
+ * identity (`parsed.userId` / `parsed.email`), never a raw request header or
+ * body value, so a caller cannot self-declare as synthetic. An unset or blank
+ * allowlist always returns false.
+ */
+export function isSyntheticIdentity(userId: string, email: string): boolean {
+  const allowlist = parseSyntheticAccounts(readRuntimeString(SYNTHETIC_ACCOUNTS_ENV));
+  if (allowlist.length === 0) return false;
+  return [userId, email].some((value) => {
+    if (typeof value !== "string" || value === "-") return false;
+    const normalized = value.trim().toLowerCase();
+    return normalized.length > 0 && allowlist.includes(normalized);
+  });
+}
