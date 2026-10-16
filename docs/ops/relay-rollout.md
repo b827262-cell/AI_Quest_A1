@@ -306,7 +306,7 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | 日誌取樣 | 應用及三站相關平台採集均 100%，不取樣。 |
 | `invalid` | 完整觀察範圍內 `evt=relay.verify AND result=invalid` 為 0；包含 `site=unknown`／`pathClass=other`，無未經證實的例外。在 `require` 下，缺少或錯誤 edge secret 的請求不進 relay 驗章，改記 `evt=relay.probe`，不計入本項零容忍；secret 相符但簽章失敗仍為 `invalid`。 |
 | 異常身分組合 | `result=none AND identityPresent=true` 為 0；其他無法解釋的站別／路徑／身分組合亦須先解決，不得自動排除。 |
-| 有效樣本 | 建議值，待 Owner 確認：`result=valid AND site=student` ≥300；`result=valid AND site=admin` ≥100，並分列 GET／HEAD／OTHER 與路由模板。`none`、health、gate、CORS 拒絕不計入。 |
+| 有效樣本 | 建議值，待 Owner 確認：`result=valid AND site=student` ≥300；`result=valid AND site=admin` ≥100，並分列實際 HTTP 方法（GET／HEAD／PUT／POST／DELETE／PATCH，其餘落 `OTHER`）與路由模板。`none`、health、gate、CORS 拒絕不計入。 |
 | 讀寫覆蓋 | 兩站均有帶平台身分的成功 GET（§4.3）；每站每個適用的非 GET 業務路徑／方法至少 30 次成功驗證（建議值，待 Owner 確認）。每次須有 `valid` 及預期授權／業務成功回應；匿名簽章或 HTTP 200 本身不能證明合法使用者成功。 |
 | 未分類受保護路徑 | 0 個未解決；`pathClass=other` 先核對完整路由表，受保護者必須納入。 |
 | 日誌完整性 | 與符合記錄條件的主站請求數逐區間核對，無未解釋缺口／重複／解析失敗；另完成無應用日誌路徑的 invocation 核對。 |
@@ -339,7 +339,7 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | Admin | POST、DELETE `/api/admin/books`；POST `/api/admin/books/upload`；DELETE `/api/admin/books/[id]` | `admin`；四個路徑／方法分別至少 30 次（建議值，待 Owner 確認）；POST books 雖共用 upload handler，仍須獨立盤點。 |
 | 三站其他路由 | student books／content（4 個公開 GET，不呼叫 `getNormalizedAuth`，由 edge 閘涵蓋）、`/api/internal/sync/*`、health、OPTIONS、gate 等 | 不以名稱推斷 relay 保護；核對各自授權及實際控制流程。internal sync 使用獨立驗證，不能因沒有 `relay.verify` 就宣告無請求或安全。 |
 
-應用日誌的 `method=OTHER` 無法區分 PUT／POST／DELETE，`pathClass` 也不能區分各子路由；因此不能用 OTHER 總量代替逐路徑 30 次證據（建議值，待 Owner 確認）。以已授權的受控測試執行清單、路由模板與時間區間、平台可用的安全關聯資料核對；若無法區分或關聯，該項 `HOLD`，不得推算成功或擴充敏感日誌。
+應用日誌的 `method` 現記錄實際 HTTP 動詞（GET／HEAD／PUT／POST／DELETE／PATCH，其餘落 `OTHER`），可區分 PUT／POST／DELETE／PATCH；但 `pathClass` 仍只分 `student`／`admin`／`other`，不能區分各子路由。因此不能以方法總量代替逐路徑 30 次證據（建議值，待 Owner 確認），仍須以路由模板逐項核對。此欄位細分自後續 PR（`method` 由原 `GET／HEAD／OTHER` 三分改為記錄實際動詞；在此之前已記錄的日誌仍為 `OTHER`，統計時須分開處理）。以已授權的受控測試執行清單、路由模板與時間區間、平台可用的安全關聯資料核對；若無法區分或關聯，該項 `HOLD`，不得推算成功或擴充敏感日誌。
 
 合成流量標記另以日誌欄位 `synthetic`（布林，預設 `false`）表達：僅當該筆 `relay.verify` 的 `result=valid`，且**已驗章身分**（`parsed.userId`／`parsed.email`，即簽章內容）完全等於伺服器端非 secret 白名單 `A01_SYNTHETIC_ACCOUNTS` 的某一項時才為 `true`（`site/app/api/auth-helper.ts:96,314,323-351`）。請求標頭或 body **無法**設定此欄位；白名單未設定或為空時一律 `false`；`invalid`／`none` 一律 `false`。白名單內容不得出現在任何日誌、health 或錯誤訊息；health 僅以 `syntheticAllowlist` 布林回報是否已設定（`site/app/api/health/route.ts:100-103`）。此標記只供把合成樣本與自然樣本分列，**不得**改動 E／L、300／100／30 或回滾數字，也不計入使用者面向失敗率。
 
@@ -479,7 +479,7 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | `relayKeys` 為綁定項數 | 同站現行與 `_PREV` 相同會重複計數 | `site/lib/relay-verification.ts:33-37,46-49` |
 | 未簽章標頭僅供顯示 | `chatgpt-auth.ts` | `site/app/chatgpt-auth.ts:11-13,21-40` |
 
-PR #61 交叉核對（`cc05e6e`）：`site/app/api/auth-helper.ts:82-101` 為 logger（含欄位分類、字串化與 try/catch），`:103-120` 為 per-Request 快取、mode 分流、驗章後記錄及拒絕／回退決策；`site/lib/relay-verification.ts:97-148` 為驗章快取及 nonce 後結果。應用日誌測試見 `site/tests/relay-logging.test.mjs`；本地測試不代替平台管線證據。
+PR #61 交叉核對（`cc05e6e`）：`site/app/api/auth-helper.ts:82-101` 為 logger（含欄位分類、字串化與 try/catch），`:103-120` 為 per-Request 快取、mode 分流、驗章後記錄及拒絕／回退決策；`site/lib/relay-verification.ts:97-148` 為驗章快取及 nonce 後結果。應用日誌測試見 `site/tests/relay-logging.test.mjs`；本地測試不代替平台管線證據。後續 PR 將 logger 的 `method` 欄位由 `GET／HEAD／OTHER` 細分為實際動詞（GET／HEAD／PUT／POST／DELETE／PATCH，其餘 `OTHER`），欄位名與其他欄位不變、未新增可識別資訊，logger 行號（`auth-helper.ts:82-101`）不變。
 
 本 PR（合成標記，base main `3d2ac731`）在 `relay.verify` 日誌物件增列 `synthetic` 布林（`site/app/api/auth-helper.ts:96`）：僅在 `result=valid` 且**已驗章身分**完全等於非 secret 白名單 `A01_SYNTHETIC_ACCOUNTS` 時為 `true`，請求標頭／body 無法設定；解析與判定見 `site/app/api/auth-helper.ts:314,323-351`。health 另增唯讀 `syntheticAllowlist` 布林（`site/app/api/health/route.ts:100-103`，僅 `"configured"`／`"unset"`）。logger 本體行號（`auth-helper.ts:82-101`）與其他欄位名／語意不變；新增函式置於檔尾，`auth-helper.ts:1-304` 既有行號不受影響。
 

@@ -89,7 +89,7 @@ function logRelayVerification(request: Request, mode: "transitional" | "strict",
     if (pathClass === "health") return;
     const rawSite = request.headers.get("x-a01-relay-site");
     const site = rawSite === "student" || rawSite === "admin" ? rawSite : "unknown";
-    const method = request.method === "GET" || request.method === "HEAD" ? request.method : "OTHER";
+    const method = ["GET", "HEAD", "PUT", "POST", "DELETE", "PATCH"].includes(request.method) ? request.method : "OTHER";
     console.log(JSON.stringify({
       evt: "relay.verify", result: relay.status, site, mode,
       identityPresent: request.headers.has("oai-authenticated-user-id") || request.headers.has("oai-authenticated-user-email"),
