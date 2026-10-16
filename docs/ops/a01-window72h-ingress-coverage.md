@@ -67,6 +67,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
    差值須為 0
    ```
    等式已由已併的 `scripts/a01-coverage/`（#76）以可設定輸入實作（`scripts/a01-coverage/core.mjs:177-192`；`README.md:14`），輸出標明「提案，未經 Owner 確認」。缺任一分量即 `HOLD`，不推估。
+   - **分量互斥性與單一分母【提案，未經 Owner 確認】**：上述分量**並非天然互斥**——(a) edge 閘剝除的請求會**先記 `relay.probe`**，其後若仍到達應用層，可能再產生一筆 `relay.verify result=none`（同一請求被兩桶各記一次）；(b) 次站 delegate 到主站為**次站／主站雙重 invocation**。故即使「完整採集」，未去重仍可能算出非 0 差值。修正：須先定義**單一 ingress 分母**（以平台 invocation 為準、涵蓋三站），並規定**每筆 invocation 依固定判定順序歸入唯一桶**——先判 edge 剝除（→`probe`）→ 再判 health／books／sync／cors／static（→對應桶）→ 餘者為 `verify`；同一請求的後續 hop／重複 invocation 不再重複計入（與本節第 2 項 nonce 去重一致）。此分母定義與歸屬規則仍為**【提案】**，不得作為 Gate 依據。
 
 ### 1.4 與 Owner 已決規則的關係
 
@@ -119,8 +120,8 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 
 - **【決議】回滾參數**：觀測區間長度 `W = 30min`、每區間最低樣本 `Nmin = 100`、相對基準增幅門檻 `Δauth = +1pp`（401／403）、`Δ5xx = +0.5pp`、觸發所需連續區間數 `K = 3`。
 - **【決議】零容忍立即回滾**：`result=invalid` ≥ 1 或 `none AND identityPresent=true` ≥ 1，或可重現的合法使用者被拒，**不受 W／Nmin／Δ／K 限制，立即回滾**。
-- **【決議】執行人預設 Owner，AGY 監看**。
-- 回滾首選（不改程式）：主站 `A01_RELAY_MODE=transitional` 並重新部署，且以 health `relayMode=transitional` 與合法請求恢復為成功判定（`relay-rollout.md` §5.2）。
+- **【決議】回滾執行人為 AGY、Owner 事後確認**（修正前稿「執行人預設 Owner、AGY 監看」）。
+- 回滾首選（不改程式）：主站 `A01_RELAY_EDGE_MODE` 改回 `accept`，並**重新起算 72h 窗口**；以合法請求恢復成功為判定（`relay-rollout.md` §5.2）。窗口內 `A01_RELAY_MODE` 本即為 `transitional`，回滾**不需**改 `A01_RELAY_MODE`、亦**不需**重新部署或切換模式。
 - 5xx 基準須納入次站 `503 relay_signing_unavailable`（`site/app/api/backend-client.ts:236`）與 `require` 下的 `503 relay_edge_secret_unavailable`（`site/app/api/backend-client.ts:243-244`），標原因、跨站去重（Owner 驗收規則第 4 條）。
 
 ---
@@ -136,6 +137,10 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 ### 3.2 樣本計數【決議】
 
 - **合成只補 ≥30、不計入 300／100**：合成樣本只填補每個適用非 GET 路徑 × 動詞的 `>=30` 下限；Student `>=300` / Admin `>=100` 僅計自然樣本。
+- ⚠️ **待 Owner 釐清【未決】**：合成樣本在 **staging** 產生，而本節 `>=30` 下限的樣本歸屬與 runbook「staging 樣本不得計入 production」**相衝突**。**不自行改決議**，列兩案待 Owner 裁定：
+  - **(a) 獨立檢查**：`staging` 自身達 `>=30` 即通過該獨立項；**production 仍需自然樣本 `>=30`**（合成不補 production）。
+  - **(b) 明確接受補量**：Owner 明確接受以 staging 合成樣本補足 production 的 `>=30` 下限（僅該下限，不含 `300／100`）。
+  - Owner 裁定前，`>=30` 之 production 歸屬一律 `HOLD`。
 - **含 GET**（Owner 18:00 決議）。
 - 合成樣本與自然樣本**分列**，不得混算。
 - 合成標記僅能由**已驗章身分**（`parsed.userId`／`parsed.email`）完全等於非 secret 白名單 `A01_SYNTHETIC_ACCOUNTS` 時為 `true`（`site/app/api/auth-helper.ts:306-351`，特別是 `:343-351`）；請求標頭或 body 無法設定；未設定或空白一律 `false`（fail-closed）。health 僅以布林 `syntheticAllowlist` 回報是否已設定（`site/app/api/health/route.ts:103`）。
@@ -162,6 +167,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 - 本文件**不修改** `docs/ops/relay-rollout.md`，以避免行號位移；兩者衝突時，Owner 決議優先，並回頭修訂 `relay-rollout.md`（另開 PR）。
 - 仍為 `HOLD`／未完成之項（不因本文件而解除）：三站平台日誌可用性、O-1a 前置、D1 migration `0003` 套用、平台管線預檢、staging 回滾演練、Strict 切換授權。詳見 `relay-rollout.md` §3、§4.2、§4.4。
 - §1.3 四項量測設計與 `scripts/a01-coverage/` 的覆蓋等式仍為**【提案】**，須 Owner 確認後才可作為 Gate 依據。
+- 另有一項**【未決】待 Owner 釐清**：staging 合成樣本是否計入 production 的 `>=30` 下限（§3.2），與 runbook「staging 樣本不得計入 production」衝突；列兩案待裁定。
 
 ---
 
@@ -231,6 +237,8 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 
 缺任一分量即 `HOLD`，不推估。
 
+**分量互斥性與單一分母【提案，未經 Owner 確認】**：上表分量**非天然互斥**——edge 剝除的請求可能先記 `relay.probe`，其後於應用層再產生 `relay.verify result=none`；次站 delegate 到主站為雙重 invocation。故須以**單一 ingress 分母**（平台 invocation、涵蓋三站）並規定**每筆 invocation 依固定判定順序歸入唯一桶**（先 `probe` 剝除 → 再 `health`／`books`／`sync`／`cors`／`static` → 餘者 `verify`），同一請求的後續 hop 不重複計入。
+
 ---
 
 ## 附錄 A：`f012b824` 引用清單（file:line）
@@ -267,14 +275,15 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 | 日誌保留 14 天；IP 遮罩、ID 雜湊 | 【決議】 |
 | 日誌匯出權限 AGY + Owner | 【決議】 |
 | ingress 等價以設定比對清單、由非作者驗證者判定 | 【決議】 |
-| 回滾 W=30min／Nmin=100／Δauth=+1pp／Δ5xx=+0.5pp／K=3；零容忍立即回滾；執行人預設 Owner、AGY 監看 | 【決議】 |
+| 回滾 W=30min／Nmin=100／Δauth=+1pp／Δ5xx=+0.5pp／K=3；零容忍立即回滾；執行人 AGY、Owner 事後確認；回滾＝`A01_RELAY_EDGE_MODE` 改回 `accept` 並重新起算 72h | 【決議】 |
 | 窗口後清除測試帳號與白名單；選項 C 排除 | 【決議】 |
 | ingress 100% 採集 | 【提案】 |
 | nonce 去重 | 【提案】 |
 | 失敗原因碼彙總分類 | 【提案】 |
-| 覆蓋等式 `ingress = verify + probe + health + books + sync + cors + static` | 【提案】 |
+| 覆蓋等式 `ingress = verify + probe + health + books + sync + cors + static`（含單一分母與唯一桶歸屬規則） | 【提案】 |
 | 窗口長度下限 24 小時（§2.1） | 【提案】 |
 | 合成補樣清單（5 個非 GET 路徑 × 動詞；§5.1） | 【現況】（路由盤點；門檻 ≥30 為【決議】） |
 | 盲區清單 B1–B9（§5.2） | 【現況】 |
 | 合成節奏與停止條件 5 條（§5.3） | 【提案】 |
 | 覆蓋等式「分量 ⇄ 入口」對照表（§5.4） | 【提案】 |
+| staging 合成樣本是否計入 production `>=30`（§3.2） | 【未決】待 Owner 釐清 |
