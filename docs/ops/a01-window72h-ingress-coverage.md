@@ -6,7 +6,9 @@
 2. **72h 窗口定義** — 對應專案文件 `claude/a01-window72h-draft-20261016.md`（設計文件在 Project，不在本 repo）；本文件填入 Owner 於 2026-10-16 的決議。
 3. **合成取樣計畫** — Owner 13:5x／18:00 決議與 PM 2026-10-16 21:30 派工。
 
-> **file:line 基準：main `b9ee98e33a1f3353d0d3c6f0c457fcd28fe31637`（#76 已併）。** 所有引用皆以此 commit 為準；若程式碼後續變更，須依 `relay-rollout.md` §4.4 Owner 驗收規則第 3 條重評並重新起算窗口。
+> **file:line 基準：main `f012b82499492949a6f3958f9a823ac8d1fce30e`（#74 已併）。** 所有引用皆以此 commit 為準；若程式碼後續變更，須依 `relay-rollout.md` §4.4 Owner 驗收規則第 3 條重評並重新起算窗口。
+>
+> **基準變更註記（2026-10-16）：** 前版基準為 `b9ee98e33a1f3353d0d3c6f0c457fcd28fe31637`（#76）。`b9ee98e3 → f012b824` 之間僅新增 `scripts/a01-synthetic/` 與 `docs/evidence/`（#74），未更動任何 `site/**` 或 `docs/ops/**` 既有檔案，故本文件所有 `site/**` 行號不變；受影響者為原標為「open PR #74／`b9ee98e3` 尚未包含」之引用，已更新為併入狀態並補行號（見 §3.3、§3.4、附錄 A）。
 
 > **狀態標記：** `【決議】`＝Owner 已決定；`【提案】`＝尚未經 Owner 確認，不得作為 Gate 通過或回滾依據；`【現況】`＝程式碼／既有文件已存在之事實。
 
@@ -38,7 +40,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 
 **沒有 `relay.verify` 的入口（缺口）：**
 
-| 入口 | 位置（`b9ee98e3`） | 現行控制 |
+| 入口 | 位置（`f012b824`） | 現行控制 |
 | --- | --- | --- |
 | student 公開 books／content（4 個 GET） | `site/app/api/student/books/route.ts:15`、`site/app/api/student/books/[id]/route.ts:19`、`site/app/api/student/books/content/route.ts:16`、`site/app/api/student/books/[id]/content/route.ts:20` | 不呼叫 `getNormalizedAuth`，僅由 edge 閘涵蓋 |
 | internal sync（POST／GET） | `site/app/api/internal/sync/_shared.ts:37`（`authorizeSyncRequest`） | 獨立 `x-sync-timestamp`／`x-sync-nonce`／`x-sync-signature` HMAC，不走 relay |
@@ -141,13 +143,13 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 ### 3.3 產出與脫敏【決議】
 
 - 僅寫出彙總與 manifest 至 `docs/evidence/`：IP 遮罩（IPv4 `/16`、IPv6 `/48`）、ID 雜湊、無原始請求內容、無 secret。
-  - 註：`docs/evidence/` 目錄契約（`README.md`／`.gitignore`）由**未併的 #74 草案**引入，`b9ee98e3` 尚未包含；本文件不因此新增該目錄。
-- 參考實作（草案）：open PR #74 `scripts/a01-synthetic/`（**非 `b9ee98e3` 內容**，故不列行號）。本文件不背書其合併狀態；若行為與本節衝突，以本節 Owner 決議為準。
+  - 註：`docs/evidence/` 目錄契約（`README.md`／`.gitignore`）已於 main `f012b824`（#74）併入（`docs/evidence/README.md:1-18`）；本文件不修改該目錄。
+- 參考實作：`scripts/a01-synthetic/` 已於 main `f012b824`（#74）併入（`scripts/a01-synthetic/index.mjs:19-23`（停止與脫敏輸出）、`:145-152`（清理計畫）；`scripts/a01-synthetic/core.mjs:78-117`（staging 守門）、`:142-176`（脫敏／遮罩／雜湊）；`scripts/a01-synthetic/targets.mjs:13-27`（路徑×動詞矩陣））。若其行為與本節 Owner 決議衝突，以本節 Owner 決議為準。
 
 ### 3.4 窗口後清理【決議】
 
 - 視窗結束後**清除測試帳號與白名單**（移除 `A01_SYNTHETIC_ACCOUNTS` 測試身分項目）。
-- manifest 記錄清理步驟：刪除測試資料、停用測試帳號、移除白名單（實作見 open PR #74 `scripts/a01-synthetic/`，非 `b9ee98e3` 內容）。
+- manifest 記錄清理步驟：刪除測試資料、停用測試帳號、移除白名單（實作見 `scripts/a01-synthetic/index.mjs:145-152`（清理計畫）與 `:216-221`（`--cleanup` 執行）；`f012b824`／#74 已併）。
 
 ### 3.5 已排除選項
 
@@ -231,7 +233,7 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 
 ---
 
-## 附錄 A：`b9ee98e3` 引用清單（file:line）
+## 附錄 A：`f012b824` 引用清單（file:line）
 
 | 主題 | 位置 |
 | --- | --- |
@@ -251,8 +253,8 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 | CORS preflight | `site/app/api/student/progress/route.ts:10-13` |
 | relay nonce 表 | `site/drizzle/0003_superb_purifiers.sql`（`relay_nonces`） |
 | 覆蓋等式實作（提案） | `scripts/a01-coverage/core.mjs:177-192`、`scripts/a01-coverage/README.md:14` |
-| 合成驅動（草案） | open PR #74 `scripts/a01-synthetic/`（**非 `b9ee98e3` 內容**，不列行號） |
-| 脫敏證據目錄 | `docs/evidence/`（目錄契約由 open PR #74 引入；`b9ee98e3` 尚未包含） |
+| 合成驅動 | `scripts/a01-synthetic/`（`f012b824`／#74 併入：`index.mjs:19-23`、`:145-152`、`:216-221`；`core.mjs:78-117`、`:142-176`；`targets.mjs:13-27`） |
+| 脫敏證據目錄 | `docs/evidence/`（`README.md`／`.gitignore`；`f012b824`／#74 併入） |
 | 既有 72h Gate 與回滾 | `docs/ops/relay-rollout.md` §4.4、§5 |
 
 ## 附錄 B：決議 vs 提案對照
