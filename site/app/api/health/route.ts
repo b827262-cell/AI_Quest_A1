@@ -99,8 +99,8 @@ export async function GET(request: Request) {
     edge: "cloudflare-worker",
     adminAllowlist: adminAllowlist ? "configured" : "unset",
     // Whether the non-secret synthetic-traffic allowlist exists is observable
-    // without exposing any entry. Like `adminAllowlist`, it is a boolean only.
-    syntheticAllowlist: isSyntheticAllowlistConfigured() ? "configured" : "unset",
+    // without exposing any entry or count: this is a JSON boolean only.
+    syntheticAllowlist: isSyntheticAllowlistConfigured(),
     // Binding state is derived from the live worker environment, not hardcoded,
     // so staging predeploy reports unbound and a real deployment reports bound.
     d1: d1Bound ? "bound" : "unbound",

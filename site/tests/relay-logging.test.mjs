@@ -444,12 +444,80 @@ test("privacy: the synthetic tag never leaks an allowlist entry into the log lin
 test("health exposes only whether the synthetic allowlist is configured", async () => {
   await withRuntime({}, async () => {
     const body = await (await health(direct("/api/health"))).json();
-    assert.equal(body.syntheticAllowlist, "unset");
+    assert.equal(body.syntheticAllowlist, false);
     assert.equal(JSON.stringify(body).includes(SYNTHETIC_EMAIL), false);
   });
   await withRuntime({ A01_SYNTHETIC_ACCOUNTS: SYNTHETIC_EMAIL }, async () => {
     const body = await (await health(direct("/api/health"))).json();
-    assert.equal(body.syntheticAllowlist, "configured");
+    assert.equal(body.syntheticAllowlist, true);
+    assert.equal(typeof body.syntheticAllowlist, "boolean");
     assert.equal(JSON.stringify(body).includes(SYNTHETIC_EMAIL), false);
+  });
+});
+
+test("E9 a valid signed query cannot self-declare synthetic or substitute an allowlisted account", async () => {
+  await withRuntime({ A01_SYNTHETIC_ACCOUNTS: `${SYNTHETIC_EMAIL},${SYNTHETIC_USER_ID}` }, async () => {
+    const { request } = await signedRequest({ email: "natural@example.test", userId: "natural-user",
+      search: `?synthetic=true&email=${encodeURIComponent(SYNTHETIC_EMAIL)}&userId=${SYNTHETIC_USER_ID}` });
+    const { value, events } = await capture(() => getNormalizedAuth(request));
+    assert.equal(value.isAuthenticated, true);
+    assert.equal(events.length, 1);
+    checkEvent(events[0], { result: "valid", synthetic: false });
+  });
+});
+
+test("E10 a valid signed body cannot self-declare synthetic or substitute an allowlisted account", async () => {
+  await withRuntime({ A01_SYNTHETIC_ACCOUNTS: `${SYNTHETIC_EMAIL},${SYNTHETIC_USER_ID}` }, async () => {
+    const { request } = await signedRequest({ method: "POST", pathname: "/api/student/progress",
+      email: "natural@example.test", userId: "natural-user",
+      body: JSON.stringify({ synthetic: true, email: SYNTHETIC_EMAIL, userId: SYNTHETIC_USER_ID }) });
+    const { value, events } = await capture(() => getNormalizedAuth(request));
+    assert.equal(value.isAuthenticated, true);
+    assert.equal(events.length, 1);
+    checkEvent(events[0], { result: "valid", synthetic: false });
+  });
+});
+
+test("E11 unsigned body and query flags remain none/false even with forged allowlisted identity", async () => {
+  await withRuntime({ A01_SYNTHETIC_ACCOUNTS: `${SYNTHETIC_EMAIL},${SYNTHETIC_USER_ID}` }, async () => {
+    const request = new Request("https://primary.example.test/api/student/progress?synthetic=true", {
+      method: "POST", headers: { "content-type": "application/json", "x-synthetic": "true",
+        "oai-authenticated-user-id": SYNTHETIC_USER_ID, "oai-authenticated-user-email": SYNTHETIC_EMAIL },
+      body: JSON.stringify({ synthetic: true, email: SYNTHETIC_EMAIL, userId: SYNTHETIC_USER_ID }),
+    });
+    const { events } = await capture(() => getNormalizedAuth(request));
+    assert.equal(events.length, 1);
+    checkEvent(events[0], { result: "none", identityPresent: true, synthetic: false });
+  });
+});
+
+test("built Worker injects the synthetic allowlist and clears an omitted binding on the next request", async () => {
+  const { default: worker } = await import(new URL("../dist/server/index.js?synthetic-binding=1", import.meta.url).href);
+  const ctx = { waitUntil() {}, passThroughOnException() {} };
+  const assets = { fetch: async () => new Response("not found", { status: 404 }) };
+  await worker.fetch(direct("/api/health"), { ASSETS: assets, SITE_ROLE: "primary", SITE_NAME: "backend" }, ctx);
+  await withRuntime({}, async () => {
+    const env = { ASSETS: assets, DB: globalThis.DB, SITE_ROLE: "primary", SITE_NAME: "backend",
+      A01_RELAY_MODE: "strict", A01_RELAY_KEY_STUDENT: STUDENT_KEY, A01_RELAY_KEY_ADMIN: ADMIN_KEY,
+      ADMIN_EMAILS: "owner@example.test", A01_SYNTHETIC_ACCOUNTS: `${SYNTHETIC_EMAIL},${SYNTHETIC_USER_ID}` };
+    const configured = await signedRequest({ email: SYNTHETIC_EMAIL });
+    const first = await capture(() => worker.fetch(configured.request, env, ctx));
+    assert.equal(first.value.status, 200);
+    assert.equal(first.events.length, 1);
+    checkEvent(first.events[0], { result: "valid", synthetic: true });
+    const healthConfigured = await (await worker.fetch(direct("/api/health"), env, ctx)).json();
+    assert.equal(healthConfigured.syntheticAllowlist, true);
+    for (const entry of [SYNTHETIC_EMAIL, SYNTHETIC_USER_ID]) {
+      assert.equal(JSON.stringify(healthConfigured).includes(entry), false);
+      assert.equal(first.lines.join("\n").includes(entry), false);
+    }
+    const omitted = { ...env }; delete omitted.A01_SYNTHETIC_ACCOUNTS;
+    const unconfigured = await signedRequest({ email: SYNTHETIC_EMAIL });
+    const second = await capture(() => worker.fetch(unconfigured.request, omitted, ctx));
+    assert.equal(second.value.status, 200);
+    assert.equal(second.events.length, 1);
+    checkEvent(second.events[0], { result: "valid", synthetic: false });
+    const healthOmitted = await (await worker.fetch(direct("/api/health"), omitted, ctx)).json();
+    assert.equal(healthOmitted.syntheticAllowlist, false);
   });
 });
