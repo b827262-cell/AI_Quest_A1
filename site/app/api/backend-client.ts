@@ -1,5 +1,6 @@
 import { isProductionEnvironment } from "../../db";
 import { signRelay } from "../../lib/relay-signature";
+import { readEdgeGateMode, readEdgeSenderSecret } from "../../lib/relay-edge-config";
 
 /**
  * Site topology. One commit is deployed to three Sites projects. Each project
@@ -234,6 +235,14 @@ export async function delegateToBackend(request: Request, path: string): Promise
     declaredValue("A01_RELAY_SITE") === declared.site;
   const signingUnavailable = () => Response.json({ error: "relay_signing_unavailable" }, { status: 503 });
   if (hasIdentity && !canSign) return signingUnavailable();
+  const binding = (name: string) => runtime[name] ?? runtime.__env__?.[name];
+  const edgeSecret = canSign ? readEdgeSenderSecret(declared.site, binding) : undefined;
+  // In require mode a signed relay must carry a usable current edge secret.
+  // Refuse before consuming the body or contacting the primary, including for
+  // signed anonymous requests. Accept/unset retain the existing sender behavior.
+  if (canSign && readEdgeGateMode(binding("A01_RELAY_EDGE_MODE")) === "require" && edgeSecret === undefined) {
+    return Response.json({ error: "relay_edge_secret_unavailable" }, { status: 503 });
+  }
 
   let body: ArrayBuffer | undefined;
   try {
@@ -265,14 +274,10 @@ export async function delegateToBackend(request: Request, path: string): Promise
       forwardHeaders.set("x-a01-relay-user-role", "-");
       forwardHeaders.set("x-a01-relay-sig", signature);
       // Secondary edge credential for the primary's pre-verification gate (PR #64).
-      // Only the current per-site value is sent, never `_PREV`; a missing or
-      // out-of-range binding simply omits the header and changes nothing else.
+      // Only the current per-site value is sent, never `_PREV`. In accept mode
+      // a missing or out-of-range binding still simply omits the header.
       // The value is never logged or placed in an error response.
-      const edgeSecretName = declared.site === "student"
-        ? "A01_RELAY_EDGE_SECRET_STUDENT"
-        : "A01_RELAY_EDGE_SECRET_ADMIN";
-      const edgeSecret = runtime[edgeSecretName] ?? runtime.__env__?.[edgeSecretName];
-      if (typeof edgeSecret === "string" && edgeSecret.length >= 32 && edgeSecret.length <= 512) {
+      if (edgeSecret !== undefined) {
         forwardHeaders.set("x-a01-relay-edge-secret", edgeSecret);
       }
     }
