@@ -73,7 +73,7 @@ function checkEvent(event, fields = {}) {
   assert.ok(["student", "admin", "unknown"].includes(event.site));
   assert.ok(["transitional", "strict"].includes(event.mode));
   assert.equal(typeof event.identityPresent, "boolean");
-  assert.ok(["GET", "HEAD", "OTHER"].includes(event.method));
+  assert.ok(["GET", "HEAD", "PUT", "POST", "DELETE", "PATCH", "OTHER"].includes(event.method));
   assert.ok(["student", "admin", "other", "health"].includes(event.pathClass));
   for (const [key, expected] of Object.entries(fields)) assert.equal(event[key], expected, key);
 }
@@ -128,7 +128,7 @@ routeCase("A5 changed path is invalid", { create: async () => {
 routeCase("A6 changed body is invalid", { create: async () => {
   const signed = await signedRequest({ method: "PUT", pathname: "/api/student/progress", body: "original" });
   return new Request(signed.request.url, { method: "PUT", headers: signed.headers, body: "changed" });
-}, handler: putProgress, status: 401, event: { result: "invalid", method: "OTHER" } });
+}, handler: putProgress, status: 401, event: { result: "invalid", method: "PUT" } });
 for (const [id, offset] of [["A7", -400], ["A8", 400]]) {
   routeCase(`${id} timestamp outside skew is invalid`, { create: async () => (await signedRequest({ ts: String(Math.floor(Date.now() / 1000) + offset) })).request,
     status: 401, event: { result: "invalid" } });
@@ -162,13 +162,13 @@ routeCase("A13 non-string mode fails closed as strict", { bindings: { A01_RELAY_
 routeCase("A14 ordinary body above 8 MiB is invalid", { create: async () => {
   const signed = await signedRequest({ method: "PUT", pathname: "/api/student/progress", body: "x" });
   return new Request(signed.request.url, { method: "PUT", headers: signed.headers, body: new Uint8Array(8 * 1024 * 1024 + 1) });
-}, handler: putProgress, status: 401, event: { result: "invalid", method: "OTHER" } });
+}, handler: putProgress, status: 401, event: { result: "invalid", method: "PUT" } });
 routeCase("A15 upload body above 21 MiB is invalid", { create: async () => {
   const signed = await signedRequest({ method: "POST", pathname: "/api/admin/books/upload", site: "admin", email: "owner@example.test", body: "x" });
   return new Request(signed.request.url, { method: "POST", headers: signed.headers, body: new Uint8Array(21 * 1024 * 1024 + 1) });
-}, handler: adminUpload, status: 401, event: { result: "invalid", site: "admin", method: "OTHER" } });
+}, handler: adminUpload, status: 401, event: { result: "invalid", site: "admin", method: "POST" } });
 routeCase("A16 unavailable D1 makes PUT invalid", { bindings: { DB: undefined }, create: async () => (await signedRequest({ method: "PUT", pathname: "/api/student/progress", body: "x" })).request,
-  handler: putProgress, status: 401, event: { result: "invalid", method: "OTHER" } });
+  handler: putProgress, status: 401, event: { result: "invalid", method: "PUT" } });
 routeCase("A16b GET verification stays valid without D1", { bindings: { DB: undefined }, create: async () => (await signedRequest()).request,
   status: 200, event: { result: "valid" } });
 test("A17 two GET Requests with one nonce each emit valid without storage", async () => {
@@ -190,6 +190,24 @@ test("HEAD verification is valid, logs HEAD and never stores a nonce", async () 
     assert.equal(events.length, 1);
     checkEvent(events[0], { result: "valid", method: "HEAD" });
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM relay_nonces").get().n, 0);
+  });
+});
+
+test("each known HTTP verb is logged verbatim and unknown verbs fall back to OTHER", async () => {
+  await withRuntime({}, async () => {
+    for (const verb of ["GET", "HEAD", "PUT", "POST", "DELETE", "PATCH"]) {
+      const signed = await signedRequest({ method: verb, pathname: "/api/student/progress", search: "",
+        body: verb === "GET" || verb === "HEAD" ? undefined : "x" });
+      const { events } = await capture(() => getNormalizedAuth(signed.request));
+      assert.equal(events.length, 1, verb);
+      checkEvent(events[0], { result: "valid", method: verb });
+    }
+    for (const verb of ["OPTIONS", "PROPFIND", "PURGE"]) {
+      const signed = await signedRequest({ method: verb, pathname: "/api/student/progress", search: "", body: "x" });
+      const { events } = await capture(() => getNormalizedAuth(signed.request));
+      assert.equal(events.length, 1, verb);
+      checkEvent(events[0], { result: "valid", method: "OTHER" });
+    }
   });
 });
 
@@ -260,7 +278,7 @@ test("C1/C2 one Request logs once and shares the verified result", async () => {
     assert.strictEqual(value.first, value.second);
     assert.equal(value.directResult.status, "valid");
     assert.equal(events.length, 1);
-    checkEvent(events[0], { result: "valid", method: "OTHER" });
+    checkEvent(events[0], { result: "valid", method: "PUT" });
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM relay_nonces").get().n, 1);
   });
 });
