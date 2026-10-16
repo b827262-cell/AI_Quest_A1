@@ -91,6 +91,97 @@ test("GET /api/health reports edge gate observability without exposing secrets",
   }
 });
 
+async function captureWarnings(run) {
+  const original = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.map(String).join(" "));
+  try { await run(warnings); }
+  finally { console.warn = original; }
+}
+
+const secondaryHealthEnv = (site, extra = {}) => ({
+  SITE_ROLE: "secondary", SITE_NAME: site, PRIMARY_ORIGIN: "https://primary.example.test", ...extra,
+});
+
+test("secondary health reports a missing sender secret and warns only once across repeated probes", async () => {
+  await captureWarnings(async (warnings) => {
+    for (let i = 0; i < 2; i++) {
+      const response = await requestWorker("/api/health", {
+        env: secondaryHealthEnv("student", { A01_RELAY_EDGE_MODE: "require" }),
+      });
+      assert.equal(response.status, 200, "health remains exempt and available in require mode");
+      const data = await response.json();
+      assert.equal(data.edgeSenderSecret, "missing");
+      assert.equal(data.edgeMode, "require");
+      assert.deepEqual(data.edgeSecrets, { student: 0, admin: 0 });
+      assert.equal(data.edgeSecretsDistinct, true);
+    }
+    assert.deepEqual(warnings, ["[relay] secondary edge sender secret is missing or invalid"]);
+  });
+});
+
+test("secondary health recognizes only the valid current secret for its own site without exposing it", async () => {
+  await captureWarnings(async (warnings) => {
+    for (const [site, secret] of [["student", "s".repeat(32)], ["admin", "a".repeat(512)]]) {
+      const previous = "previous-local-edge-secret-for-health-123456789";
+      const response = await requestWorker("/api/health", { env: secondaryHealthEnv(site, {
+        [`A01_RELAY_EDGE_SECRET_${site.toUpperCase()}`]: secret,
+        [`A01_RELAY_EDGE_SECRET_${site.toUpperCase()}_PREV`]: previous,
+      }) });
+      assert.equal(response.status, 200);
+      const text = await response.text();
+      const data = JSON.parse(text);
+      assert.equal(data.edgeSenderSecret, "present");
+      assert.equal(data.edgeSecrets[site], 2, "#67 current + previous counts remain unchanged");
+      assert.equal(text.includes(secret), false);
+      assert.equal(text.includes(previous), false);
+    }
+    assert.deepEqual(warnings, []);
+  });
+});
+
+test("secondary health treats invalid, other-site and previous-only sender secrets as missing in either mode", async () => {
+  const other = "other-site-only-local-edge-secret-123456789";
+  const previous = "previous-only-local-edge-secret-123456789";
+  await captureWarnings(async (warnings) => {
+    for (const mode of ["accept", "require"]) {
+      for (const value of [undefined, "i".repeat(31), "i".repeat(513), 123]) {
+        const response = await requestWorker("/api/health", { env: secondaryHealthEnv("admin", {
+          A01_RELAY_EDGE_MODE: mode, A01_RELAY_EDGE_SECRET_ADMIN: value,
+          A01_RELAY_EDGE_SECRET_ADMIN_PREV: previous, A01_RELAY_EDGE_SECRET_STUDENT: other,
+        }) });
+        assert.equal(response.status, 200);
+        const text = await response.text();
+        const data = JSON.parse(text);
+        assert.equal(data.edgeSenderSecret, "missing");
+        assert.deepEqual(data.edgeSecrets, { student: 1, admin: 1 }, "#67 still counts the valid previous key");
+        for (const secret of [other, previous, ...(typeof value === "string" ? [value] : [])]) {
+          assert.equal(text.includes(secret), false);
+          assert.equal(warnings.join("\n").includes(secret), false);
+        }
+      }
+    }
+    assert.deepEqual(warnings, ["[relay] secondary edge sender secret is missing or invalid"]);
+  });
+});
+
+test("non-secondary health keeps #67 fields and does not add a sender field or warning", async () => {
+  await captureWarnings(async (warnings) => {
+    const shared = "shared-local-edge-secret-health-123456789";
+    for (const env of [{}, { SITE_ROLE: "primary", SITE_NAME: "backend" }, { SITE_ROLE: "invalid", SITE_NAME: "student" }]) {
+      const response = await requestWorker("/api/health", { env: { ...env,
+        A01_RELAY_EDGE_SECRET_STUDENT: shared, A01_RELAY_EDGE_SECRET_ADMIN: shared,
+      } });
+      assert.equal(response.status, 200);
+      const data = await response.json();
+      assert.equal(Object.hasOwn(data, "edgeSenderSecret"), false);
+      assert.deepEqual(data.edgeSecrets, { student: 0, admin: 0 });
+      assert.equal(data.edgeSecretsDistinct, false);
+    }
+    assert.deepEqual(warnings, []);
+  });
+});
+
 test("GET /api/student/me returns deterministic synthetic student or SIWC user", async () => {
   // Guest visitor
   const resGuest = await requestWorker("/api/student/me");
