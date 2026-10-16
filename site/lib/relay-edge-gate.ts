@@ -1,6 +1,8 @@
 /** Primary-edge check for relay credentials before any API route sees them. */
 import { classifyApiPath, gateApiRequest, readSiteDeclaration, type SiteDeclaration } from "../app/api/backend-client";
-export type EdgeGateMode = "accept" | "require";
+import { isUsableEdgeSecret as usableSecret, readEdgeGateMode, type EdgeGateMode } from "./relay-edge-config";
+export { readEdgeGateMode } from "./relay-edge-config";
+export type { EdgeGateMode } from "./relay-edge-config";
 export type EdgeSecrets = {
   A01_RELAY_EDGE_SECRET_STUDENT?: string;
   A01_RELAY_EDGE_SECRET_STUDENT_PREV?: string;
@@ -10,13 +12,6 @@ export type EdgeSecrets = {
 };
 
 const EDGE_HEADER = "x-a01-relay-edge-secret";
-
-export function readEdgeGateMode(value: unknown): EdgeGateMode {
-  if (value === undefined || value === null) return "accept";
-  if (typeof value !== "string") return "require";
-  const normalized = value.trim().toLowerCase();
-  return normalized === "" || normalized === "accept" ? "accept" : "require";
-}
 
 function ownSecrets(site: "student" | "admin", bindings: EdgeSecrets): unknown[] {
   return site === "student"
@@ -28,10 +23,6 @@ function otherSecrets(site: "student" | "admin", bindings: EdgeSecrets): unknown
   return site === "student"
     ? [bindings.A01_RELAY_EDGE_SECRET_ADMIN, bindings.A01_RELAY_EDGE_SECRET_ADMIN_PREV]
     : [bindings.A01_RELAY_EDGE_SECRET_STUDENT, bindings.A01_RELAY_EDGE_SECRET_STUDENT_PREV];
-}
-
-function usableSecret(value: unknown): value is string {
-  return typeof value === "string" && value.length >= 32 && value.length <= 512;
 }
 
 function validSecrets(site: "student" | "admin", bindings: EdgeSecrets): string[] {

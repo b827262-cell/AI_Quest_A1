@@ -8,7 +8,8 @@ const EDGE = "local-test-edge-secret-at-least-32-characters";
 const ORIGIN = "https://primary.example.test";
 const IDENTITY = { "oai-authenticated-user-id": "test-user", "oai-authenticated-user-email": "Alice@Example.COM" };
 const BINDINGS = ["SITE_ROLE", "SITE_NAME", "PRIMARY_ORIGIN", "A01_RELAY_SIGNING_KEY", "A01_RELAY_SITE",
-  "A01_RELAY_EDGE_SECRET_STUDENT", "A01_RELAY_EDGE_SECRET_ADMIN", "__env__"];
+  "A01_RELAY_EDGE_SECRET_STUDENT", "A01_RELAY_EDGE_SECRET_STUDENT_PREV",
+  "A01_RELAY_EDGE_SECRET_ADMIN", "A01_RELAY_EDGE_SECRET_ADMIN_PREV", "A01_RELAY_EDGE_MODE", "__env__"];
 
 async function withRelay(bindings, run) {
   const saved = BINDINGS.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
@@ -320,6 +321,109 @@ test("built Worker injects the secondary edge secret binding and clears a missin
       delete withoutEdge.A01_RELAY_EDGE_SECRET_STUDENT;
       await worker.fetch(request({ path: "/api/student/me" }), withoutEdge, ctx);
       assert.equal(arrived[1].headers.has("x-a01-relay-edge-secret"), false, "no stale edge secret from the previous request");
+    });
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+});
+
+test("require mode refuses missing or invalid current edge secrets before body consumption or fetch", async () => {
+  const original = { log: console.log, error: console.error, warn: console.warn };
+  const lines = [];
+  console.log = console.error = console.warn = (...args) => lines.push(args.map(String).join(" "));
+  try {
+    for (const site of ["student", "admin"]) {
+      for (const value of [undefined, "x".repeat(31), "x".repeat(513), 123]) {
+        await withRelay({ SITE_NAME: site, A01_RELAY_SITE: site, A01_RELAY_EDGE_MODE: "require",
+          [`A01_RELAY_EDGE_SECRET_${site.toUpperCase()}`]: value }, async (arrived) => {
+          const req = request({ method: "POST", body: "local-body" });
+          req.arrayBuffer = () => { throw Error("body must not be consumed"); };
+          const response = await delegateToBackend(req, `/api/${site}/me`);
+          assert.equal(response.status, 503);
+          assert.deepEqual(await response.json(), { error: "relay_edge_secret_unavailable" });
+          assert.equal(arrived.length, 0);
+        });
+      }
+    }
+    assert.deepEqual(lines, [], "configuration refusal neither leaks values nor emits relay logs");
+  } finally { Object.assign(console, original); }
+});
+
+test("require mode sends valid 32 and 512 character current secrets with unchanged signatures", async () => {
+  for (const site of ["student", "admin"]) {
+    for (const length of [32, 512]) {
+      const secret = "e".repeat(length);
+      await withRelay({ SITE_NAME: site, A01_RELAY_SITE: site,
+        __env__: { A01_RELAY_EDGE_MODE: " REQUIRE ", [`A01_RELAY_EDGE_SECRET_${site.toUpperCase()}`]: secret } }, async (arrived) => {
+        const response = await delegateToBackend(request(), `/api/${site}/me`);
+        assert.equal(response.status, 201);
+        assert.equal(arrived[0].headers.get("x-a01-relay-edge-secret"), secret);
+        await validSignature(arrived[0]);
+      });
+    }
+  }
+});
+
+test("require mode without signing capability preserves anonymous forwarding and identity failure", async () => {
+  await withRelay({ A01_RELAY_EDGE_MODE: "require", A01_RELAY_SIGNING_KEY: undefined }, async (arrived) => {
+    const anonymous = await delegateToBackend(request({ headers: {} }), "/api/student/me");
+    assert.equal(anonymous.status, 201);
+    assert.equal(arrived.length, 1);
+    assert.equal(arrived[0].headers.has("x-a01-relay-edge-secret"), false);
+    const identity = await delegateToBackend(request(), "/api/student/me");
+    assert.equal(identity.status, 503);
+    assert.deepEqual(await identity.json(), { error: "relay_signing_unavailable" });
+    assert.equal(arrived.length, 1);
+  });
+});
+
+test("require mode also refuses signed anonymous requests and never substitutes other-site or previous secrets", async () => {
+  for (const extra of [{}, { A01_RELAY_EDGE_SECRET_ADMIN: EDGE }, { A01_RELAY_EDGE_SECRET_STUDENT_PREV: EDGE }]) {
+    await withRelay({ A01_RELAY_EDGE_MODE: "require", ...extra }, async (arrived) => {
+      const response = await delegateToBackend(request({ headers: { "x-a01-relay-edge-secret": EDGE } }), "/api/student/me");
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "relay_edge_secret_unavailable" });
+      assert.equal(arrived.length, 0);
+    });
+  }
+});
+
+test("accept and unset modes retain signed forwarding when the edge secret is unavailable", async () => {
+  for (const mode of [undefined, "accept", " ACCEPT ", ""]) {
+    for (const value of [undefined, "e".repeat(31), "e".repeat(513), 123]) {
+      await withRelay({ A01_RELAY_EDGE_MODE: mode, A01_RELAY_EDGE_SECRET_STUDENT: value }, async (arrived) => {
+        const response = await delegateToBackend(request(), "/api/student/me");
+        assert.equal(response.status, 201);
+        assert.equal(arrived[0].headers.has("x-a01-relay-edge-secret"), false);
+        await validSignature(arrived[0]);
+      });
+    }
+  }
+});
+
+test("built Worker applies require from its live bindings and clears the secret without stale reuse", async () => {
+  const { default: worker } = await import(new URL("../dist/server/index.js?relay-secondary-require=1", import.meta.url).href);
+  const ctx = { waitUntil() {}, passThroughOnException() {} };
+  const assets = { fetch: async () => new Response("not found", { status: 404 }) };
+  await worker.fetch(new Request("https://primary.example.test/api/health"),
+    { ASSETS: assets, SITE_ROLE: "primary", SITE_NAME: "backend" }, ctx);
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  try {
+    await withRelay({}, async (arrived) => {
+      const env = { ASSETS: assets, SITE_ROLE: "secondary", SITE_NAME: "student", PRIMARY_ORIGIN: ORIGIN,
+        A01_RELAY_SIGNING_KEY: KEY, A01_RELAY_SITE: "student", A01_RELAY_EDGE_MODE: "require",
+        A01_RELAY_EDGE_SECRET_STUDENT: EDGE };
+      assert.equal((await worker.fetch(request({ path: "/api/student/me" }), env, ctx)).status, 201);
+      assert.equal(arrived.length, 1);
+      const missing = { ...env }; delete missing.A01_RELAY_EDGE_SECRET_STUDENT;
+      const response = await worker.fetch(request({ path: "/api/student/me" }), missing, ctx);
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "relay_edge_secret_unavailable" });
+      assert.equal(arrived.length, 1);
+      assert.equal((await worker.fetch(request({ path: "/api/student/me" }), { ...missing, A01_RELAY_EDGE_MODE: "accept" }, ctx)).status, 201);
+      assert.equal(arrived.length, 2);
     });
   } finally {
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;

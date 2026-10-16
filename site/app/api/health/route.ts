@@ -4,6 +4,7 @@ import { isProductionEnvironment } from "../../../db";
 import { readRelayMode, relayKeyCount, verifyIncomingRelay } from "../../../lib/relay-verification";
 import { readInjectedIdentity, resolveBuildIdentity } from "../../runtime-diagnostics";
 import { countValidEdgeSecrets, readEdgeGateMode, type EdgeSecrets } from "../../../lib/relay-edge-gate";
+import { readEdgeSenderSecret } from "../../../lib/relay-edge-config";
 
 type RuntimeEnv = Record<string, unknown> | undefined;
 
@@ -37,6 +38,9 @@ const BACKEND_TARGET: Record<SiteDeclaration["role"], string> = {
   misconfigured: "disabled",
 };
 
+// Once per site per Worker isolate; repeated health probes must not flood logs.
+const warnedEdgeSenderSites = new Set<"student" | "admin">();
+
 export async function GET(request: Request) {
   const declared = readSiteDeclaration();
   const d1Bound = Boolean(runtimeBinding("DB"));
@@ -68,6 +72,17 @@ export async function GET(request: Request) {
   // Health stays exempt from the gate and still does not write relay.verify.
   const edgeGate = edgeGateBindings();
   const edgeSecretCounts = countValidEdgeSecrets(edgeGate);
+  const edgeSenderSecret = declared.role === "secondary"
+    ? (readEdgeSenderSecret(declared.site, runtimeBinding) === undefined ? "missing" : "present")
+    : undefined;
+  if (declared.role === "secondary" && edgeSenderSecret === "missing" && !warnedEdgeSenderSites.has(declared.site)) {
+    warnedEdgeSenderSites.add(declared.site);
+    try {
+      console.warn("[relay] secondary edge sender secret is missing or invalid");
+    } catch {
+      // A diagnostic warning cannot change health availability.
+    }
+  }
   return Response.json({
     status: "ok",
     relayMode: readRelayMode(),
@@ -76,6 +91,7 @@ export async function GET(request: Request) {
     edgeMode: readEdgeGateMode(edgeGate.A01_RELAY_EDGE_MODE),
     edgeSecrets: { student: edgeSecretCounts.student, admin: edgeSecretCounts.admin },
     edgeSecretsDistinct: edgeSecretCounts.distinct,
+    ...(declared.role === "secondary" ? { edgeSenderSecret } : {}),
     role: declared.role,
     site: declared.site,
     primaryOrigin: declared.primaryOrigin,
