@@ -16,7 +16,7 @@ import { signRelay } from "../lib/relay-signature.ts";
 
 const STUDENT_KEY = "student-local-test-key-32-characters-long";
 const ADMIN_KEY = "admin-local-test-key-32-characters-long--";
-const KEYS = ["A01_RELAY_MODE", "A01_RELAY_KEY_STUDENT", "A01_RELAY_KEY_ADMIN", "ADMIN_EMAILS", "DB", "SITE_ROLE", "SITE_NAME", "PRIMARY_ORIGIN", "A01_RELAY_SIGNING_KEY", "A01_RELAY_SITE", "__env__"];
+const KEYS = ["A01_RELAY_MODE", "A01_RELAY_KEY_STUDENT", "A01_RELAY_KEY_ADMIN", "ADMIN_EMAILS", "A01_SYNTHETIC_ACCOUNTS", "DB", "SITE_ROLE", "SITE_NAME", "PRIMARY_ORIGIN", "A01_RELAY_SIGNING_KEY", "A01_RELAY_SITE", "__env__"];
 let nonceNumber = 0;
 
 function fixtureDb() {
@@ -67,7 +67,7 @@ async function capture(fn) {
 }
 
 function checkEvent(event, fields = {}) {
-  assert.deepEqual(Object.keys(event), ["evt", "result", "site", "mode", "identityPresent", "method", "pathClass"]);
+  assert.deepEqual(Object.keys(event), ["evt", "result", "site", "mode", "identityPresent", "method", "pathClass", "synthetic"]);
   assert.equal(event.evt, "relay.verify");
   assert.ok(["none", "valid", "invalid"].includes(event.result));
   assert.ok(["student", "admin", "unknown"].includes(event.site));
@@ -75,6 +75,7 @@ function checkEvent(event, fields = {}) {
   assert.equal(typeof event.identityPresent, "boolean");
   assert.ok(["GET", "HEAD", "PUT", "POST", "DELETE", "PATCH", "OTHER"].includes(event.method));
   assert.ok(["student", "admin", "other", "health"].includes(event.pathClass));
+  assert.equal(typeof event.synthetic, "boolean");
   for (const [key, expected] of Object.entries(fields)) assert.equal(event[key], expected, key);
 }
 
@@ -380,5 +381,75 @@ test("privacy: JSON serialization failure does not change cached valid verificat
       const auth = await getNormalizedAuth(signed.request);
       assert.equal(auth.isAuthenticated, true);
     } finally { JSON.stringify = original; }
+  });
+});
+
+// --- E. synthetic tagging (`relay.verify` `synthetic`) ----------------------
+// The tag is derived only from a *valid* signature plus a server-side,
+// non-secret allowlist (`A01_SYNTHETIC_ACCOUNTS`). No request header or body
+// value can set it; an unset or blank allowlist always yields false.
+const SYNTHETIC_EMAIL = "runner.synthetic@ai-smartbook.test";
+const SYNTHETIC_USER_ID = "synthetic-runner-001";
+
+routeCase("E1 valid signed identity on the allowlist (email) is tagged synthetic", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: SYNTHETIC_EMAIL },
+  create: async () => (await signedRequest({ email: SYNTHETIC_EMAIL })).request,
+  status: 200, event: { result: "valid", synthetic: true } });
+routeCase("E2 allowlist matches the verified user id, trimmed and case-folded", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: `  ${SYNTHETIC_USER_ID.toUpperCase()}  ` },
+  create: async () => (await signedRequest({ userId: SYNTHETIC_USER_ID })).request,
+  status: 200, event: { result: "valid", synthetic: true } });
+routeCase("E3 valid signed identity not on the allowlist is not synthetic", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: SYNTHETIC_EMAIL },
+  create: async () => (await signedRequest({ email: "someone.else@example.test" })).request,
+  status: 200, event: { result: "valid", synthetic: false } });
+routeCase("E3b allowlist entries match exactly, never as a substring", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: "user-12" },
+  create: async () => (await signedRequest({ userId: "user-123" })).request,
+  status: 200, event: { result: "valid", synthetic: false } });
+routeCase("E4 an unset allowlist never tags synthetic", {
+  create: async () => (await signedRequest({ email: SYNTHETIC_EMAIL })).request,
+  status: 200, event: { result: "valid", synthetic: false } });
+routeCase("E5 a blank allowlist never tags synthetic", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: "  ,  " },
+  create: async () => (await signedRequest({ email: SYNTHETIC_EMAIL })).request,
+  status: 200, event: { result: "valid", synthetic: false } });
+routeCase("E5b the '-' anonymous placeholder is never a matchable account", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: "-" },
+  create: async () => (await signedRequest({ userId: "-", email: "-" })).request,
+  status: 200, event: { result: "valid", synthetic: false } });
+routeCase("E6 forged headers cannot set synthetic when the signed identity is not on the allowlist", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: SYNTHETIC_EMAIL },
+  create: async () => (await signedRequest({ email: "real.user@example.test", extra: {
+    "x-a01-relay-synthetic": "true", "x-synthetic": "true",
+    "oai-authenticated-user-email": SYNTHETIC_EMAIL, "oai-authenticated-user-id": SYNTHETIC_USER_ID } })).request,
+  status: 200, event: { result: "valid", identityPresent: true, synthetic: false } });
+routeCase("E7 an invalid signature is never synthetic even when the identity is on the allowlist", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: SYNTHETIC_EMAIL },
+  create: async () => (await signedRequest({ email: SYNTHETIC_EMAIL, extra: { "x-a01-relay-sig": "bad" } })).request,
+  status: 401, event: { result: "invalid", synthetic: false } });
+routeCase("E8 a request with no relay headers is never synthetic even when an oai header is on the allowlist", {
+  bindings: { A01_SYNTHETIC_ACCOUNTS: SYNTHETIC_EMAIL },
+  create: () => direct("/api/student/me", { "oai-authenticated-user-id": SYNTHETIC_USER_ID, "oai-authenticated-user-email": SYNTHETIC_EMAIL }),
+  status: 200, event: { result: "none", identityPresent: true, synthetic: false } });
+test("privacy: the synthetic tag never leaks an allowlist entry into the log line", async () => {
+  await withRuntime({ A01_SYNTHETIC_ACCOUNTS: `${SYNTHETIC_EMAIL},${SYNTHETIC_USER_ID}` }, async () => {
+    const signed = await signedRequest({ userId: SYNTHETIC_USER_ID, email: SYNTHETIC_EMAIL });
+    const { lines, events } = await capture(() => studentMe(signed.request));
+    assert.equal(events.length, 1);
+    checkEvent(events[0], { result: "valid", synthetic: true });
+    for (const entry of [SYNTHETIC_EMAIL, SYNTHETIC_USER_ID]) assert.equal(lines[0].includes(entry), false, entry);
+  });
+});
+test("health exposes only whether the synthetic allowlist is configured", async () => {
+  await withRuntime({}, async () => {
+    const body = await (await health(direct("/api/health"))).json();
+    assert.equal(body.syntheticAllowlist, "unset");
+    assert.equal(JSON.stringify(body).includes(SYNTHETIC_EMAIL), false);
+  });
+  await withRuntime({ A01_SYNTHETIC_ACCOUNTS: SYNTHETIC_EMAIL }, async () => {
+    const body = await (await health(direct("/api/health"))).json();
+    assert.equal(body.syntheticAllowlist, "configured");
+    assert.equal(JSON.stringify(body).includes(SYNTHETIC_EMAIL), false);
   });
 });

@@ -23,6 +23,9 @@ interface Env {
   // Comma-separated administrator allowlist (exact, case-insensitive). Unset
   // means nobody is an administrator. See app/api/auth-helper.ts.
   ADMIN_EMAILS?: string;
+  // Comma-separated, non-secret synthetic-traffic identity allowlist. Only tags
+  // the relay.verify log; it never authorizes anything. See app/api/auth-helper.ts.
+  A01_SYNTHETIC_ACCOUNTS?: string;
   A01_RELAY_KEY_STUDENT?: string;
   A01_RELAY_KEY_STUDENT_PREV?: string;
   A01_RELAY_KEY_ADMIN?: string;
@@ -69,6 +72,7 @@ const worker = {
     runtimeGlobals.A01_RELAY_SIGNING_KEY = env.A01_RELAY_SIGNING_KEY;
     runtimeGlobals.A01_RELAY_SITE = env.A01_RELAY_SITE;
     runtimeGlobals.ADMIN_EMAILS = env.ADMIN_EMAILS;
+    runtimeGlobals.A01_SYNTHETIC_ACCOUNTS = env.A01_SYNTHETIC_ACCOUNTS;
     runtimeGlobals.A01_RELAY_KEY_STUDENT = env.A01_RELAY_KEY_STUDENT;
     runtimeGlobals.A01_RELAY_KEY_STUDENT_PREV = env.A01_RELAY_KEY_STUDENT_PREV;
     runtimeGlobals.A01_RELAY_KEY_ADMIN = env.A01_RELAY_KEY_ADMIN;
