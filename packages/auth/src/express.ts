@@ -14,6 +14,7 @@ import { safeStudentReturnTo } from "./shared";
 export {
   createStudentLearningHistoryRouter,
   safeLearningSourceUrl,
+  oversizeJsonBodyHandler,
   MAX_LEARNING_HISTORY_BATCH,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "./learning-history-express";

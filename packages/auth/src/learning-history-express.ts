@@ -1,4 +1,4 @@
-import express, { type RequestHandler } from "express";
+import express, { type ErrorRequestHandler, type RequestHandler } from "express";
 import type { LearningHistoryRecord, StudentLearningHistoryRepo } from "@ai-smartbook/db";
 import { studentOriginAllowed, type StudentAuthConfig } from "./server";
 
@@ -6,6 +6,30 @@ const CATEGORIES = new Set(["auto", "programming", "math", "humanities", "cybers
 const SOURCES = new Set(["manual", "image", "file"]);
 export const MAX_LEARNING_HISTORY_BATCH = 25;
 export const MAX_LEARNING_HISTORY_BODY_BYTES = 256 * 1024;
+
+/** Routes whose oversize bodies are reported with the batch-specific code. */
+const LEARNING_HISTORY_BODY_PATHS = ["/api/student/learning-history", "/api/admin/learning-history"];
+
+/**
+ * Turns body-parser's `entity.too.large` into a stable JSON response.
+ *
+ * Express' default error page is HTML and prints a stack trace in development,
+ * and the parser's own message is never something a client should see. The code
+ * is endpoint-specific only where a batch contract exists: learning-history
+ * routes answer `BATCH_TOO_LARGE`, every other route answers the generic
+ * `PAYLOAD_TOO_LARGE`, so the code never claims a batch limit that was not
+ * applied. Register it as the last error middleware so it sees errors from
+ * every JSON parser in the app.
+ */
+export function oversizeJsonBodyHandler(): ErrorRequestHandler {
+  return (error, req, res, next) => {
+    if (res.headersSent) return next(error);
+    if ((error as { type?: unknown } | null | undefined)?.type !== "entity.too.large") return next(error);
+    const path = (req.originalUrl || req.url || "").split("?")[0];
+    const isLearningHistory = LEARNING_HISTORY_BODY_PATHS.some((base) => path === base || path.startsWith(`${base}/`));
+    res.status(413).json({ error: isLearningHistory ? "BATCH_TOO_LARGE" : "PAYLOAD_TOO_LARGE" });
+  };
+}
 
 function validTime(value: unknown): value is string {
   return typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value));

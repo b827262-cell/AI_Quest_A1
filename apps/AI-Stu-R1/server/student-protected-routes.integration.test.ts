@@ -105,6 +105,28 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
     expect(overPayload).not.toContain("SENTINEL_DO_NOT_ECHO");
     expect(overPayload).not.toContain("PayloadTooLargeError");
   });
+  it("answers a generic 413 for oversize bodies outside the learning-history endpoints", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    // The global parser limit is 100 KB; this body is deliberately over it.
+    const body = JSON.stringify({ question: "SENTINEL_DO_NOT_ECHO", pad: "x".repeat(200 * 1024) });
+    const response = await browser.fetch(`${baseUrl}/api/student/books/b1/rag-ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+      body
+    });
+    expect(response.status).toBe(413);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const payload = await response.text();
+    // Generic code, not the learning-history batch contract.
+    expect(JSON.parse(payload)).toEqual({ error: "PAYLOAD_TOO_LARGE" });
+    expect(payload).not.toContain("BATCH_TOO_LARGE");
+    // No stack trace, parser internals, HTML error page or request content.
+    expect(payload).not.toContain("SENTINEL_DO_NOT_ECHO");
+    expect(payload).not.toContain("PayloadTooLargeError");
+    expect(payload).not.toContain("entity.too.large");
+    expect(payload).not.toContain("<!DOCTYPE");
+    expect(payload).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+  });
   it("rejects unauthenticated and forged-cookie access to every private student route", async () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
     const protectedPaths: Array<[string, RequestInit | undefined]> = [

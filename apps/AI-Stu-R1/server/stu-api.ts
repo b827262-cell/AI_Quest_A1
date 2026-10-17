@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, { type Request, type Response } from "express";
 import {
   assertStudentAuthConfig,
   createStudentAuthRuntime,
@@ -19,6 +19,7 @@ import {
   createStudentAuthRouter,
   createStudentSessionMiddleware,
   createStudentLearningHistoryRouter,
+  oversizeJsonBodyHandler,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
@@ -120,15 +121,6 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
 
 const app = express();
 app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
-// Map the parser's oversize error to the router's stable JSON code instead of
-// Express' HTML error page (which also exposes a stack trace in development).
-app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
-  if (typeof err === "object" && err !== null && (err as { type?: unknown }).type === "entity.too.large") {
-    res.status(413).json({ error: "BATCH_TOO_LARGE" });
-    return;
-  }
-  next(err);
-});
 app.use(express.json());
 
 // Appearance is authored in the admin system; the standalone student server
@@ -311,6 +303,12 @@ if (existsSync(publicDir)) {
     res.sendFile(resolve(publicDir, "index.html"));
   });
 }
+
+// Last error boundary: oversize JSON bodies answer a stable JSON 413 instead of
+// Express' HTML page (which prints a stack trace in development). Only the
+// learning-history endpoints use BATCH_TOO_LARGE; every other route answers the
+// generic PAYLOAD_TOO_LARGE. Non-parser errors keep the default behaviour.
+app.use(oversizeJsonBodyHandler());
 
 app.listen(config.apiPort, () => {
   console.log(
