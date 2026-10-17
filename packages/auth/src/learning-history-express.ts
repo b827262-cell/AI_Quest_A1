@@ -25,7 +25,10 @@ export function oversizeJsonBodyHandler(): ErrorRequestHandler {
   return (error, req, res, next) => {
     if (res.headersSent) return next(error);
     if ((error as { type?: unknown } | null | undefined)?.type !== "entity.too.large") return next(error);
-    const path = (req.originalUrl || req.url || "").split("?")[0];
+    const path = (req.originalUrl || req.url || "").split("?")[0].toLowerCase();
+    // Express routes are case-insensitive and non-strict by default, so the
+    // path classification must be too; otherwise `/API/student/learning-history`
+    // reaches the batch parser but is labelled as a generic payload error.
     const isLearningHistory = LEARNING_HISTORY_BODY_PATHS.some((base) => path === base || path.startsWith(`${base}/`));
     res.status(413).json({ error: isLearningHistory ? "BATCH_TOO_LARGE" : "PAYLOAD_TOO_LARGE" });
   };

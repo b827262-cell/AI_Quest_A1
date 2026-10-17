@@ -127,6 +127,46 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
     expect(payload).not.toContain("<!DOCTYPE");
     expect(payload).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
   });
+  it("classifies oversize bodies on case and trailing-slash variants the way Express routes do", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    const sentinel = "SENTINEL_DO_NOT_ECHO";
+    const batchBody = JSON.stringify({ entries: [], note: sentinel, padding: "x".repeat(260 * 1024) });
+    expect(Buffer.byteLength(batchBody, "utf8")).toBeGreaterThan(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES);
+
+    for (const path of ["/API/student/learning-history", "/api/student/learning-history/", "/Api/Student/Learning-History/"]) {
+      const response = await browser.fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+        body: batchBody
+      });
+      expect(response.status, path).toBe(413);
+      expect(response.headers.get("content-type"), path).toContain("application/json");
+      const payload = await response.text();
+      expect(JSON.parse(payload), path).toEqual({ error: "BATCH_TOO_LARGE" });
+      expect(payload, path).not.toContain(sentinel);
+      expect(payload, path).not.toContain("<!DOCTYPE");
+      expect(payload, path).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+    }
+
+    const genericBody = JSON.stringify({ question: sentinel, pad: "x".repeat(200 * 1024) });
+    for (const path of ["/API/student/books/b1/rag-ask", "/Api/Student/Books/B1/Rag-Ask"]) {
+      const response = await browser.fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+        body: genericBody
+      });
+      expect(response.status, path).toBe(413);
+      expect(response.headers.get("content-type"), path).toContain("application/json");
+      const payload = await response.text();
+      expect(JSON.parse(payload), path).toEqual({ error: "PAYLOAD_TOO_LARGE" });
+      expect(payload, path).not.toContain("BATCH_TOO_LARGE");
+      expect(payload, path).not.toContain(sentinel);
+      expect(payload, path).not.toContain("PayloadTooLargeError");
+      expect(payload, path).not.toContain("entity.too.large");
+      expect(payload, path).not.toContain("<!DOCTYPE");
+      expect(payload, path).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+    }
+  });
   it("rejects unauthenticated and forged-cookie access to every private student route", async () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
     const protectedPaths: Array<[string, RequestInit | undefined]> = [

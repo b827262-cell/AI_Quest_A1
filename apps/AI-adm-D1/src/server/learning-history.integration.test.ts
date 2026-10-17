@@ -103,6 +103,37 @@ describe("student learning history sync and admin visibility", () => {
     expect(over.text).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
   });
 
+  it("classifies oversize bodies on case and trailing-slash variants the way Express routes do", async () => {
+    const { app } = fixture();
+    const sentinel = "SENTINEL_DO_NOT_ECHO";
+    const batchBody = JSON.stringify({ entries: [], note: sentinel, padding: "x".repeat(260 * 1024) });
+    expect(Buffer.byteLength(batchBody, "utf8")).toBeGreaterThan(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES);
+
+    for (const path of ["/API/student/learning-history", "/api/student/learning-history/", "/Api/Student/Learning-History/"]) {
+      const over = await request(app).post(path).set("Origin", origin).set("Content-Type", "application/json").send(batchBody);
+      expect(over.status, path).toBe(413);
+      expect(over.headers["content-type"], path).toContain("application/json");
+      expect(over.body, path).toEqual({ error: "BATCH_TOO_LARGE" });
+      expect(over.text, path).not.toContain(sentinel);
+      expect(over.text, path).not.toContain("<!DOCTYPE");
+      expect(over.text, path).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+    }
+
+    const genericBody = JSON.stringify({ note: sentinel, padding: "x".repeat(2 * 1024 * 1024) });
+    expect(Buffer.byteLength(genericBody, "utf8")).toBeGreaterThan(2 * 1024 * 1024);
+    for (const path of ["/API/public/guest-feedback", "/Api/Public/Guest-Feedback"]) {
+      const over = await request(app).post(path).set("Origin", origin).set("Content-Type", "application/json").send(genericBody);
+      expect(over.status, path).toBe(413);
+      expect(over.headers["content-type"], path).toContain("application/json");
+      expect(over.body, path).toEqual({ error: "PAYLOAD_TOO_LARGE" });
+      expect(over.text, path).not.toContain("BATCH_TOO_LARGE");
+      expect(over.text, path).not.toContain(sentinel);
+      expect(over.text, path).not.toContain("PayloadTooLargeError");
+      expect(over.text, path).not.toContain("<!DOCTYPE");
+      expect(over.text, path).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+    }
+  });
+
   it("requires a verified student, handles bounded idempotent updates, tombstones and ownership", async () => {
     const { app, handle, student } = fixture();
     const alice = student("alice");
