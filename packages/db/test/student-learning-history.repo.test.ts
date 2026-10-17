@@ -77,6 +77,10 @@ describe("student learning history upsert conflicts", () => {
       expect(afterDelete.deletedAt).not.toBeNull();
       const [afterBump] = repo.upsertBatch("student-a", [record({ syncVersion: 3 })]);
       expect(afterBump.deletedAt).not.toBeNull();
+      // A tombstone also blanks the payload; a stale re-upload must not refill it,
+      // otherwise deleted content comes back into the row even though it stays hidden.
+      expect(afterDelete).toMatchObject({ question: "", answer: undefined, rawAnswer: undefined, organizedAnswer: undefined });
+      expect(afterBump).toMatchObject({ question: "", answer: undefined, rawAnswer: undefined, organizedAnswer: undefined });
     });
   });
 });
