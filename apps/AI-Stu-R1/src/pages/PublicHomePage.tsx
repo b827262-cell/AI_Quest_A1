@@ -19,6 +19,7 @@ import {
   readLearningTombstones,
   acknowledgeLearningTombstone,
   setLearningHistoryScope,
+  splitLearningHistoryBatches,
   readPendingRawAnswer,
   savePendingRawAnswerOnce,
   removeLearningHistoryEntry,
@@ -390,9 +391,8 @@ export function PublicHomePage() {
     syncBusy.current = true;
     setSyncStatus("正在同步後台…");
     void (async () => {
-      for (let start = 0; start < pending.length; start += 25) {
+      for (const batch of splitLearningHistoryBatches(pending)) {
         if (activeSyncUser.current !== user.id) return;
-        const batch = pending.slice(start, start + 25);
         const result = await studentClient.upsertLearningHistory(batch);
         if (activeSyncUser.current !== user.id) return;
         for (const entry of result.entries) {

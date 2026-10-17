@@ -27,6 +27,10 @@ export const LEARNING_HISTORY_KEY = "ai-smartbook.student.learning-history.v1";
 export const PENDING_RAW_ANSWER_KEY = "ai-smartbook.student.pending-raw-answer.v1";
 export const LEARNING_HISTORY_MAX_ENTRIES = 50;
 export const RAW_ANSWER_MAX_CHARS = 20_000;
+/** Server batch contract: at most 25 entries and 256 KiB of serialized body. */
+export const LEARNING_HISTORY_SYNC_BATCH_MAX_ENTRIES = 25;
+/** Stay below the 256 KiB server limit so JSON overhead cannot trip a 413. */
+export const LEARNING_HISTORY_SYNC_BATCH_MAX_BYTES = 240 * 1024;
 const TOMBSTONE_KEY = "ai-smartbook.student.learning-history.tombstones.v1";
 let activeStudentId: string | null = null;
 
@@ -80,6 +84,40 @@ export function mergeLearningHistory(remote: Array<LearningHistoryEntry & { dele
     }
   }
   return save([...current.values()], storage);
+}
+
+/**
+ * Split pending records into request-sized batches.
+ *
+ * The server rejects a body over 256 KiB with a stable 413, and a retry sends
+ * the same batch again, so an entry-count-only split can strand every later
+ * record. Batch on the serialized UTF-8 size as well, keeping a margin below
+ * the server limit. A single record that cannot fit still gets its own batch
+ * rather than being dropped here.
+ */
+export function splitLearningHistoryBatches(
+  entries: LearningHistoryEntry[],
+  options: { maxEntries?: number; maxBytes?: number } = {}
+): LearningHistoryEntry[][] {
+  const maxEntries = options.maxEntries ?? LEARNING_HISTORY_SYNC_BATCH_MAX_ENTRIES;
+  const maxBytes = options.maxBytes ?? LEARNING_HISTORY_SYNC_BATCH_MAX_BYTES;
+  const batches: LearningHistoryEntry[][] = [];
+  let current: LearningHistoryEntry[] = [];
+  for (const entry of entries) {
+    const candidate = [...current, entry];
+    if (current.length > 0 && (candidate.length > maxEntries || serializedBatchBytes(candidate) > maxBytes)) {
+      batches.push(current);
+      current = [entry];
+      continue;
+    }
+    current = candidate;
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+function serializedBatchBytes(entries: LearningHistoryEntry[]): number {
+  return new TextEncoder().encode(JSON.stringify({ entries })).length;
 }
 
 export function importGuestLearningHistory(storage = browserStorage()): LearningHistoryEntry[] {
