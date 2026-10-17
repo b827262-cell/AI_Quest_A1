@@ -4855,13 +4855,23 @@ app.post("/api/admin/appearance-settings/upload", appearanceUpload.single("file"
   res.status(201).json({ url: `/api/uploads/appearance/${file.filename}` });
 });
 
+// The 256 KiB parser mounted for learning history raises the same
+// `entity.too.large` type as the global 2 MB parser, so the error type alone
+// cannot tell the two apart. Keep BATCH_TOO_LARGE meaning "learning history
+// batch too large"; every other oversize body is a generic payload error.
+const LEARNING_HISTORY_BODY_PATHS = ["/api/student/learning-history", "/api/admin/learning-history"];
+function isLearningHistoryBodyPath(originalUrl: string): boolean {
+  const path = originalUrl.split("?")[0];
+  return LEARNING_HISTORY_BODY_PATHS.some((base) => path === base || path.startsWith(`${base}/`));
+}
+
 // Do not let Express' development error page expose stack traces or request
 // details. Provider and credential errors are already sanitised above; this is
 // the final boundary for unexpected failures such as a database constraint.
-app.use((error: unknown, _req: Request, res: Response, _next: (error?: unknown) => void) => {
+app.use((error: unknown, req: Request, res: Response, _next: (error?: unknown) => void) => {
   if (res.headersSent) return;
   if (error instanceof Error && "type" in error && error.type === "entity.too.large") {
-    res.status(413).json({ error: "BATCH_TOO_LARGE" });
+    res.status(413).json({ error: isLearningHistoryBodyPath(req.originalUrl) ? "BATCH_TOO_LARGE" : "PAYLOAD_TOO_LARGE" });
     return;
   }
   res.status(500).json({ error: "internal server error" });

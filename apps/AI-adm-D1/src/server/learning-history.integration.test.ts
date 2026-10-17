@@ -83,6 +83,26 @@ describe("student learning history sync and admin visibility", () => {
     expect(over.body).toEqual({ error: "BATCH_TOO_LARGE" });
   });
 
+  it("answers oversize non-learning-history bodies with the generic 413 code only", async () => {
+    const { app } = fixture();
+    const sentinel = "SENTINEL_DO_NOT_ECHO";
+    const oversizeBody = JSON.stringify({ note: sentinel, padding: "x".repeat(2 * 1024 * 1024) });
+    expect(Buffer.byteLength(oversizeBody, "utf8")).toBeGreaterThan(2 * 1024 * 1024);
+
+    const over = await request(app)
+      .post("/api/public/guest-feedback")
+      .set("Origin", origin)
+      .set("Content-Type", "application/json")
+      .send(oversizeBody);
+    expect(over.status).toBe(413);
+    expect(over.headers["content-type"]).toContain("application/json");
+    expect(over.body).toEqual({ error: "PAYLOAD_TOO_LARGE" });
+    expect(over.text).not.toContain("BATCH_TOO_LARGE");
+    expect(over.text).not.toContain(sentinel);
+    expect(over.text).not.toContain("PayloadTooLargeError");
+    expect(over.text).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+  });
+
   it("requires a verified student, handles bounded idempotent updates, tombstones and ownership", async () => {
     const { app, handle, student } = fixture();
     const alice = student("alice");
