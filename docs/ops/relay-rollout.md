@@ -1,7 +1,7 @@
 # A-01 身分轉送簽章上線手冊（Relay Rollout Runbook）
 
 本手冊是三站運行手冊（`docs/ops/three-site-runbook.md`）的補充，說明次站簽章（PR #57）與主站驗章（PR #58）的上線、驗證、回滾、金鑰輪替與疑難排解。
-設計依據為 A-01 三站整合設計文件（該文件在 Project，不在本 repo）；協定與實作數值以程式碼為準，逐項對應見第 9 節；§4.4 中連續 72 小時、100% 不取樣與 Gate `HOLD` 依 Owner 2026/10/15 決議，300／100／30 的樣本與覆蓋數字為建議值，待 Owner 確認，並非測試已通過的結果。程式碼位置：`site/lib/relay-signature.ts`、`site/lib/relay-verification.ts`、`site/app/api/backend-client.ts`、`site/app/api/auth-helper.ts`、`site/app/api/health/route.ts`、`site/worker/index.ts`、`site/drizzle/0003_superb_purifiers.sql`。
+設計依據為 A-01 三站整合設計文件（該文件在 Project，不在本 repo）；協定與實作數值以程式碼為準，逐項對應見第 9 節；§4.4 中連續 72 小時、100% 不取樣與 Gate `HOLD` 依 Owner 2026/10/15 決議；300／100／30 的樣本與覆蓋數字及 §5 回滾數字為 Owner 決議，並非測試已通過的結果。程式碼位置：`site/lib/relay-signature.ts`、`site/lib/relay-verification.ts`、`site/app/api/backend-client.ts`、`site/app/api/auth-helper.ts`、`site/app/api/health/route.ts`、`site/worker/index.ts`、`site/drizzle/0003_superb_purifiers.sql`。
 
 本手冊不提供可直接複製執行的 production 寫入指令；任何對 production 的寫入（部署、migration、變數變更）都必須先取得 Owner 授權。
 
@@ -200,7 +200,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 1. **主站前置**：完成第 3 節閘門；套用 migration 0003；設定主站變數（模式先為 `transitional`）。
 2. **部署主站**（含 #58 驗章程式碼）。部署後驗證主站 health。
 3. **部署次站**：設定該站 `A01_RELAY_SIGNING_KEY`／`A01_RELAY_SITE` 後部署（含 #57 簽章程式碼）。學生與管理次站逐站部署、逐站驗證；每站都要 Owner 授權。
-4. **觀察期（`transitional`）**：先完成 §4.4 的平台管線驗證，再累計連續 72 小時的乾淨視窗；兩站有效樣本、逐路徑讀寫覆蓋須待 Owner 確認建議值後達標，日誌完整性及回滾演練亦須通過。單純經過 72 小時或沒有日誌，不算通過。
+4. **觀察期（`transitional`）**：先完成 §4.4 的平台管線驗證，再累計連續 72 小時的乾淨視窗；兩站有效樣本、逐路徑讀寫覆蓋須達 Owner 決議門檻，日誌完整性及回滾演練亦須通過。單純經過 72 小時或沒有日誌，不算通過。
 5. **主站切 `strict`**：§4.2、§4.4 全部通過並取得 Owner 此次切換授權後，設定主站 `A01_RELAY_MODE=strict` 並重新部署；核驗部署版本、生效設定、health 與兩站合法請求。設定值變更本身不代表部署完成。
 
 `GET /api/health` 的欄位意義（永遠不輸出金鑰或 secret 值；#67 後另含唯讀 edge 閘觀測，**僅計數與布林**）：
@@ -239,7 +239,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 - [ ] staging 合成簽章請求：`valid` 被採用、`invalid` 被拒（受保護 API 回 401）。
 - [ ] O-1a 已通過，且該測試不是在 `strict` 下做的（見第 3(a) 節）。
 - [ ] edge secret 閘已部署並驗證：次站已送 `x-a01-relay-edge-secret`（#65 已合併），主站 `A01_RELAY_EDGE_MODE=require` 生效，且 `require` 下缺失／錯誤 secret 記為 `relay.probe`、不產生 `invalid`（PR #64）。主站 health 須回報 `edgeMode=require`、`edgeSecrets.student` 與 `edgeSecrets.admin` 皆 ≥ 1、`edgeSecretsDistinct=true`（#67；僅計數／布林，見 §1.3、第 4 節）；**各次站** health 須回報 `edgeSenderSecret="present"`，且次站 `A01_RELAY_EDGE_MODE=require` 時不會出現 `503 relay_edge_secret_unavailable`（#69；C1／C2，見 §1.4）。
-- [ ] §4.4 全部達標：三站平台證據齊全、100% 日誌、連續 72 小時、雙站樣本與寫入覆蓋的建議值經 Owner 確認後達標、零異常、完整性及隱私檢查通過；建議值未確認即 `HOLD`。
+- [ ] §4.4 全部達標：三站平台證據齊全、100% 日誌、連續 72 小時、雙站樣本與寫入覆蓋達 Owner 決議門檻、零異常、完整性及隱私檢查通過；未達門檻即 `HOLD`。
 - [ ] 已確認所有使用者面向的來源是次站，且 `require` 下**沒有**直連主站 admin／student API 的路徑（主站頁面、書籤、直接連結、外部整合皆改走次站）；否則該類請求會被剝除身分而 lockout（`/api/admin/*` 401、`/api/student/*` guest，見 §1.3）。
 - [ ] §5 的回滾門檻、基準、執行者與部署權限已確認，且 staging 回滾演練為 `PASS`。
 - [ ] AGY 已獨立審查本 Runbook PR；Hermes 已整合平台證據與審查結果回報 Gate 結論，並交 Owner 決定。
@@ -280,7 +280,7 @@ canonical 規則（`site/lib/relay-signature.ts`）：
 
 限制：staging／合成環境的結果須明確標示環境，不得代替 production 雙站證據。若尚無授權或無法取得 production 各次站的有效身分請求，相關驗收保持 `HOLD`。單次 smoke check 不取代 §4.4 的樣本與覆蓋門檻。
 
-### 4.4 Strict Release Gate（Owner 已決事項與待確認建議值）
+### 4.4 Strict Release Gate（Owner 已決事項）
 
 #### 平台證據與管線預檢（P0）
 
@@ -296,9 +296,9 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 
 上述是未來經授權的驗證程序，本 PR 不部署 staging、不製造平台流量，也不修改日誌程式或平台設定。證據尚缺即 `BLOCKED`／Gate `HOLD`。
 
-#### 連續觀察的驗收條件（樣本數待 Owner 確認）
+#### 連續觀察的驗收條件（樣本數為 Owner 決議）
 
-以下各項為 AND 條件，兩個次站分別驗收；時間採同一連續視窗，記錄 ISO 8601 起訖時間與時區。Owner 已決事項為連續 72 小時、100% 不取樣及 Gate `HOLD`；72 小時計時須在次站已送 edge secret 且主站 `A01_RELAY_EDGE_MODE=require` 已部署並驗證生效後才起算；有效樣本 300／100 與逐路徑／方法 30 次均為建議值，待 Owner 確認，未確認即 `HOLD`。不得合併不同環境、版本或不連續區間湊滿門檻。
+以下各項為 AND 條件，兩個次站分別驗收；時間採同一連續視窗，記錄 ISO 8601 起訖時間與時區。Owner 已決事項為連續 72 小時、100% 不取樣及 Gate `HOLD`；72 小時計時須在次站已送 edge secret 且主站 `A01_RELAY_EDGE_MODE=require` 已部署並驗證生效後才起算；有效樣本 300／100 與逐路徑／方法 30 次為 Owner 決議，未達即 `HOLD`。不得合併不同環境、版本或不連續區間湊滿門檻。
 
 | 指標 | 驗收門檻與計數口徑 |
 | --- | --- |
@@ -306,20 +306,20 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | 日誌取樣 | 應用及三站相關平台採集均 100%，不取樣。 |
 | `invalid` | 完整觀察範圍內 `evt=relay.verify AND result=invalid` 為 0；包含 `site=unknown`／`pathClass=other`，無未經證實的例外。在 `require` 下，缺少或錯誤 edge secret 的請求不進 relay 驗章，改記 `evt=relay.probe`，不計入本項零容忍；secret 相符但簽章失敗仍為 `invalid`。 |
 | 異常身分組合 | `result=none AND identityPresent=true` 為 0；其他無法解釋的站別／路徑／身分組合亦須先解決，不得自動排除。 |
-| 有效樣本 | 建議值，待 Owner 確認：`result=valid AND site=student` ≥300；`result=valid AND site=admin` ≥100，並分列實際 HTTP 方法（GET／HEAD／PUT／POST／DELETE／PATCH，其餘落 `OTHER`）與路由模板。`none`、health、gate、CORS 拒絕不計入。 |
-| 讀寫覆蓋 | 兩站均有帶平台身分的成功 GET（§4.3）；每站每個適用的非 GET 業務路徑／方法至少 30 次成功驗證（建議值，待 Owner 確認）。每次須有 `valid` 及預期授權／業務成功回應；匿名簽章或 HTTP 200 本身不能證明合法使用者成功。 |
+| 有效樣本 | Owner 決議：`result=valid AND site=student` ≥300；`result=valid AND site=admin` ≥100，並分列實際 HTTP 方法（GET／HEAD／PUT／POST／DELETE／PATCH，其餘落 `OTHER`）與路由模板。`none`、health、gate、CORS 拒絕不計入。 |
+| 讀寫覆蓋 | 兩站均有帶平台身分的成功 GET（§4.3）；每站每個適用的非 GET 業務路徑／方法至少 30 次成功驗證（Owner 決議）。每次須有 `valid` 及預期授權／業務成功回應；匿名簽章或 HTTP 200 本身不能證明合法使用者成功。 |
 | 未分類受保護路徑 | 0 個未解決；`pathClass=other` 先核對完整路由表，受保護者必須納入。 |
 | 日誌完整性 | 與符合記錄條件的主站請求數逐區間核對，無未解釋缺口／重複／解析失敗；另完成無應用日誌路徑的 invocation 核對。 |
 | 敏感資訊外洩 | 0（分兩類）。(1) 應用 console 日誌（`relay.verify`、`relay.probe`）與對外分享／匯出的稽核證據：不得含金鑰、簽章、nonce、email、user-id、Authorization、cookie、IP、含 ID 的完整路徑與查詢字串；不為核對而加記敏感欄位。(2) Cloudflare 平台原生 invocation metadata：本身含 URL 與連線 IP，另列並受平台權限控管，不得外洩給未授權接收端；作為 Gate 證據對外匯出前須先脫敏（遮罩 IP、query、路徑實體 ID）。 |
 | 回滾演練 | 經授權的 staging 完成 §5 全流程並記為 `PASS`，附部署與合法請求恢復證據。 |
 
-最低樣本數是工程建議值，待 Owner 確認，不代表統計上證明異常率為零；未確認即 Gate `HOLD`。72 小時到期但任一站未達 Owner 確認後的門檻，即 `INSUFFICIENT_SAMPLE`／Gate `HOLD`；持續觀察，選取同一連續且至少 72 小時的完整乾淨視窗重新結算，不得把低流量當成功。補樣只能使用另行授權、可辨識的測試流量，與真實流量分列；staging 樣本不得混入 production 計數。
+最低樣本數為 Owner 決議，不代表統計上證明異常率為零；未達即 Gate `HOLD`。72 小時到期但任一站未達門檻，即 `INSUFFICIENT_SAMPLE`／Gate `HOLD`；持續觀察，選取同一連續且至少 72 小時的完整乾淨視窗重新結算，不得把低流量當成功。補樣只能使用另行授權、可辨識的測試流量，與真實流量分列；staging 樣本不得混入 production 計數。
 
 若視窗內出現異常、日誌缺口、採集失效或候選版本／相關設定變更，立即暫停晉級並保留原視窗證據；edge 閘擋下的 `relay.probe` 不觸發重新起算，但須保留並計數。調查修復、重新驗證管線後，重新起算 72 小時；不得拼接前後區間，或直接豁免已出現的 `invalid`。
 
 #### Owner 已採納的四條驗收規則
 
-以下四條為 Owner 已採納的驗收規則，適用於本 Runbook 的所有 Gate 結論與交接，與前述門檻並行；四條都不改變 300／100／30 等建議值與 §5 的回滾數字（仍為提案狀態，待 Owner 確認）。
+以下四條為 Owner 已採納的驗收規則，適用於本 Runbook 的所有 Gate 結論與交接，與前述門檻並行；四條都不改變 300／100／30 等 Owner 決議門檻與 §5 的回滾數字。
 
 1. **逐一合併並對更新後 main 重驗；`PASS` 對應實際 head。** 每個 PR 單獨合併，不得批次或交叉合併後再補驗；每次合併後必須在**更新後的 main** 重新驗證（重跑本地測試、重算行號與引用、重做受影響的量測），不得沿用合併前或前一顆 head 的結果。任何 `PASS` 結論都必須綁定當時**實際的 head commit sha** 並寫入交接記錄；不得以「大致相同」或跨 PR 推定代替。
 2. **未簽章量測須涵蓋直連主站與繞過 relay 的入口。** 未簽章（無 `x-a01-relay-*`）請求的計數與量測，必須同時涵蓋 (a) 直連主站、不經次站代理的請求，以及 (b) 任何繞過 relay 的入口（例如直接命中主站 API、非次站代理路徑、edge 閘豁免的 health 等）。只量次站來源會低估未簽章流量；量測範圍須在候選版本的路由盤點中明列，無法區分即 `HOLD`。
@@ -334,12 +334,12 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 
 | 來源站 | 路由模板／方法 | 分類與覆蓋要求 |
 | --- | --- | --- |
-| Student | GET `/api/student/me`；GET、PUT `/api/student/progress` | `student`；PUT 至少 30 次（建議值，待 Owner 確認），GET 須證明登入身分成功。 |
+| Student | GET `/api/student/me`；GET、PUT `/api/student/progress` | `student`；PUT 至少 30 次（Owner 決議），GET 須證明登入身分成功。 |
 | Admin | GET `/api/admin/auth/me`、`/api/admin/overview`、`/api/admin/books`、`/api/admin/books/[id]` | `admin`；確認有效管理員可正常存取。 |
-| Admin | POST、DELETE `/api/admin/books`；POST `/api/admin/books/upload`；DELETE `/api/admin/books/[id]` | `admin`；四個路徑／方法分別至少 30 次（建議值，待 Owner 確認）；POST books 雖共用 upload handler，仍須獨立盤點。 |
+| Admin | POST、DELETE `/api/admin/books`；POST `/api/admin/books/upload`；DELETE `/api/admin/books/[id]` | `admin`；四個路徑／方法分別至少 30 次（Owner 決議）；POST books 雖共用 upload handler，仍須獨立盤點。 |
 | 三站其他路由 | student books／content（4 個公開 GET，不呼叫 `getNormalizedAuth`，由 edge 閘涵蓋）、`/api/internal/sync/*`、health、OPTIONS、gate 等 | 不以名稱推斷 relay 保護；核對各自授權及實際控制流程。internal sync 使用獨立驗證，不能因沒有 `relay.verify` 就宣告無請求或安全。 |
 
-應用日誌的 `method` 現記錄實際 HTTP 動詞（GET／HEAD／PUT／POST／DELETE／PATCH，其餘落 `OTHER`），可區分 PUT／POST／DELETE／PATCH；但 `pathClass` 仍只分 `student`／`admin`／`other`，不能區分各子路由。因此不能以方法總量代替逐路徑 30 次證據（建議值，待 Owner 確認），仍須以路由模板逐項核對。此欄位細分自後續 PR（`method` 由原 `GET／HEAD／OTHER` 三分改為記錄實際動詞；在此之前已記錄的日誌仍為 `OTHER`，統計時須分開處理）。以已授權的受控測試執行清單、路由模板與時間區間、平台可用的安全關聯資料核對；若無法區分或關聯，該項 `HOLD`，不得推算成功或擴充敏感日誌。
+應用日誌的 `method` 現記錄實際 HTTP 動詞（GET／HEAD／PUT／POST／DELETE／PATCH，其餘落 `OTHER`），可區分 PUT／POST／DELETE／PATCH；但 `pathClass` 仍只分 `student`／`admin`／`other`，不能區分各子路由。因此不能以方法總量代替逐路徑 30 次證據（Owner 決議），仍須以路由模板逐項核對。此欄位細分自後續 PR（`method` 由原 `GET／HEAD／OTHER` 三分改為記錄實際動詞；在此之前已記錄的日誌仍為 `OTHER`，統計時須分開處理）。以已授權的受控測試執行清單、路由模板與時間區間、平台可用的安全關聯資料核對；若無法區分或關聯，該項 `HOLD`，不得推算成功或擴充敏感日誌。
 
 合成流量標記另以日誌欄位 `synthetic`（布林，預設 `false`）表達：僅當該筆 `relay.verify` 的 `result=valid`，且**已驗章身分**（`parsed.userId`／`parsed.email`，即簽章內容）完全等於伺服器端非 secret 白名單 `A01_SYNTHETIC_ACCOUNTS` 的某一項時才為 `true`（`site/app/api/auth-helper.ts:96,314,323-351`）。請求標頭或 body **無法**設定此欄位；白名單未設定或為空時一律 `false`；`invalid`／`none` 一律 `false`。白名單內容不得出現在任何日誌、health 或錯誤訊息；health 僅以 `syntheticAllowlist` 布林回報是否已設定（`site/app/api/health/route.ts:100-103`）。此標記只供把合成樣本與自然樣本分列，**不得**改動 E／L、300／100／30 或回滾數字，也不計入使用者面向失敗率。
 
@@ -365,15 +365,15 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 | 5xx 持續升高（含次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`） | 依預先登記的基準、最低樣本及連續區間門檻觸發回滾；每筆須標記失敗原因（如 `relay_edge_secret_unavailable`／`relay_signing_unavailable`）並跨站去重，與 §4.4 Owner 驗收規則第 4 條一致。 |
 | 日誌不可用、取樣或出現無法解釋的缺口 | 停止 Strict 推進、保存已有證據；已切 Strict 時依影響必要回滾。 |
 
-401／403 與 5xx 的數值不可事後挑選。進入 Strict 前，Owner／平台負責人須登記並由 AGY 核對：基準環境／版本／時窗、每站每路徑的請求總數 N 與錯誤數、觀測區間長度 W、每區間最低樣本 Nmin、相對基準的增幅門檻 Δ（百分點）、觸發所需連續區間數 K，以及執行者／授權。錯誤率 r=錯誤數/N；N≥Nmin 且 r−基準率≥Δ 連續 K 個區間即達已登記門檻（401／403 暫停評估，5xx 回滾）。5xx 基準的錯誤數須明確納入次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`，並依 §4.4 Owner 驗收規則第 4 條標記失敗原因、跨站去重，不得將這些 503 排除在 5xx 基準之外；300／100／30 等建議值與本節回滾數字不因納入而改變（仍為提案，待 Owner 確認）。兩類各自填入實際數值；本決議未提供這些數字，未填即 `HOLD`，不得憑空宣稱已可量測。N=0／低樣本不算零錯誤；不妨礙可重現合法使用者被拒時立即回滾。
+401／403 與 5xx 的數值不可事後挑選。進入 Strict 前，Owner／平台負責人須登記並由 AGY 核對：基準環境／版本／時窗、每站每路徑的請求總數 N 與錯誤數、觀測區間長度 W、每區間最低樣本 Nmin、相對基準的增幅門檻 Δ（百分點）、觸發所需連續區間數 K，以及執行者／授權。錯誤率 r=錯誤數/N；N≥Nmin 且 r−基準率≥Δ 連續 K 個區間即達已登記門檻（401／403 暫停評估，5xx 回滾）。5xx 基準的錯誤數須明確納入次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`，並依 §4.4 Owner 驗收規則第 4 條標記失敗原因、跨站去重，不得將這些 503 排除在 5xx 基準之外；300／100／30 等 Owner 決議門檻與本節回滾數字不因納入而改變。兩類各自填入實際數值；回滾數字（W／Nmin／Δ／K）為 Owner 決議，於進入 Strict 前登記，未登記即 `HOLD`，不得憑空宣稱已可量測。N=0／低樣本不算零錯誤；不妨礙可重現合法使用者被拒時立即回滾。
 
 ### 5.2 回滾操作與成功判定
 
-1. 保留異常視窗、查詢結果、三站部署版本與生效設定證據，依核准的應變授權由指定執行者處理。
-2. **首選（不改程式）：主站設定 `A01_RELAY_MODE=transitional`，並重新部署。** 只修改環境變數不得宣告回滾成功。
-3. 核驗平台部署完成、正確版本及生效設定；主站 health 必須回報 `relayMode=transitional`，並檢查 `relayKeys`、`adminAllowlist`、D1／R2 等健康狀態。
+1. 保留異常視窗、查詢結果、三站部署版本與生效設定證據；回滾由 AGY 執行、Owner 事後確認。
+2. **首選（不改程式）：主站 `A01_RELAY_EDGE_MODE` 改回 `accept`。** 由 AGY 執行、Owner 事後確認；窗口內 `A01_RELAY_MODE` 維持 `transitional`，不切換 `strict`。此變更使觀察窗口失效，須重新起算 72 小時；只修改環境變數不得宣告回滾成功。
+3. 核驗平台生效設定與正確版本；主站 health 必須回報 `edgeMode=accept`（`relayMode` 維持 `transitional`），並檢查 `relayKeys`、`adminAllowlist`、D1／R2 等健康狀態。
 4. 兩站各自重跑帶平台身分的合法請求，確認學生身分與管理員授權恢復正常；依授權在 staging 驗證必要讀寫路徑。production 寫入仍須個別授權，不能藉回滾驗證擴大範圍。
-5. 核對 invocation、應用日誌及 401／403／5xx 是否回到已登記的基準範圍，記錄完成時間與執行者。部署、生效設定、health、合法請求恢復皆有證據才記 `PASS`，且 `PASS` 須綁定當時實際 head sha（§4.4 Owner 驗收規則第 1 條）；缺一仍為未完成。Gate 保持 `HOLD`，修復後依 §4.4 重新驗證與起算。
+5. 核對 invocation、應用日誌及 401／403／5xx 是否回到已登記的基準範圍，記錄完成時間與執行者。生效設定、health、合法請求恢復皆有證據才記 `PASS`，且 `PASS` 須綁定當時實際 head sha（§4.4 Owner 驗收規則第 1 條）；缺一仍為未完成。Gate 保持 `HOLD`，修復後依 §4.4 重新驗證與起算。
 
 - **切勿在主站 `strict` 下單獨回退次站。** `strict` 會忽略未簽章身分；若次站被單獨回退成舊版（原樣轉送 `oai-*`），這些請求會變成 guest／401，等於次站使用者全數掉線。
 - **回退順序為主站 → 次站。** 若必須回退 commit：先完成主站降到 `transitional` 的部署與驗證，再依序回退次站 commit，最後才在必要時回退主站 commit。
