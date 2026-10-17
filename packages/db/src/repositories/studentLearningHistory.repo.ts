@@ -38,6 +38,31 @@ function publicRecord(row: typeof studentLearningHistory.$inferSelect) {
   };
 }
 
+/**
+ * Content equality for one stored row and one incoming record.
+ *
+ * `syncVersion` is the only ordering signal, so an equal version only means
+ * "nothing to do" when the payload is also identical. Two devices that edit
+ * the same base version produce different payloads at the same version.
+ */
+function sameLearningHistoryPayload(
+  row: typeof studentLearningHistory.$inferSelect,
+  entry: LearningHistoryRecord
+): boolean {
+  const same = (stored: string | null, incoming: string | undefined) => (stored ?? undefined) === (incoming ?? undefined);
+  return row.askedAt === entry.askedAt
+    && row.question === entry.question
+    && row.category === entry.category
+    && row.sourceType === entry.sourceType
+    && row.strategy === entry.strategy
+    && same(row.answer, entry.answer)
+    && same(row.answerUpdatedAt, entry.answerUpdatedAt)
+    && same(row.rawAnswer, entry.rawAnswer)
+    && same(row.rawAnswerCapturedAt, entry.rawAnswerCapturedAt)
+    && same(row.sourceUrl, entry.sourceUrl)
+    && same(row.organizedAnswer, entry.organizedAnswer);
+}
+
 export function makeStudentLearningHistoryRepo(db: Db) {
   return {
     listStudent(studentId: string, offset = 0, limit = 100) {
@@ -50,9 +75,7 @@ export function makeStudentLearningHistoryRepo(db: Db) {
       const now = new Date().toISOString();
       return db.transaction((tx) => {
         for (const entry of entries) {
-          tx.insert(studentLearningHistory).values({
-            studentId,
-            entryId: entry.id,
+          const values = {
             askedAt: entry.askedAt,
             question: entry.question,
             category: entry.category,
@@ -63,31 +86,40 @@ export function makeStudentLearningHistoryRepo(db: Db) {
             rawAnswer: entry.rawAnswer ?? null,
             rawAnswerCapturedAt: entry.rawAnswerCapturedAt ?? null,
             sourceUrl: entry.sourceUrl ?? null,
-            organizedAnswer: entry.organizedAnswer ?? null,
-            createdAt: now,
-            updatedAt: now,
-            deletedAt: null,
-            syncVersion: entry.syncVersion
-          }).onConflictDoUpdate({
-            target: [studentLearningHistory.studentId, studentLearningHistory.entryId],
-            set: {
-              askedAt: entry.askedAt,
-              question: entry.question,
-              category: entry.category,
-              sourceType: entry.sourceType,
-              strategy: entry.strategy,
-              answer: entry.answer ?? null,
-              answerUpdatedAt: entry.answerUpdatedAt ?? null,
-              rawAnswer: entry.rawAnswer ?? null,
-              rawAnswerCapturedAt: entry.rawAnswerCapturedAt ?? null,
-              sourceUrl: entry.sourceUrl ?? null,
-              organizedAnswer: entry.organizedAnswer ?? null,
+            organizedAnswer: entry.organizedAnswer ?? null
+          };
+          const key = and(
+            eq(studentLearningHistory.studentId, studentId),
+            eq(studentLearningHistory.entryId, entry.id)
+          );
+          const existing = tx.select().from(studentLearningHistory).where(key).get();
+          if (!existing) {
+            tx.insert(studentLearningHistory).values({
+              studentId,
+              entryId: entry.id,
+              ...values,
+              createdAt: now,
               updatedAt: now,
               deletedAt: null,
               syncVersion: entry.syncVersion
-            },
-            where: sql`${studentLearningHistory.syncVersion} < ${entry.syncVersion} AND ${studentLearningHistory.deletedAt} IS NULL`
-          }).run();
+            }).run();
+            continue;
+          }
+          // A tombstone always wins: a stale client must not resurrect a deleted entry.
+          if (existing.deletedAt !== null) continue;
+          if (entry.syncVersion > existing.syncVersion) {
+            tx.update(studentLearningHistory).set({ ...values, updatedAt: now, syncVersion: entry.syncVersion })
+              .where(key).run();
+            continue;
+          }
+          // Equal versions are only idempotent when the payload matches. When it
+          // differs, the strict `<` guard would silently drop this writer's edit
+          // and the client would merge the other device's row over it, so
+          // allocate the next version and apply the incoming payload instead.
+          if (entry.syncVersion === existing.syncVersion && !sameLearningHistoryPayload(existing, entry)) {
+            tx.update(studentLearningHistory).set({ ...values, updatedAt: now, syncVersion: existing.syncVersion + 1 })
+              .where(and(key, eq(studentLearningHistory.syncVersion, existing.syncVersion))).run();
+          }
         }
         return entries.map((entry) => {
           const row = tx.select().from(studentLearningHistory).where(and(
