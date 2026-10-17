@@ -86,7 +86,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 
 - **【決議】transitional 窗口**：72 小時觀察窗口在主站 `A01_RELAY_MODE=transitional` 下進行。
 - **【決議】strict 另開**：Strict 切換為另一個獨立窗口／決策，不與 transitional 觀察窗口混算。
-- 窗口長度**下限 24 小時【提案，未經 Owner 確認】**：僅當流量足以在 24 小時內覆蓋所有主要路徑與站別時才可接受；低流量時 24 小時可能完全沒有樣本（見 §5.2 盲區）。
+- **【決議】窗口長度下限 24 小時（Owner 2026-10-17）**：僅當流量足以在 24 小時內覆蓋所有主要路徑與站別時才可接受；低流量時 24 小時可能完全沒有樣本（見 §5.2 盲區）。
 - 起算前置不變【現況】：須次站已送 edge secret 且主站 `A01_RELAY_EDGE_MODE=require` 已部署並驗證生效（`relay-rollout.md` §4.4；`site/lib/relay-edge-gate.ts:105-112`）。
 
 ### 2.2 樣本門檻（採用）
@@ -116,6 +116,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 
 - **【決議】ingress 等價以「設定比對清單」判定，並由非作者驗證者判定**。
 - 判定方式：以候選版本的 Worker 路由表、`site/app/api/**/route.ts`、`gatePrimaryApiRequest`（`site/worker/index.ts:89-91`；`site/lib/relay-edge-gate.ts:105-112`）、CORS（`site/app/api/backend-client.ts:326`）及 `getNormalizedAuth` 呼叫點建立設定比對清單，逐列核對；不得以名稱推斷保護狀態。
+- **【決議】證據＝設定比對清單「逐列全等」（Owner 2026-10-17）**：清單每一列（Worker 路由表、各 `route.ts`、`gatePrimaryApiRequest`、CORS、`getNormalizedAuth` 呼叫點）的候選值須與基準**完全相等**；**任一列不等即判不等價**，不得以「等價／近似」或名稱推斷替代。
 - 非作者驗證者：合成相關 PR 與結果的驗證不得由 AGY（AGY 為合成執行者）；作者不驗自己。
 
 ### 2.7 回滾門檻與執行（決議）
@@ -277,7 +278,7 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 | 合成只補 ≥30、不計入 300／100、含 GET、僅 staging | 【決議】 |
 | 日誌保留 14 天；IP 遮罩、ID 雜湊 | 【決議】 |
 | 日誌匯出權限 AGY + Owner | 【決議】 |
-| ingress 等價以設定比對清單、由非作者驗證者判定 | 【決議】 |
+| ingress 等價以設定比對清單**逐列全等**、由非作者驗證者判定 | 【決議】（Owner 2026-10-17） |
 | 回滾 W=30min／Nmin=100／Δauth=+1pp／Δ5xx=+0.5pp／K=3；零容忍立即回滾；執行人 AGY、Owner 事後確認；回滾＝`A01_RELAY_EDGE_MODE` 改回 `accept` 並重新起算 72h | 【決議】 |
 | secrets／部署維護者 = AGY（部署含 `A01_RELAY_EDGE_MODE=require`；回滾亦 AGY 執行、Owner 事後確認） | 【決議】（Owner 2026-10-17） |
 | 窗口後清除測試帳號與白名單；選項 C 排除 | 【決議】 |
@@ -285,7 +286,7 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 | nonce 去重 | 【提案】 |
 | 失敗原因碼彙總分類 | 【提案】 |
 | 覆蓋等式 `ingress = verify + probe + health + books + sync + cors + static`（含單一分母與唯一桶歸屬規則） | 【提案】 |
-| 窗口長度下限 24 小時（§2.1） | 【提案】 |
+| 窗口長度下限 24 小時（§2.1） | 【決議】（Owner 2026-10-17） |
 | 合成補樣清單（5 個非 GET 路徑 × 動詞；§5.1） | 【現況】（路由盤點；門檻 ≥30 為【決議】） |
 | 盲區清單 B1–B9（§5.2） | 【現況】 |
 | 合成節奏與停止條件 5 條（§5.3） | 【提案】 |
