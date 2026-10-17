@@ -132,15 +132,16 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 
 - **執行：AGY**（建立測試帳號、管理執行期變數、注入流量、停止與清理）。
 - **驗證：非 AGY**（合成標記 PR 與合成流量結果的驗證改由非 AGY 擔任；AGY 不得驗自己的執行）。
+- **【決議】secrets／部署維護者：AGY（Owner 2026-10-17）**：edge secret 與其他執行期 secret 之維護、以及部署（含 `A01_RELAY_EDGE_MODE=require`）由 AGY 執行；回滾亦由 AGY 執行、Owner 事後確認（見 §2.7）。
 - 邊界：**僅 staging**；不碰 production；不讀取或轉述任何帳密／secret。
 
 ### 3.2 樣本計數【決議】
 
 - **合成只補 ≥30、不計入 300／100**：合成樣本只填補每個適用非 GET 路徑 × 動詞的 `>=30` 下限；Student `>=300` / Admin `>=100` 僅計自然樣本。
-- ⚠️ **待 Owner 釐清【未決】**：合成樣本在 **staging** 產生，而本節 `>=30` 下限的樣本歸屬與 runbook「staging 樣本不得計入 production」**相衝突**。**不自行改決議**，列兩案待 Owner 裁定：
-  - **(a) 獨立檢查**：`staging` 自身達 `>=30` 即通過該獨立項；**production 仍需自然樣本 `>=30`**（合成不補 production）。
-  - **(b) 明確接受補量**：Owner 明確接受以 staging 合成樣本補足 production 的 `>=30` 下限（僅該下限，不含 `300／100`）。
-  - Owner 裁定前，`>=30` 之 production 歸屬一律 `HOLD`。
+- **【決議】(a) 獨立檢查（Owner 2026-10-17 08:30）**：原兩案衝突（staging 合成樣本歸屬 vs runbook「staging 樣本不得計入 production」）已由 Owner 裁定採 **(a)**：
+  - `staging` 自身達 `>=30` 即通過該**獨立檢查項**；**production 非 GET 路徑 × 動詞 `>=30` 仍需自然樣本**（合成**不補** production）。
+  - 未採 (b)：不以 staging 合成樣本補足 production 的 `>=30` 下限（原案 (b)「明確接受補量」**已否決**，保留供追溯）。
+  - 本項為**獨立檢查**：staging 合成 `>=30` 與 production 自然樣本 `>=30` 分列判定，不得互相替代。
 - **含 GET**（Owner 18:00 決議）。
 - 合成樣本與自然樣本**分列**，不得混算。
 - 合成標記僅能由**已驗章身分**（`parsed.userId`／`parsed.email`）完全等於非 secret 白名單 `A01_SYNTHETIC_ACCOUNTS` 時為 `true`（`site/app/api/auth-helper.ts:306-351`，特別是 `:343-351`）；請求標頭或 body 無法設定；未設定或空白一律 `false`（fail-closed）。health 僅以布林 `syntheticAllowlist` 回報是否已設定（`site/app/api/health/route.ts:103`）。
@@ -167,7 +168,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 - 本文件**不修改** `docs/ops/relay-rollout.md`，以避免行號位移；兩者衝突時，Owner 決議優先，並回頭修訂 `relay-rollout.md`（另開 PR）。
 - 仍為 `HOLD`／未完成之項（不因本文件而解除）：三站平台日誌可用性、O-1a 前置、D1 migration `0003` 套用、平台管線預檢、staging 回滾演練、Strict 切換授權。詳見 `relay-rollout.md` §3、§4.2、§4.4。
 - §1.3 四項量測設計與 `scripts/a01-coverage/` 的覆蓋等式仍為**【提案】**，須 Owner 確認後才可作為 Gate 依據。
-- 另有一項**【未決】待 Owner 釐清**：staging 合成樣本是否計入 production 的 `>=30` 下限（§3.2），與 runbook「staging 樣本不得計入 production」衝突；列兩案待裁定。
+- **已決（Owner 2026-10-17 08:30）**：staging 合成樣本是否計入 production 的 `>=30` 下限（§3.2）採 **(a) 獨立檢查**——`staging` 自身達 `>=30` 即通過該獨立項；**production 非 GET 路徑 × 動詞 `>=30` 仍需自然樣本**（合成不補 production）。
 
 ---
 
@@ -276,6 +277,7 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 | 日誌匯出權限 AGY + Owner | 【決議】 |
 | ingress 等價以設定比對清單、由非作者驗證者判定 | 【決議】 |
 | 回滾 W=30min／Nmin=100／Δauth=+1pp／Δ5xx=+0.5pp／K=3；零容忍立即回滾；執行人 AGY、Owner 事後確認；回滾＝`A01_RELAY_EDGE_MODE` 改回 `accept` 並重新起算 72h | 【決議】 |
+| secrets／部署維護者 = AGY（部署含 `A01_RELAY_EDGE_MODE=require`；回滾亦 AGY 執行、Owner 事後確認） | 【決議】（Owner 2026-10-17） |
 | 窗口後清除測試帳號與白名單；選項 C 排除 | 【決議】 |
 | ingress 100% 採集 | 【提案】 |
 | nonce 去重 | 【提案】 |
@@ -286,4 +288,4 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 | 盲區清單 B1–B9（§5.2） | 【現況】 |
 | 合成節奏與停止條件 5 條（§5.3） | 【提案】 |
 | 覆蓋等式「分量 ⇄ 入口」對照表（§5.4） | 【提案】 |
-| staging 合成樣本是否計入 production `>=30`（§3.2） | 【未決】待 Owner 釐清 |
+| staging 合成樣本是否計入 production `>=30`（§3.2） | 【決議】(a) 獨立檢查：staging 自身達 ≥30 即通過該獨立項；production 非 GET ≥30 仍需自然樣本（Owner 2026-10-17） |
