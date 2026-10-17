@@ -5,6 +5,8 @@ import {
   googleAiSearchUrl,
   LEARNING_HISTORY_KEY,
   LEARNING_HISTORY_MAX_ENTRIES,
+  LEARNING_HISTORY_SYNC_BATCH_MAX_BYTES,
+  LEARNING_HISTORY_SYNC_BATCH_MAX_ENTRIES,
   RAW_ANSWER_MAX_CHARS,
   answerRelationConfidence,
   canAutoBindAnswer,
@@ -16,13 +18,21 @@ import {
   hasPlausibleAnswerRelation,
   isHistoryEntry,
   readLearningHistory,
+  readGuestLearningHistory,
+  readLearningTombstones,
+  setLearningHistoryScope,
+  importGuestLearningHistory,
+  mergeLearningHistory,
+  removeLearningHistoryEntry,
   readPendingRawAnswer,
   savePendingRawAnswerOnce,
   saveGoogleAiSourceUrl,
   saveRawAnswerOnce,
+  splitLearningHistoryBatches,
   updateLearningHistoryContent,
   updateLearningHistoryAnswer
 } from "./learningHistory";
+import type { LearningHistoryEntry } from "./learningHistory";
 
 function makeStorage(): Storage {
   const values = new Map<string, string>();
@@ -36,7 +46,45 @@ function makeStorage(): Storage {
   } as Storage;
 }
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); setLearningHistoryScope(null); });
+
+describe("account learning history sync state", () => {
+  it("keeps guest entries separate until explicit import, increments revisions and retains a retry tombstone", () => {
+    const storage = makeStorage();
+    const guest = addLearningHistoryEntry({ question: "AI agents", category: "auto", sourceType: "manual", strategy: "google-ai" }, storage).entry;
+    setLearningHistoryScope("student-a");
+    expect(readLearningHistory(storage)).toEqual([]);
+    expect(readGuestLearningHistory(storage)).toHaveLength(1);
+    expect(importGuestLearningHistory(storage)).toMatchObject([{ id: guest.id, syncVersion: 1 }]);
+    expect(importGuestLearningHistory(storage)).toHaveLength(1);
+    updateLearningHistoryAnswer(guest.id, "fixture answer", storage);
+    expect(readLearningHistory(storage)[0].syncVersion).toBe(2);
+    const removed = removeLearningHistoryEntry(guest.id, storage);
+    expect(removed).toEqual([]);
+    expect(readLearningTombstones(storage)).toEqual([{ id: guest.id, syncVersion: 3 }]);
+    mergeLearningHistory([{ ...guest, syncVersion: 2, deletedAt: null }], storage);
+    expect(readLearningHistory(storage)).toEqual([]);
+    mergeLearningHistory([{ ...guest, syncVersion: 2, deletedAt: "2026-10-16T10:00:00.000Z" }], storage);
+    expect(readLearningHistory(storage)).toEqual([]);
+    setLearningHistoryScope("student-b");
+    expect(readLearningHistory(storage)).toEqual([]);
+    expect(readGuestLearningHistory(storage)).toHaveLength(1);
+  });
+
+  it("does not lose an account entry when the device cannot save a deletion marker", () => {
+    const storage = makeStorage();
+    setLearningHistoryScope("student-a");
+    const item = addLearningHistoryEntry({ question: "保留這題", category: "auto", sourceType: "manual", strategy: "api" }, storage).entry;
+    const originalSet = storage.setItem.bind(storage);
+    storage.setItem = (key: string, value: string) => {
+      if (key.includes("tombstones")) throw new Error("storage full");
+      originalSet(key, value);
+    };
+    expect(removeLearningHistoryEntry(item.id, storage)).toHaveLength(1);
+    expect(clearLearningHistory(storage)).toHaveLength(1);
+    expect(readLearningHistory(storage)).toHaveLength(1);
+  });
+});
 
 describe("Google AI URL", () => {
   it("uses the zh-TW Google AI Mode URL and encodes the question", () => {
@@ -354,5 +402,41 @@ describe("local learning history", () => {
   it("rejects malformed optional raw and organized fields instead of trusting storage", () => {
     expect(isHistoryEntry({ id: "id", askedAt: "now", question: "題目", category: "auto", sourceType: "manual", strategy: "google-ai", rawAnswer: 1 })).toBe(false);
     expect(isHistoryEntry({ id: "id", askedAt: "now", question: "題目", category: "auto", sourceType: "manual", strategy: "google-ai", rawAnswer: "證據", organizedAnswer: "整理" })).toBe(true);
+  });
+});
+
+describe("learning history sync batching", () => {
+  function entry(id: string, rawAnswer = "回答"): LearningHistoryEntry {
+    return { id, askedAt: "2026-10-17T10:00:00.000Z", question: "題目", category: "auto", sourceType: "manual", strategy: "google-ai", rawAnswer, syncVersion: 2 };
+  }
+  const bytes = (batch: LearningHistoryEntry[]) => new TextEncoder().encode(JSON.stringify({ entries: batch })).length;
+
+  it("caps batches at the server entry limit", () => {
+    const entries = Array.from({ length: 60 }, (_, index) => entry(`e-${index}`));
+    const batches = splitLearningHistoryBatches(entries);
+    expect(batches.map((batch) => batch.length)).toEqual([25, 25, 10]);
+    expect(batches.flat().map((item) => item.id)).toEqual(entries.map((item) => item.id));
+  });
+
+  it("splits multibyte answers by serialized bytes before they reach the 256 KiB limit", () => {
+    const entries = Array.from({ length: 9 }, (_, index) => entry(`big-${index}`, "學".repeat(RAW_ANSWER_MAX_CHARS)));
+    const batches = splitLearningHistoryBatches(entries);
+    expect(batches.length).toBeGreaterThan(1);
+    for (const batch of batches) {
+      expect(batch.length).toBeLessThanOrEqual(LEARNING_HISTORY_SYNC_BATCH_MAX_ENTRIES);
+      expect(bytes(batch)).toBeLessThanOrEqual(LEARNING_HISTORY_SYNC_BATCH_MAX_BYTES);
+      expect(bytes(batch)).toBeLessThan(256 * 1024);
+    }
+    expect(batches.flat().map((item) => item.id)).toEqual(entries.map((item) => item.id));
+  });
+
+  it("keeps a record that exceeds the byte budget alone instead of dropping it", () => {
+    const entries = [entry("huge"), entry("small")];
+    const batches = splitLearningHistoryBatches(entries, { maxBytes: 80 });
+    expect(batches.map((batch) => batch.map((item) => item.id))).toEqual([["huge"], ["small"]]);
+  });
+
+  it("returns no batches for an empty queue", () => {
+    expect(splitLearningHistoryBatches([])).toEqual([]);
   });
 });

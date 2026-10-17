@@ -10,6 +10,8 @@ import {
   STUDENT_TEST_ORIGIN,
   type StudentTestApp
 } from "./testApp";
+const EXPECTED_MAX_LEARNING_HISTORY_BATCH = 25;
+const EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES = 256 * 1024;
 
 /**
  * C-1/C-2 negative-path integration suite. Everything below exercises the
@@ -40,6 +42,131 @@ async function startAndLogin(options: { sessionTtlMs: number; completeProfile?: 
 }
 
 describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () => {
+  it("exposes learning-history through the standalone student server with the same session gate", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    const path = `${baseUrl}/api/student/learning-history`;
+    const anonymous = await originalFetch(path);
+    expect(anonymous.status).toBe(401);
+    const record = { id: "standalone-fixture", askedAt: "2026-10-16T10:24:00.000Z", question: "AI agents", category: "auto", sourceType: "manual", strategy: "google-ai", syncVersion: 1 };
+    const rejected = await browser.fetch(path, { method: "POST", headers: { "content-type": "application/json", origin: "https://untrusted.example.test" }, body: JSON.stringify({ entries: [record] }) });
+    expect(rejected.status).toBe(403);
+    const saved = await browser.fetch(path, { method: "POST", headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN }, body: JSON.stringify({ entries: [record] }) });
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).entries).toMatchObject([{ id: "standalone-fixture", syncVersion: 1 }]);
+    const listed = await browser.fetch(path);
+    expect((await listed.json()).entries).toMatchObject([{ id: "standalone-fixture" }]);
+  });
+
+  it("accepts a 25-entry body at exactly 256 KiB and rejects one extra byte", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    const path = `${baseUrl}/api/student/learning-history`;
+    const entries = Array.from({ length: EXPECTED_MAX_LEARNING_HISTORY_BATCH }, (_, index) => ({
+      id: `size-${index}`,
+      askedAt: "2026-10-16T10:24:00.000Z",
+      question: "AI agents",
+      category: "auto",
+      sourceType: "manual",
+      strategy: "google-ai",
+      syncVersion: 1,
+      answer: ""
+    }));
+    entries.slice(0, 12).forEach((item) => { item.answer = "x".repeat(20_000); });
+    entries[0].question = "SENTINEL_DO_NOT_ECHO";
+
+    const paddingIndex = 12;
+    const emptyPaddingBytes = EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES - Buffer.byteLength(JSON.stringify({ entries }), "utf8");
+    expect(emptyPaddingBytes).toBeGreaterThan(0);
+    expect(emptyPaddingBytes).toBeLessThanOrEqual(20_000);
+    entries[paddingIndex].answer = "x".repeat(emptyPaddingBytes);
+
+    const exactBody = JSON.stringify({ entries });
+    expect(Buffer.byteLength(exactBody, "utf8")).toBe(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES);
+    const exact = await browser.fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+      body: exactBody
+    });
+    expect(exact.status).toBe(200);
+    expect((await exact.json()).entries).toHaveLength(EXPECTED_MAX_LEARNING_HISTORY_BATCH);
+
+    const overEntries = entries.map((item) => ({ ...item }));
+    overEntries[paddingIndex].answer += "x";
+    const overBody = JSON.stringify({ entries: overEntries });
+    expect(Buffer.byteLength(overBody, "utf8")).toBe(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES + 1);
+    const over = await browser.fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+      body: overBody
+    });
+    expect(over.status).toBe(413);
+    expect(over.headers.get("content-type")).toContain("application/json");
+    const overPayload = await over.text();
+    expect(JSON.parse(overPayload)).toEqual({ error: "BATCH_TOO_LARGE" });
+    expect(overPayload).not.toContain("SENTINEL_DO_NOT_ECHO");
+    expect(overPayload).not.toContain("PayloadTooLargeError");
+  });
+  it("answers a generic 413 for oversize bodies outside the learning-history endpoints", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    // The global parser limit is 100 KB; this body is deliberately over it.
+    const body = JSON.stringify({ question: "SENTINEL_DO_NOT_ECHO", pad: "x".repeat(200 * 1024) });
+    const response = await browser.fetch(`${baseUrl}/api/student/books/b1/rag-ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+      body
+    });
+    expect(response.status).toBe(413);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const payload = await response.text();
+    // Generic code, not the learning-history batch contract.
+    expect(JSON.parse(payload)).toEqual({ error: "PAYLOAD_TOO_LARGE" });
+    expect(payload).not.toContain("BATCH_TOO_LARGE");
+    // No stack trace, parser internals, HTML error page or request content.
+    expect(payload).not.toContain("SENTINEL_DO_NOT_ECHO");
+    expect(payload).not.toContain("PayloadTooLargeError");
+    expect(payload).not.toContain("entity.too.large");
+    expect(payload).not.toContain("<!DOCTYPE");
+    expect(payload).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+  });
+  it("classifies oversize bodies on case and trailing-slash variants the way Express routes do", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    const sentinel = "SENTINEL_DO_NOT_ECHO";
+    const batchBody = JSON.stringify({ entries: [], note: sentinel, padding: "x".repeat(260 * 1024) });
+    expect(Buffer.byteLength(batchBody, "utf8")).toBeGreaterThan(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES);
+
+    for (const path of ["/API/student/learning-history", "/api/student/learning-history/", "/Api/Student/Learning-History/"]) {
+      const response = await browser.fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+        body: batchBody
+      });
+      expect(response.status, path).toBe(413);
+      expect(response.headers.get("content-type"), path).toContain("application/json");
+      const payload = await response.text();
+      expect(JSON.parse(payload), path).toEqual({ error: "BATCH_TOO_LARGE" });
+      expect(payload, path).not.toContain(sentinel);
+      expect(payload, path).not.toContain("<!DOCTYPE");
+      expect(payload, path).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+    }
+
+    const genericBody = JSON.stringify({ question: sentinel, pad: "x".repeat(200 * 1024) });
+    for (const path of ["/API/student/books/b1/rag-ask", "/Api/Student/Books/B1/Rag-Ask"]) {
+      const response = await browser.fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+        body: genericBody
+      });
+      expect(response.status, path).toBe(413);
+      expect(response.headers.get("content-type"), path).toContain("application/json");
+      const payload = await response.text();
+      expect(JSON.parse(payload), path).toEqual({ error: "PAYLOAD_TOO_LARGE" });
+      expect(payload, path).not.toContain("BATCH_TOO_LARGE");
+      expect(payload, path).not.toContain(sentinel);
+      expect(payload, path).not.toContain("PayloadTooLargeError");
+      expect(payload, path).not.toContain("entity.too.large");
+      expect(payload, path).not.toContain("<!DOCTYPE");
+      expect(payload, path).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+    }
+  });
   it("rejects unauthenticated and forged-cookie access to every private student route", async () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
     const protectedPaths: Array<[string, RequestInit | undefined]> = [

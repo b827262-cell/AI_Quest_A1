@@ -13,7 +13,13 @@ import {
   resolveStudentAuthConfig,
   type StudentAuthRuntime
 } from "@ai-smartbook/auth/server";
-import { createStudentAuthRouter, createStudentSessionMiddleware } from "@ai-smartbook/auth/express";
+import {
+  createStudentAuthRouter,
+  createStudentSessionMiddleware,
+  createStudentLearningHistoryRouter,
+  oversizeJsonBodyHandler,
+  MAX_LEARNING_HISTORY_BODY_BYTES
+} from "@ai-smartbook/auth/express";
 import type { StudentDataSource } from "@ai-smartbook/student-runtime";
 import type { Book, BookContent } from "@ai-smartbook/schema";
 import { createStudentRagRouter } from "./student-rag";
@@ -156,6 +162,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   const dataSource = createMemoryDataSource();
 
   const app: Express = express();
+  app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
   app.use(express.json());
   if (options.fakeProvider) {
     const { getSubject } = options.fakeProvider;
@@ -174,6 +181,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   }
   app.use("/api/student/auth", createStudentAuthRouter(runtime.auth, config));
   app.use("/api/student", createStudentSessionMiddleware(runtime.auth, config));
+  app.use("/api/student", createStudentLearningHistoryRouter(runtime.learningHistory, config));
   app.use("/api/student", createStudentRagRouter({
     getDataSource: () => dataSource,
     env: { provider: "fake" }
@@ -189,6 +197,10 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   app.get("/api/student/books/:bookId/contents", async (req, res) => {
     res.json({ contents: await dataSource.getContents(String(req.params.bookId)) });
   });
+
+  // Mirror the production error boundary: oversize bodies answer JSON 413,
+  // BATCH_TOO_LARGE only on the learning-history endpoints.
+  app.use(oversizeJsonBodyHandler());
 
   const server: Server = await new Promise((resolve, reject) => {
     const listener = createServer(app);

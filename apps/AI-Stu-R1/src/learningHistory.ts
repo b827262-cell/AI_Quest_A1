@@ -19,12 +19,115 @@ export interface LearningHistoryEntry {
   sourceUrl?: string;
   /** A local, display-oriented rendition derived from rawAnswer. */
   organizedAnswer?: string;
+  /** Monotonic per-entry revision used for idempotent account sync. */
+  syncVersion?: number;
 }
 
 export const LEARNING_HISTORY_KEY = "ai-smartbook.student.learning-history.v1";
 export const PENDING_RAW_ANSWER_KEY = "ai-smartbook.student.pending-raw-answer.v1";
 export const LEARNING_HISTORY_MAX_ENTRIES = 50;
 export const RAW_ANSWER_MAX_CHARS = 20_000;
+/** Server batch contract: at most 25 entries and 256 KiB of serialized body. */
+export const LEARNING_HISTORY_SYNC_BATCH_MAX_ENTRIES = 25;
+/** Stay below the 256 KiB server limit so JSON overhead cannot trip a 413. */
+export const LEARNING_HISTORY_SYNC_BATCH_MAX_BYTES = 240 * 1024;
+const TOMBSTONE_KEY = "ai-smartbook.student.learning-history.tombstones.v1";
+let activeStudentId: string | null = null;
+
+/** Account data uses a per-student device namespace. Guest history remains separate. */
+export function setLearningHistoryScope(studentId: string | null): void {
+  activeStudentId = studentId;
+}
+
+function historyKey(): string { return activeStudentId ? `${LEARNING_HISTORY_KEY}.${activeStudentId}` : LEARNING_HISTORY_KEY; }
+function tombstoneKey(): string { return activeStudentId ? `${TOMBSTONE_KEY}.${activeStudentId}` : TOMBSTONE_KEY; }
+
+export interface LearningTombstone { id: string; syncVersion: number }
+export function readLearningTombstones(storage = browserStorage()): LearningTombstone[] {
+  try {
+    const values: unknown = JSON.parse(storage?.getItem(tombstoneKey()) ?? "[]");
+    return Array.isArray(values) ? values.filter((item): item is LearningTombstone =>
+      Boolean(item) && typeof item.id === "string" && Number.isSafeInteger(item.syncVersion) && item.syncVersion > 0) : [];
+  } catch { return []; }
+}
+
+export function acknowledgeLearningTombstone(id: string, storage = browserStorage()): void {
+  try { storage?.setItem(tombstoneKey(), JSON.stringify(readLearningTombstones(storage).filter((item) => item.id !== id))); } catch { /* retry later */ }
+}
+
+function recordTombstones(entries: LearningHistoryEntry[], storage: Storage | null): boolean {
+  if (!activeStudentId) return true;
+  if (!storage) return false;
+  const values = new Map(readLearningTombstones(storage).map((item) => [item.id, item]));
+  for (const entry of entries) values.set(entry.id, { id: entry.id, syncVersion: (entry.syncVersion || 1) + 1 });
+  try { storage.setItem(tombstoneKey(), JSON.stringify([...values.values()])); return true; } catch { return false; }
+}
+
+export function readGuestLearningHistory(storage = browserStorage()): LearningHistoryEntry[] {
+  try {
+    const values: unknown = JSON.parse(storage?.getItem(LEARNING_HISTORY_KEY) ?? "[]");
+    return Array.isArray(values) ? values.filter(isHistoryEntry) : [];
+  } catch { return []; }
+}
+
+export function mergeLearningHistory(remote: Array<LearningHistoryEntry & { deletedAt?: string | null; updatedAt?: string }>, storage = browserStorage()): LearningHistoryEntry[] {
+  const current = new Map(readLearningHistory(storage).map((entry) => [entry.id, entry]));
+  const tombstones = new Map(readLearningTombstones(storage).map((item) => [item.id, item.syncVersion]));
+  for (const entry of remote) {
+    const local = current.get(entry.id);
+    if (entry.deletedAt) { current.delete(entry.id); continue; }
+    if ((tombstones.get(entry.id) || 0) > (entry.syncVersion || 1)) continue;
+    if ((entry.syncVersion || 1) < (local?.syncVersion || 0)) continue;
+    else {
+      const { deletedAt: _deletedAt, updatedAt: _updatedAt, ...localEntry } = entry;
+      current.set(entry.id, localEntry);
+    }
+  }
+  return save([...current.values()], storage);
+}
+
+/**
+ * Split pending records into request-sized batches.
+ *
+ * The server rejects a body over 256 KiB with a stable 413, and a retry sends
+ * the same batch again, so an entry-count-only split can strand every later
+ * record. Batch on the serialized UTF-8 size as well, keeping a margin below
+ * the server limit. A single record that cannot fit still gets its own batch
+ * rather than being dropped here.
+ */
+export function splitLearningHistoryBatches(
+  entries: LearningHistoryEntry[],
+  options: { maxEntries?: number; maxBytes?: number } = {}
+): LearningHistoryEntry[][] {
+  const maxEntries = options.maxEntries ?? LEARNING_HISTORY_SYNC_BATCH_MAX_ENTRIES;
+  const maxBytes = options.maxBytes ?? LEARNING_HISTORY_SYNC_BATCH_MAX_BYTES;
+  const batches: LearningHistoryEntry[][] = [];
+  let current: LearningHistoryEntry[] = [];
+  for (const entry of entries) {
+    const candidate = [...current, entry];
+    if (current.length > 0 && (candidate.length > maxEntries || serializedBatchBytes(candidate) > maxBytes)) {
+      batches.push(current);
+      current = [entry];
+      continue;
+    }
+    current = candidate;
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+function serializedBatchBytes(entries: LearningHistoryEntry[]): number {
+  return new TextEncoder().encode(JSON.stringify({ entries })).length;
+}
+
+export function importGuestLearningHistory(storage = browserStorage()): LearningHistoryEntry[] {
+  if (!activeStudentId) return readLearningHistory(storage);
+  const current = new Map(readLearningHistory(storage).map((entry) => [entry.id, entry]));
+  for (const guest of readGuestLearningHistory(storage)) {
+    if (!current.has(guest.id)) current.set(guest.id, { ...guest, syncVersion: Math.max(1, guest.syncVersion || 1) });
+  }
+  return save([...current.values()], storage);
+}
 
 export function googleAiSearchUrl(question: string): string {
   return `https://www.google.com/search?udm=50&aep=11&hl=zh-TW&q=${encodeURIComponent(question)}`;
@@ -55,8 +158,23 @@ export function isHistoryEntry(value: unknown): value is LearningHistoryEntry {
     && (entry.organizedAnswer === undefined || typeof entry.organizedAnswer === "string");
 }
 
-function save(entries: LearningHistoryEntry[], storage = browserStorage()): LearningHistoryEntry[] {
-  const valid = entries
+function save(entries: LearningHistoryEntry[], storage = browserStorage(), mutation = false): LearningHistoryEntry[] {
+  let previous = new Map<string, LearningHistoryEntry>();
+  if (mutation && storage) {
+    try {
+      const parsed: unknown = JSON.parse(storage.getItem(historyKey()) ?? "[]");
+      if (Array.isArray(parsed)) previous = new Map(parsed.filter(isHistoryEntry).map((entry: LearningHistoryEntry) => [entry.id, entry]));
+    } catch { /* first write */ }
+  }
+  const valid = entries.map((entry) => {
+    if (!mutation) return entry;
+    const prior = previous.get(entry.id);
+    if (!prior) return { ...entry, syncVersion: Math.max(1, entry.syncVersion || 1) };
+    const { syncVersion: _oldVersion, ...oldBody } = prior;
+    const { syncVersion: _newVersion, ...newBody } = entry;
+    if (JSON.stringify(oldBody) === JSON.stringify(newBody)) return prior;
+    return { ...entry, syncVersion: (prior.syncVersion || 1) + 1 };
+  })
     .filter(isHistoryEntry)
     .sort((left, right) => right.askedAt.localeCompare(left.askedAt));
   // Evidence must not disappear merely because the older, pending queue reaches
@@ -66,7 +184,7 @@ function save(entries: LearningHistoryEntry[], storage = browserStorage()): Lear
     .sort((left, right) => right.askedAt.localeCompare(left.askedAt));
   if (!storage) return bounded;
   try {
-    storage.setItem(LEARNING_HISTORY_KEY, JSON.stringify(bounded));
+    storage.setItem(historyKey(), JSON.stringify(bounded));
   } catch {
     // Storage can be unavailable in private browsing or when it is full.
   }
@@ -76,7 +194,7 @@ function save(entries: LearningHistoryEntry[], storage = browserStorage()): Lear
 export function readLearningHistory(storage = browserStorage()): LearningHistoryEntry[] {
   if (!storage) return [];
   try {
-    const raw = storage.getItem(LEARNING_HISTORY_KEY);
+    const raw = storage.getItem(historyKey());
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? save(parsed.filter(isHistoryEntry), storage) : [];
@@ -101,14 +219,14 @@ export function addLearningHistoryEntry(
     id: newHistoryId(),
     askedAt: new Date().toISOString()
   };
-  return { entry, entries: save([entry, ...readLearningHistory(storage)], storage) };
+  return { entry, entries: save([entry, ...readLearningHistory(storage)], storage, true) };
 }
 
 export function updateLearningHistoryAnswer(id: string, answer: string, storage = browserStorage()): LearningHistoryEntry[] {
   const updatedAt = new Date().toISOString();
   return save(readLearningHistory(storage).map((entry) => entry.id === id
     ? { ...entry, answer: answer || undefined, answerUpdatedAt: answer ? updatedAt : undefined }
-    : entry), storage);
+    : entry), storage, true);
 }
 
 export function organizeRawAnswer(rawAnswer: string): string {
@@ -235,7 +353,7 @@ export function saveGoogleAiSourceUrl(id: string, sourceUrl: unknown, storage = 
   // A replay must be idempotent and a later share must not silently retarget a
   // question to another result. The original question-bound URL is evidence.
   if (target.sourceUrl) return { status: "already_saved", entries };
-  return { status: "saved", entries: save(entries.map((entry) => entry.id === id ? { ...entry, sourceUrl: source.sourceUrl } : entry), storage) };
+  return { status: "saved", entries: save(entries.map((entry) => entry.id === id ? { ...entry, sourceUrl: source.sourceUrl } : entry), storage, true) };
 }
 
 export type SaveRawAnswerOnceResult =
@@ -256,7 +374,7 @@ export function saveRawAnswerOnce(id: string, rawAnswer: string, storage = brows
   return { status: "saved", entries: save(entries.map((entry) => {
     if (entry.id !== id) return entry;
     return { ...entry, rawAnswer: capped, rawAnswerCapturedAt: capturedAt, organizedAnswer: organizeRawAnswer(capped) };
-  }), storage) };
+  }), storage, true) };
 }
 
 export type UpdateLearningHistoryContentResult =
@@ -305,7 +423,7 @@ export function updateLearningHistoryContent(
     else delete next.sourceUrl;
     return next;
   });
-  return { status: "saved", entries: save(entriesWithUpdate, storage) };
+  return { status: "saved", entries: save(entriesWithUpdate, storage, true) };
 }
 
 export function normalizeQuestion(value: string): string {
@@ -411,13 +529,18 @@ export function clearPendingRawAnswer(storage = browserStorage()): void {
 }
 
 export function removeLearningHistoryEntry(id: string, storage = browserStorage()): LearningHistoryEntry[] {
-  return save(readLearningHistory(storage).filter((entry) => entry.id !== id), storage);
+  const entries = readLearningHistory(storage);
+  const entry = entries.find((item) => item.id === id);
+  if (entry && !recordTombstones([entry], storage)) return entries;
+  return save(entries.filter((item) => item.id !== id), storage);
 }
 
 export function clearLearningHistory(storage = browserStorage()): LearningHistoryEntry[] {
+  const entries = readLearningHistory(storage);
+  if (!recordTombstones(entries, storage)) return entries;
   if (storage) {
     try {
-      storage.removeItem(LEARNING_HISTORY_KEY);
+      storage.removeItem(historyKey());
     } catch {
       // Keep the in-memory UI empty even if browser storage rejects the write.
     }
