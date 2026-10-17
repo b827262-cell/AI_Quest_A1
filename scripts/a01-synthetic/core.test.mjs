@@ -2,11 +2,11 @@
  * Unit tests for the A-01 synthetic traffic driver core.
  *
  * Run: node --test scripts/a01-synthetic/core.test.mjs
- * No network, no filesystem, no real credentials.
+ * No network or real credentials; CLI tests use temporary files.
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -235,5 +235,54 @@ test("CLI execution with --execute requires necessary env (refuses when book ID 
   } finally {
     rmSync(tmpOut, { recursive: true, force: true });
   }
+});
+
+test("CLI --execute sends requests through a mocked fetch when staging config is complete", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "a01-execute-mock-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const preload = join(directory, "mock-fetch.mjs");
+  const requestsFile = join(directory, "requests.jsonl");
+  writeFileSync(preload, `
+import { appendFileSync } from "node:fs";
+globalThis.fetch = async (url, options) => {
+  const parsed = new URL(url);
+  if (parsed.hostname !== "staging.example.invalid") throw new Error("unexpected mock target");
+  appendFileSync(process.env.MOCK_FETCH_LOG, JSON.stringify({ method: options.method, pathname: parsed.pathname }) + "\\n");
+  return new Response(JSON.stringify({ id: "fixture-created-book" }), { status: 200, headers: { "content-type": "application/json" } });
+};
+`);
+
+  const runId = "synthetic-m4-fixture";
+  const result = spawnSync(process.execPath, [
+    "--import", preload,
+    resolve(import.meta.dirname, "index.mjs"),
+    "--execute", "--per-target", "1", "--rate", "0", "--out", directory,
+  ], {
+    env: {
+      A01_SYNTHETIC_BASE_URL: "https://staging.example.invalid",
+      A01_SYNTHETIC_ALLOWED_HOSTS: "example.invalid",
+      A01_SYNTHETIC_BOOK_ID: "fixture-book",
+      A01_SYNTHETIC_RUN_ID: runId,
+      A01_SYNTHETIC_STUDENT_USER_ID: "fixture-student",
+      A01_SYNTHETIC_STUDENT_EMAIL: "student@example.invalid",
+      A01_SYNTHETIC_STUDENT_RELAY_KEY: "test-only-student-key",
+      A01_SYNTHETIC_ADMIN_USER_ID: "fixture-admin",
+      A01_SYNTHETIC_ADMIN_EMAIL: "admin@example.invalid",
+      A01_SYNTHETIC_ADMIN_RELAY_KEY: "test-only-admin-key",
+      MOCK_FETCH_LOG: requestsFile,
+    },
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(existsSync(requestsFile), "--execute must invoke the mocked fetch");
+  const requests = readFileSync(requestsFile, "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(requests.length, SYNTHETIC_TARGETS.length);
+  assert.deepEqual(requests.map(({ method, pathname }) => `${method} ${pathname}`),
+    SYNTHETIC_TARGETS.map((target) => `${target.method} ${resolvePath(target, { bookId: "fixture-book" })}`));
+  const summary = JSON.parse(readFileSync(join(directory, `${runId}.summary.json`), "utf8"));
+  assert.equal(summary.dryRun, false);
+  assert.deepEqual(summary.totals, { attempted: SYNTHETIC_TARGETS.length, failures: 0, serverErrors: 0, errorRate: 0, serverErrorRate: 0 });
+  assert.match(result.stdout, new RegExp(`\\[done\\].*attempted=${SYNTHETIC_TARGETS.length} failures=0`));
 });
 
