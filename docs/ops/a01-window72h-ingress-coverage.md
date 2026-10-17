@@ -6,7 +6,9 @@
 2. **72h 窗口定義** — 對應專案文件 `claude/a01-window72h-draft-20261016.md`（設計文件在 Project，不在本 repo）；本文件填入 Owner 於 2026-10-16 的決議。
 3. **合成取樣計畫** — Owner 13:5x／18:00 決議與 PM 2026-10-16 21:30 派工。
 
-> **file:line 基準：main `f012b82499492949a6f3958f9a823ac8d1fce30e`（#74 已併）。** 所有引用皆以此 commit 為準；若程式碼後續變更，須依 `relay-rollout.md` §4.4 Owner 驗收規則第 3 條重評並重新起算窗口。
+> **file:line 基準：main `ab69ed82bc0cbf1a48889dc611082ef7d9c5eba7`（#74／#76／#81／#82 已併）。** 所有引用皆以此 commit 為準；若程式碼後續變更，須依 `relay-rollout.md` §4.4 Owner 驗收規則第 3 條重評並重新起算窗口。
+>
+> **基準變更註記（2026-10-17）：** 前版基準為 `f012b82499492949a6f3958f9a823ac8d1fce30e`（#74）。`f012b824 → ab69ed82` 之間僅新增測試 `scripts/a01-coverage/core.test.mjs`（#81）與 `scripts/a01-synthetic/core.test.mjs`（#82），**未更動任何 `site/**`、`docs/ops/**` 或 production 腳本**，故本文件所有 file:line 引用不變。
 >
 > **基準變更註記（2026-10-16）：** 前版基準為 `b9ee98e33a1f3353d0d3c6f0c457fcd28fe31637`（#76）。`b9ee98e3 → f012b824` 之間僅新增 `scripts/a01-synthetic/` 與 `docs/evidence/`（#74），未更動任何 `site/**` 或 `docs/ops/**` 既有檔案，故本文件所有 `site/**` 行號不變；受影響者為原標為「open PR #74／`b9ee98e3` 尚未包含」之引用，已更新為併入狀態並補行號（見 §3.3、§3.4、附錄 A）。
 
