@@ -7,6 +7,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   APPLICABLE_NON_GET_ROUTES,
@@ -141,4 +146,29 @@ test("buildReport stamps the proposal notice and stays free of raw content", () 
   assert.equal(serialized.includes("secret@example.com"), false);
   assert.equal(report.coverageEquation.proposalNotice, PROPOSAL_THRESHOLDS.proposalNotice);
   assert.ok(report.notes.some((note) => note.includes(PROPOSAL_THRESHOLDS.proposalNotice)));
+});
+
+test("CLI evidence and printed proposal items retain the literal unapproved label", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "a01-coverage-label-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const logs = join(directory, "logs.jsonl");
+  const ingress = join(directory, "ingress.json");
+  writeFileSync(logs, `${line({})}\n`);
+  writeFileSync(ingress, JSON.stringify({ ingressTotal: 1, verify: 1, probeStripped: 0, health: 0, books: 0, sync: 0, cors: 0, static: 0 }));
+
+  const cli = fileURLToPath(new URL("./index.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [cli, "--logs", logs, "--ingress", ingress, "--out", directory, "--run-id", "proposal-label-test"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+
+  // Keep this literal independent of PROPOSAL_THRESHOLDS: M4 removes the
+  // production label, so comparing two production values would miss it.
+  const expected = "提案，未經 Owner 確認";
+  const report = JSON.parse(readFileSync(join(directory, "proposal-label-test.coverage.json"), "utf8"));
+  assert.equal(report.proposalNotice, expected);
+  assert.equal(report.sampleGates.proposalNotice, expected);
+  assert.equal(report.nonGetCoverage.proposalNotice, expected);
+  assert.equal(report.coverageEquation.proposalNotice, expected);
+  assert.ok(report.notes.some((note) => note.includes(expected)));
+  assert.match(result.stdout, /kind=a01-coverage-report[^\n]*\(提案，未經 Owner 確認\)/);
+  assert.match(result.stdout, /coverage equation: PASS[^\n]*\(提案，未經 Owner 確認\)/);
 });
