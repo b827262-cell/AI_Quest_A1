@@ -375,11 +375,11 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 4. 兩站各自重跑帶平台身分的合法請求，確認學生身分與管理員授權恢復正常；依授權在 staging 驗證必要讀寫路徑。production 寫入仍須個別授權，不能藉回滾驗證擴大範圍。
 5. 核對 invocation、應用日誌及 401／403／5xx 是否回到已登記的基準範圍，記錄完成時間與執行者。生效設定、health、合法請求恢復皆有證據才記 `PASS`，且 `PASS` 須綁定當時實際 head sha（§4.4 Owner 驗收規則第 1 條）；缺一仍為未完成。Gate 保持 `HOLD`，修復後依 §4.4 重新驗證與起算。
 
-- **切勿在主站 `strict` 下單獨回退次站。** `strict` 會忽略未簽章身分；若次站被單獨回退成舊版（原樣轉送 `oai-*`），這些請求會變成 guest／401，等於次站使用者全數掉線。
-- **（僅限必須回退 commit 時）回退順序為主站 → 次站。** 本條只適用於必須回退 commit 的情境：先完成主站降到 `transitional` 的部署與驗證，再依序回退次站 commit，最後才在必要時回退主站 commit。窗口內首選回滾仍為 `A01_RELAY_EDGE_MODE`→`accept`，不需切換模式或重新部署（見 `a01-window72h-ingress-coverage.md` §2.7）。
+- **（僅限 commit 回退）切勿在主站 `strict` 下單獨回退次站。** `strict` 會忽略未簽章身分；若次站被單獨回退成舊版（原樣轉送 `oai-*`），這些請求會變成 guest／401，等於次站使用者全數掉線。
+- **（僅限必須回退 commit 時）回退順序為主站 → 次站。** 本條只適用於必須回退 commit 的情境：先完成主站降到 `transitional` 的部署與驗證，再依序回退次站 commit，最後才在必要時回退主站 commit。窗口內首選回滾仍為 `A01_RELAY_EDGE_MODE`→`accept`，不需切換模式或重新部署（Owner 2026-10-17 決議）。
 - （同屬 commit 回退情境）回退到 `off` 的警告：`off` 會忽略 relay 標頭；若次站仍是簽章版（已刪除 `oai-*`），身分會掉成 guest。`off` 只適用於同時把次站回退到未簽章版本。
 - （commit／部署版本回退）回退目標以 Owner 指定且經平台核驗的部署版本為準；本手冊不以 repo 合併或歷史部署紀錄推定現場版本。
-- （commit／部署版本回退）Staging 演練須走同一套設定、重新部署、health 與合法請求恢復流程；僅切換 `A01_RELAY_EDGE_MODE` 的首選回滾不重新部署，依 `a01-window72h-ingress-coverage.md` §2.7 以合法請求恢復判定。演練授權不代表 production 回滾或部署授權。
+- （commit／部署版本回退）Staging 演練須走同一套設定、重新部署、health 與合法請求恢復流程；僅切換 `A01_RELAY_EDGE_MODE` 的首選回滾不重新部署，以合法請求恢復判定。演練授權不代表 production 回滾或部署授權。
 
 ## 6. 金鑰輪替 SOP（雙鑰重疊）
 
