@@ -359,13 +359,17 @@ PR #61 實際輸出為 `console.log(JSON.stringify(event))`，不能假設 `resu
 
 | 觸發條件 | 動作 |
 | --- | --- |
-| 通過 edge 閘後的 `evt=relay.verify AND result=invalid` ≥1，或 `none AND identityPresent=true` 等異常身分組合 ≥1 | 立即暫停晉級，調查並保留證據；不得設未經證實的例外。被 edge 閘擋下的 `relay.probe` 不觸發本列，但須保留並計數。 |
-| Strict 導致原本合法的使用者被拒 | 確認可重現後，立即依已核准的應變授權回滾。 |
-| 401／403 相對 transitional 基準異常升高 | 暫停並評估回滾；分站與路徑評估，區分預期非管理員 403、CORS、gate 與 relay 拒絕。 |
-| 5xx 持續升高（含次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`） | 依預先登記的基準、最低樣本及連續區間門檻觸發回滾；每筆須標記失敗原因（如 `relay_edge_secret_unavailable`／`relay_signing_unavailable`）並跨站去重，與 §4.4 Owner 驗收規則第 4 條一致。 |
+| 通過 edge 閘後的 `evt=relay.verify AND result=invalid` ≥1，或 `none AND identityPresent=true` ≥1 | **零容忍：立即回滾（不受 W／Nmin／Δ／K 限制），同時暫停晉級、調查並保留證據**；不得設未經證實的例外。被 edge 閘擋下的 `relay.probe` 不觸發本列，但須保留並計數。 |
+| Strict 導致原本合法的使用者被拒 | 確認可重現後，立即依已核准的應變授權回滾（同屬零容忍，不受 W／Nmin／Δ／K 限制）。 |
+| 401／403 相對 transitional 基準異常升高 | 依已登記基準計算：`N≥Nmin` 且 `r−基準率≥Δauth` 連續 `K` 個 `W` 區間，即暫停並評估回滾；分站與路徑評估，區分預期非管理員 403、CORS、gate 與 relay 拒絕。 |
+| 5xx 持續升高（含次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`） | 依已登記基準計算：`N≥Nmin` 且 `r−基準率≥Δ5xx` 連續 `K` 個 `W` 區間即觸發回滾；每筆須標記失敗原因（如 `relay_edge_secret_unavailable`／`relay_signing_unavailable`）並跨站去重，與 §4.4 Owner 驗收規則第 4 條一致。 |
 | 日誌不可用、取樣或出現無法解釋的缺口 | 停止 Strict 推進、保存已有證據；已切 Strict 時依影響必要回滾。 |
 
-401／403 與 5xx 的數值不可事後挑選。進入 Strict 前，Owner／平台負責人須登記並由 AGY 核對：基準環境／版本／時窗、每站每路徑的請求總數 N 與錯誤數、觀測區間長度 W、每區間最低樣本 Nmin、相對基準的增幅門檻 Δ（百分點）、觸發所需連續區間數 K，以及執行者／授權。錯誤率 r=錯誤數/N；N≥Nmin 且 r−基準率≥Δ 連續 K 個區間即達已登記門檻（401／403 暫停評估，5xx 回滾）。5xx 基準的錯誤數須明確納入次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`，並依 §4.4 Owner 驗收規則第 4 條標記失敗原因、跨站去重，不得將這些 503 排除在 5xx 基準之外；300／100／30 等 Owner 決議門檻與本節回滾數字不因納入而改變。兩類各自填入實際數值；回滾數字（W／Nmin／Δ／K）為 Owner 決議，於進入 Strict 前登記，未登記即 `HOLD`，不得憑空宣稱已可量測。N=0／低樣本不算零錯誤；不妨礙可重現合法使用者被拒時立即回滾。
+**Owner 2026-10-17 決議的回滾數字（與 `docs/ops/a01-window72h-ingress-coverage.md` §2.7 同值）：`W=30min`、`Nmin=100`、`Δauth=+1pp`（401／403）、`Δ5xx=+0.5pp`、`K=3`；回滾執行人為 AGY、Owner 事後確認（§5.2）。**
+
+**零容忍條件不受上述數字限制：** 通過 edge 閘後 `result=invalid` ≥1、`none AND identityPresent=true` ≥1，或可重現的合法使用者被拒，一律立即回滾，不得以樣本不足、比率未達門檻或「未經證實的例外」延後。
+
+401／403 與 5xx 的數值不可事後挑選。進入 Strict 前，Owner／平台負責人須逐項登記並由 AGY 核對：基準環境／版本／時窗、每站每路徑的請求總數 N 與錯誤數、觀測區間長度 W、每區間最低樣本 Nmin、相對基準的增幅門檻 Δauth／Δ5xx（百分點）、觸發所需連續區間數 K，以及執行者／授權。錯誤率 r=錯誤數/N；N≥Nmin 且 r−基準率≥Δ 連續 K 個區間即達已登記門檻（401／403 暫停評估，5xx 回滾）。5xx 基準的錯誤數須明確納入次站的 `503 relay_signing_unavailable` 與 `require` 下的 `503 relay_edge_secret_unavailable`，並依 §4.4 Owner 驗收規則第 4 條標記失敗原因、跨站去重，不得將這些 503 排除在 5xx 基準之外；300／100／30 等 Owner 決議門檻與本節回滾數字不因納入而改變。兩類各自以已登記基準計算；上述數字為 Owner 決議，於進入 Strict 前仍須逐項登記，未登記即 `HOLD`，不得憑空宣稱已可量測。N=0／低樣本不算零錯誤；不妨礙零容忍條件立即回滾。
 
 ### 5.2 回滾操作與成功判定
 
