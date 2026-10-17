@@ -4,8 +4,8 @@ import { studentOriginAllowed, type StudentAuthConfig } from "./server";
 
 const CATEGORIES = new Set(["auto", "programming", "math", "humanities", "cybersecurity", "教材問答"]);
 const SOURCES = new Set(["manual", "image", "file"]);
-const MAX_BATCH = 25;
-const MAX_BODY = 256 * 1024;
+export const MAX_LEARNING_HISTORY_BATCH = 25;
+export const MAX_LEARNING_HISTORY_BODY_BYTES = 256 * 1024;
 
 function validTime(value: unknown): value is string {
   return typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value));
@@ -80,8 +80,8 @@ export function createStudentLearningHistoryRouter(repo: StudentLearningHistoryR
     if (!studentId) return res.status(401).json({ error: "AUTH_REQUIRED" });
     const body = req.body as { entries?: unknown } | undefined;
     const entries = body?.entries;
-    if (!Array.isArray(entries) || entries.length < 1 || entries.length > MAX_BATCH) return res.status(400).json({ error: "INVALID_BATCH" });
-    if (JSON.stringify(req.body).length > MAX_BODY) return res.status(413).json({ error: "BATCH_TOO_LARGE" });
+    if (!Array.isArray(entries) || entries.length < 1 || entries.length > MAX_LEARNING_HISTORY_BATCH) return res.status(400).json({ error: "INVALID_BATCH" });
+    if (Buffer.byteLength(JSON.stringify(req.body) ?? "", "utf8") > MAX_LEARNING_HISTORY_BODY_BYTES) return res.status(413).json({ error: "BATCH_TOO_LARGE" });
     if (!entries.every(validRecord) || new Set(entries.map((entry: LearningHistoryRecord) => entry.id)).size !== entries.length) {
       return res.status(400).json({ error: "INVALID_ENTRY" });
     }

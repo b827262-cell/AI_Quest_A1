@@ -13,7 +13,12 @@ import {
   resolveStudentAuthConfig,
   type StudentAuthRuntime
 } from "@ai-smartbook/auth/server";
-import { createStudentAuthRouter, createStudentSessionMiddleware, createStudentLearningHistoryRouter } from "@ai-smartbook/auth/express";
+import {
+  createStudentAuthRouter,
+  createStudentSessionMiddleware,
+  createStudentLearningHistoryRouter,
+  MAX_LEARNING_HISTORY_BODY_BYTES
+} from "@ai-smartbook/auth/express";
 import type { StudentDataSource } from "@ai-smartbook/student-runtime";
 import type { Book, BookContent } from "@ai-smartbook/schema";
 import { createStudentRagRouter } from "./student-rag";
@@ -156,6 +161,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   const dataSource = createMemoryDataSource();
 
   const app: Express = express();
+  app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
   app.use(express.json());
   if (options.fakeProvider) {
     const { getSubject } = options.fakeProvider;

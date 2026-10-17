@@ -9,6 +9,8 @@ import { createAdminApp } from "./app";
 import { createAdminTestDependencies } from "./dependencies";
 
 const origin = "http://127.0.0.1:5174";
+const EXPECTED_MAX_LEARNING_HISTORY_BATCH = 25;
+const EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES = 256 * 1024;
 const directories: string[] = [];
 const handles: Array<ReturnType<typeof createDbHandle>> = [];
 
@@ -50,6 +52,36 @@ function entry(id: string, question: string, syncVersion = 1) {
 }
 
 describe("student learning history sync and admin visibility", () => {
+  it("accepts a 25-entry body at exactly 256 KiB and rejects one extra byte", async () => {
+    const { app, student } = fixture();
+    const alice = student("size-boundary");
+    const entries = Array.from({ length: EXPECTED_MAX_LEARNING_HISTORY_BATCH }, (_, index) => ({
+      ...entry(`size-${index}`, "AI agents"),
+      answer: ""
+    }));
+    entries.slice(0, 12).forEach((item) => { item.answer = "x".repeat(20_000); });
+
+    const paddingIndex = 12;
+    const emptyPaddingBytes = EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES - Buffer.byteLength(JSON.stringify({ entries }), "utf8");
+    expect(emptyPaddingBytes).toBeGreaterThan(0);
+    expect(emptyPaddingBytes).toBeLessThanOrEqual(20_000);
+    entries[paddingIndex].answer = "x".repeat(emptyPaddingBytes);
+    const exactBody = JSON.stringify({ entries });
+    expect(Buffer.byteLength(exactBody, "utf8")).toBe(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES);
+
+    const path = "/api/student/learning-history";
+    const exact = await request(app).post(path).set("Cookie", alice.cookie).set("Origin", origin).set("Content-Type", "application/json").send(exactBody);
+    expect(exact.status).toBe(200);
+    expect(exact.body.entries).toHaveLength(EXPECTED_MAX_LEARNING_HISTORY_BATCH);
+
+    const overEntries = entries.map((item) => ({ ...item }));
+    overEntries[paddingIndex].answer += "x";
+    const overBody = JSON.stringify({ entries: overEntries });
+    expect(Buffer.byteLength(overBody, "utf8")).toBe(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES + 1);
+    const over = await request(app).post(path).set("Cookie", alice.cookie).set("Origin", origin).set("Content-Type", "application/json").send(overBody);
+    expect(over.status).toBe(413);
+  });
+
   it("requires a verified student, handles bounded idempotent updates, tombstones and ownership", async () => {
     const { app, handle, student } = fixture();
     const alice = student("alice");

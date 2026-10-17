@@ -11,7 +11,12 @@ import {
 } from "./server";
 import type { StudentAuthMeResponse } from "./index";
 import { safeStudentReturnTo } from "./shared";
-export { createStudentLearningHistoryRouter, safeLearningSourceUrl } from "./learning-history-express";
+export {
+  createStudentLearningHistoryRouter,
+  safeLearningSourceUrl,
+  MAX_LEARNING_HISTORY_BATCH,
+  MAX_LEARNING_HISTORY_BODY_BYTES
+} from "./learning-history-express";
 
 export interface StudentRequestAuth {
   session: { id: string; userId: string; expiresAt: string };

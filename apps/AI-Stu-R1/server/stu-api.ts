@@ -15,7 +15,12 @@ import {
   type StudentDataSource
 } from "@ai-smartbook/student-runtime";
 import { DEFAULT_APPEARANCE, readerOutlineResponseSchema, studentChatRequestSchema } from "@ai-smartbook/schema";
-import { createStudentAuthRouter, createStudentSessionMiddleware, createStudentLearningHistoryRouter } from "@ai-smartbook/auth/express";
+import {
+  createStudentAuthRouter,
+  createStudentSessionMiddleware,
+  createStudentLearningHistoryRouter,
+  MAX_LEARNING_HISTORY_BODY_BYTES
+} from "@ai-smartbook/auth/express";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
 
 const config = loadStudentRuntimeConfig();
@@ -114,6 +119,7 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
 }
 
 const app = express();
+app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
 app.use(express.json());
 
 // Appearance is authored in the admin system; the standalone student server

@@ -7,7 +7,12 @@ import {
   createStudentAuthService,
   resolveStudentAuthConfig
 } from "@ai-smartbook/auth/server";
-import { createStudentAuthRouter, createStudentSessionMiddleware, createStudentLearningHistoryRouter } from "@ai-smartbook/auth/express";
+import {
+  createStudentAuthRouter,
+  createStudentSessionMiddleware,
+  createStudentLearningHistoryRouter,
+  MAX_LEARNING_HISTORY_BODY_BYTES
+} from "@ai-smartbook/auth/express";
 import multer from "multer";
 import { z } from "zod";
 import { AiProviderIdentityConflictError } from "@ai-smartbook/db";
@@ -316,6 +321,7 @@ const appearanceUpload = multer({
 
 const app = express();
 app.set("trust proxy", "loopback");
+app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
 app.use(express.json({ limit: "2mb" }));
   app.use("/api/student/auth", createStudentAuthRouter(studentAuth, studentAuthConfig));
 app.get("/health/live", (_req, res) => {
@@ -4852,8 +4858,12 @@ app.post("/api/admin/appearance-settings/upload", appearanceUpload.single("file"
 // Do not let Express' development error page expose stack traces or request
 // details. Provider and credential errors are already sanitised above; this is
 // the final boundary for unexpected failures such as a database constraint.
-app.use((_error: unknown, _req: Request, res: Response, _next: (error?: unknown) => void) => {
+app.use((error: unknown, _req: Request, res: Response, _next: (error?: unknown) => void) => {
   if (res.headersSent) return;
+  if (error instanceof Error && "type" in error && error.type === "entity.too.large") {
+    res.status(413).json({ error: "BATCH_TOO_LARGE" });
+    return;
+  }
   res.status(500).json({ error: "internal server error" });
 });
 

@@ -10,6 +10,8 @@ import {
   STUDENT_TEST_ORIGIN,
   type StudentTestApp
 } from "./testApp";
+const EXPECTED_MAX_LEARNING_HISTORY_BATCH = 25;
+const EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES = 256 * 1024;
 
 /**
  * C-1/C-2 negative-path integration suite. Everything below exercises the
@@ -53,6 +55,49 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
     expect((await saved.json()).entries).toMatchObject([{ id: "standalone-fixture", syncVersion: 1 }]);
     const listed = await browser.fetch(path);
     expect((await listed.json()).entries).toMatchObject([{ id: "standalone-fixture" }]);
+  });
+
+  it("accepts a 25-entry body at exactly 256 KiB and rejects one extra byte", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    const path = `${baseUrl}/api/student/learning-history`;
+    const entries = Array.from({ length: EXPECTED_MAX_LEARNING_HISTORY_BATCH }, (_, index) => ({
+      id: `size-${index}`,
+      askedAt: "2026-10-16T10:24:00.000Z",
+      question: "AI agents",
+      category: "auto",
+      sourceType: "manual",
+      strategy: "google-ai",
+      syncVersion: 1,
+      answer: ""
+    }));
+    entries.slice(0, 12).forEach((item) => { item.answer = "x".repeat(20_000); });
+
+    const paddingIndex = 12;
+    const emptyPaddingBytes = EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES - Buffer.byteLength(JSON.stringify({ entries }), "utf8");
+    expect(emptyPaddingBytes).toBeGreaterThan(0);
+    expect(emptyPaddingBytes).toBeLessThanOrEqual(20_000);
+    entries[paddingIndex].answer = "x".repeat(emptyPaddingBytes);
+
+    const exactBody = JSON.stringify({ entries });
+    expect(Buffer.byteLength(exactBody, "utf8")).toBe(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES);
+    const exact = await browser.fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+      body: exactBody
+    });
+    expect(exact.status).toBe(200);
+    expect((await exact.json()).entries).toHaveLength(EXPECTED_MAX_LEARNING_HISTORY_BATCH);
+
+    const overEntries = entries.map((item) => ({ ...item }));
+    overEntries[paddingIndex].answer += "x";
+    const overBody = JSON.stringify({ entries: overEntries });
+    expect(Buffer.byteLength(overBody, "utf8")).toBe(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES + 1);
+    const over = await browser.fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+      body: overBody
+    });
+    expect(over.status).toBe(413);
   });
   it("rejects unauthenticated and forged-cookie access to every private student route", async () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
