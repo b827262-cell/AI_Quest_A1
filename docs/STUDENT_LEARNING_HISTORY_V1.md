@@ -5,7 +5,7 @@
 ## 資料與安全
 
 - 專用 SQLite 表 `student_learning_history`，以 `(student_id, entry_id)` 為主鍵。`sync_version` 只接受更高版本；相同請求重試不產生重複列。刪除留下 tombstone，舊版本不能復活。刪除時清掉題目、答案、原始回答、整理後回答與來源連結。
-- 學員 ID 僅由已驗證、可撤銷的 HttpOnly student session 取得。沒有 session 回 401；跨帳戶刪除回 404。寫入需要同源或明確設定的 Origin。每批 1–25 筆、最大 256 KiB；單題 2,000 字，答案與原始回答各 20,000 字。來源連結只准確切 `https://www.google.com/search`、`udm=50` 且 `q` 對應題目。
+- 學員 ID 僅由已驗證、可撤銷的 HttpOnly student session 取得。沒有 session 回 401；跨帳戶刪除回 404。寫入需要同源或明確設定的 Origin。每批 1–25 筆、最大 256 KiB；JSON parser 與路由檢查共用同一個 256 KiB 位元組上限（不是 Express 預設的 100 KB），超限一律回 `413 {"error":"BATCH_TOO_LARGE"}` 且不回傳請求內容。單題 2,000 字，答案與原始回答各 20,000 字。來源連結只准確切 `https://www.google.com/search`、`udm=50` 且 `q` 對應題目。
 - 管理 API 沿用現有 session、CSRF 與 Origin middleware；列表只有摘要與有無原始回答的狀態，詳情才提供完整內容。管理者不會從此表看到未匯入的訪客紀錄。
 - 保留政策：未刪除紀錄與原始回答留存至學員刪除；刪除後清空回答內容並保留最小 tombstone（ID、時間、版本）以阻止離線重試復活。V1 不做自動時限清除；正式保留期限需在部署前由 Owner 明定。管理端不得將詳情回答寫入日誌。
 

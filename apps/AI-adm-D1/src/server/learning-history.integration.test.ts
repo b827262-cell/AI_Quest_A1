@@ -80,6 +80,7 @@ describe("student learning history sync and admin visibility", () => {
     expect(Buffer.byteLength(overBody, "utf8")).toBe(EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES + 1);
     const over = await request(app).post(path).set("Cookie", alice.cookie).set("Origin", origin).set("Content-Type", "application/json").send(overBody);
     expect(over.status).toBe(413);
+    expect(over.body).toEqual({ error: "BATCH_TOO_LARGE" });
   });
 
   it("requires a verified student, handles bounded idempotent updates, tombstones and ownership", async () => {

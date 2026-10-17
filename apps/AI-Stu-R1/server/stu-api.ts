@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
-import express, { type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import {
   assertStudentAuthConfig,
   createStudentAuthRuntime,
@@ -120,6 +120,15 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
 
 const app = express();
 app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
+// Map the parser's oversize error to the router's stable JSON code instead of
+// Express' HTML error page (which also exposes a stack trace in development).
+app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+  if (typeof err === "object" && err !== null && (err as { type?: unknown }).type === "entity.too.large") {
+    res.status(413).json({ error: "BATCH_TOO_LARGE" });
+    return;
+  }
+  next(err);
+});
 app.use(express.json());
 
 // Appearance is authored in the admin system; the standalone student server

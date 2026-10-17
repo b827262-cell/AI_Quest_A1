@@ -71,6 +71,7 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
       answer: ""
     }));
     entries.slice(0, 12).forEach((item) => { item.answer = "x".repeat(20_000); });
+    entries[0].question = "SENTINEL_DO_NOT_ECHO";
 
     const paddingIndex = 12;
     const emptyPaddingBytes = EXPECTED_MAX_LEARNING_HISTORY_BODY_BYTES - Buffer.byteLength(JSON.stringify({ entries }), "utf8");
@@ -98,6 +99,11 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
       body: overBody
     });
     expect(over.status).toBe(413);
+    expect(over.headers.get("content-type")).toContain("application/json");
+    const overPayload = await over.text();
+    expect(JSON.parse(overPayload)).toEqual({ error: "BATCH_TOO_LARGE" });
+    expect(overPayload).not.toContain("SENTINEL_DO_NOT_ECHO");
+    expect(overPayload).not.toContain("PayloadTooLargeError");
   });
   it("rejects unauthenticated and forged-cookie access to every private student route", async () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });

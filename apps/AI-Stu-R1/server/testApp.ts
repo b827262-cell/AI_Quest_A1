@@ -7,7 +7,7 @@ import { Agent, createServer, request as nodeHttpRequest, type Server } from "no
  * keeps idle sockets open across server restarts on the same port, and a
  * stale pooled socket surfaces as ECONNRESET against the fresh server. */
 const testHttpAgent = new Agent({ keepAlive: false });
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request as ExpressRequest, type Response as ExpressResponse } from "express";
 import {
   createStudentAuthRuntime,
   resolveStudentAuthConfig,
@@ -162,6 +162,13 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
 
   const app: Express = express();
   app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
+  app.use((err: unknown, _req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
+    if (typeof err === "object" && err !== null && (err as { type?: unknown }).type === "entity.too.large") {
+      res.status(413).json({ error: "BATCH_TOO_LARGE" });
+      return;
+    }
+    next(err);
+  });
   app.use(express.json());
   if (options.fakeProvider) {
     const { getSubject } = options.fakeProvider;
