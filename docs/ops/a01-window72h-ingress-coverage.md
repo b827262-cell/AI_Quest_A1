@@ -104,7 +104,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 
 ### 2.4 日誌保留與脫敏
 
-- **【決議】日誌保留 7 天**（平台上限：Workers Logs Free 3 天／Paid 7 天；72 小時觀察窗仍完整涵蓋）。日後若確需 14 天，須改走 Logpush／OpenTelemetry 匯出（新設定與費用），另由 Owner 決議。
+- **【決議】接受平台上限**：Workers Logs 保留期 Paid 方案 7 天時，72 小時觀察窗涵蓋；**Free 方案 3 天＝72 小時，不足以涵蓋，不得開窗**。實際方案與保留期以 Owner production snapshot C 節實證為準。日後若確需 14 天，須改走 Logpush／OpenTelemetry 匯出（新設定與費用），另由 Owner 決議。
 - **【決議】IP 遮罩、ID 雜湊**：對外證據只保留遮罩 IP（IPv4 /16、IPv6 /48）與雜湊 ID，無原始 IP／完整路徑／query 實體 ID。
 - 應用日誌（`relay.verify`／`relay.probe`）不得含金鑰、簽章、nonce、email、user-id、Authorization、cookie、IP、含 ID 的完整路徑與查詢字串（`relay-rollout.md` §4.4 敏感資訊外洩項）。
 
@@ -205,7 +205,7 @@ Strict Release Gate 需要證明「未簽章流量」已可被完整量測，且
 | B4 | 次站 delegate 0 行 | MED | `none & identityPresent` 只在主站可見 |
 | B5 | 快取／CDN 繞過 | MED | 未到 Worker 的請求不記錄 |
 | B6 | 抽樣 | MED | 破壞缺席證明 |
-| B7 | 保留期上限 | LOW | 觀察窗須小於保留期，否則資料淘汰（Owner 2026-10-18：接受平台上限 7 天；72h 視窗涵蓋，14 天須 Logpush／OTel） |
+| B7 | 保留期上限 | LOW | 觀察窗須**小於**保留期，否則資料淘汰。Owner 2026-10-18：接受平台上限——Paid 7 天時 72h 涵蓋；**Free 3 天＝72h 不足，不得開窗**；實際方案以 snapshot C 節為準；14 天須 Logpush／OTel |
 | B8 | 主站直連流量 | LOW | 會被記為 `none & identityPresent=true`（可抓），但需流量確實到主站 |
 | B9 | 時鐘偏差 | LOW | ±300s 外的合法請求會被記為 `invalid`，可能誤觸回滾 |
 
@@ -276,7 +276,7 @@ ingress 總量 = verify + probe 剝除 + health + books + sync + cors + static
 | transitional 窗口、strict 另開 | 【決議】 |
 | 300／100／30 採用（300／100 僅自然樣本） | 【決議】 |
 | 合成只補 ≥30、不計入 300／100、含 GET、僅 staging | 【決議】 |
-| 日誌保留 7 天（平台上限，72h 涵蓋；14 天須 Logpush／OTel）；IP 遮罩、ID 雜湊 | 【決議】（Owner 2026-10-18 更正） |
+| 接受平台上限（Paid 7 天→72h 涵蓋；Free 3 天＝72h 不足，不得開窗；實際以 snapshot C 節為準；14 天須 Logpush／OTel）；IP 遮罩、ID 雜湊 | 【決議】（Owner 2026-10-18 更正） |
 | 日誌匯出權限 AGY + Owner | 【決議】 |
 | ingress 等價以設定比對清單**逐列全等**、由非作者驗證者判定 | 【決議】（Owner 2026-10-17） |
 | 回滾 W=30min／Nmin=100／Δauth=+1pp／Δ5xx=+0.5pp／K=3；零容忍立即回滾；執行人 AGY、Owner 事後確認；回滾＝`A01_RELAY_EDGE_MODE` 改回 `accept` 並重新起算 72h | 【決議】 |
