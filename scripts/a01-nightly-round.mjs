@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 const DEFAULT_TIME_ZONE = "Asia/Taipei";
 const START_MINUTE = 23 * 60 + 50;
 const END_MINUTE = 9 * 60;
-const LAST_SLOT_OFFSET = 9 * 60 - 23 * 60 - 50 + 24 * 60;
+const LAST_SLOT_OFFSET = 8 * 60 + 50 - START_MINUTE + 24 * 60;
 const LOCK_STALE_MS = 10 * 60 * 1000;
 const SLACK_ENV_KEYS = new Set([
   "SLACK_BOT_TOKEN",
@@ -50,7 +50,6 @@ function loadSlackEnvFile(path) {
 function parseArgs(argv) {
   const options = {
     execute: false,
-    force: false,
     help: false,
     now: undefined,
     channel: undefined,
@@ -59,12 +58,12 @@ function parseArgs(argv) {
     timeZone: undefined,
     repo: undefined,
     envFile: undefined,
+    windowDate: undefined,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--execute") options.execute = true;
-    else if (arg === "--force") options.force = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--now") options.now = argv[++index];
     else if (arg.startsWith("--now=")) options.now = arg.slice("--now=".length);
@@ -84,6 +83,8 @@ function parseArgs(argv) {
       options.envFile = value;
     }
     else if (arg.startsWith("--env-file=")) options.envFile = arg.slice("--env-file=".length);
+    else if (arg === "--window-date") options.windowDate = argv[++index];
+    else if (arg.startsWith("--window-date=")) options.windowDate = arg.slice("--window-date=".length);
     else throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -96,10 +97,9 @@ function usage() {
     "",
     "Usage:",
     "  node scripts/a01-nightly-round.mjs                 # dry-run",
-    "  node scripts/a01-nightly-round.mjs --execute --env-file /secure/slack-only.env",
-    "  node scripts/a01-nightly-round.mjs --execute --force --env-file /secure/slack-only.env",
+    "  node scripts/a01-nightly-round.mjs --execute --window-date YYYY-MM-DD --env-file /secure/slack-only.env",
     "",
-    "Required for --execute: SLACK_BOT_TOKEN and A01_NIGHTLY_CHANNEL_ID",
+    "Required for --execute: A01_NIGHTLY_WINDOW_DATE (or --window-date), SLACK_BOT_TOKEN, A01_NIGHTLY_CHANNEL_ID, and A01_NIGHTLY_AGENT_MENTIONS",
     "Use --env-file or A01_NIGHTLY_ENV_FILE for a dedicated owner-only Slack file; repo .env is never loaded.",
     "Optional: A01_NIGHTLY_AGENT_MENTIONS, A01_NIGHTLY_FOCUS, A01_NIGHTLY_TIMEZONE, A01_NIGHTLY_REPO",
     "",
@@ -155,34 +155,62 @@ function getNightlySlot(parts) {
   };
 }
 
+function getWindowDate(parts) {
+  if (parts.hour >= 23) return parts.date;
+  const midnight = Date.parse(parts.date + "T00:00:00Z");
+  return new Date(midnight - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function isValidWindowDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(value + "T00:00:00Z");
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 function nextSlotLabel(date, timeZone, slot) {
   if (!slot || slot.offset >= LAST_SLOT_OFFSET) return "09:00（窗口結束）";
   return getTimeZoneParts(new Date(date.getTime() + 30 * 60 * 1000), timeZone).label;
 }
 
 function readGitState(repo) {
+  let head = "unknown";
+  let branch = "unknown";
+  let remoteMain = "unavailable";
   try {
-    const head = execFileSync("git", ["-C", repo, "rev-parse", "--short", "HEAD"], {
+    head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    const branch = execFileSync("git", ["-C", repo, "branch", "--show-current"], {
+    branch = execFileSync("git", ["-C", repo, "branch", "--show-current"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim() || "detached";
-    return { head: head || "unknown", branch };
   } catch {
-    return { head: "unknown", branch: "unknown" };
+    // The repo path may not be a Git checkout.
   }
+  try {
+    const line = execFileSync("git", ["-C", repo, "ls-remote", "origin", "refs/heads/main"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    }).trim();
+    const match = line.match(/^([0-9a-f]{40})\s+refs\/heads\/main$/);
+    if (match) remoteMain = match[1];
+  } catch {
+    // Keep the local checkout visible even when GitHub is unavailable.
+  }
+  return { head, branch, remoteMain };
 }
 
-function createRoundMessage({ parts, next, mentions, focus = "main／開啟中的 PR", git }) {
+function createRoundMessage({ parts, next, mentions, focus = "main／開啟中的 PR", git, windowDate }) {
   const prefix = mentions?.trim() ? `${mentions.trim()} ` : "";
   return [
     `【A-01 夜間 PM 輪值｜${parts.label}】`,
+    `單次窗口：${windowDate || getWindowDate(parts)} 23:50–次日 09:00（08:50 最後一輪）。`,
     `${prefix}請回報目前專案狀態（最多 5 行，附實際 head SHA）：${focus}、staging、ingress 證據、blocker 與下一步。`,
     "安全邊界：不 merge、不 push、不部署 production、不讀 secret、不跑 migration 0003；staging 只有 Owner 明確授權且具備權限才可操作。",
-    `本輪本機基線：${git.branch} @ ${git.head}；下一輪：${next}。`,
+    `本機 HEAD：${git.branch} @ ${git.head}；遠端 main：${git.remoteMain || "unavailable"}；下一輪：${next}。`,
   ].join("\n");
 }
 
@@ -271,9 +299,10 @@ function finishSlot(statePath, key, status, slackTs) {
   writeSlotState(statePath, state);
 }
 
-async function postToSlack({ token, channel, text, fetchImpl }) {
+async function postToSlack({ token, channel, text, fetchImpl, timeoutMs = 15_000 }) {
   const response = await fetchImpl("https://slack.com/api/chat.postMessage", {
     method: "POST",
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json; charset=utf-8",
@@ -297,27 +326,40 @@ async function postToSlack({ token, channel, text, fetchImpl }) {
   return payload;
 }
 
-export { acquireLock, claimSlot, createRoundMessage, getNightlySlot, getTimeZoneParts, loadSlackEnvFile, nightlyOffset, parseArgs, readSlotState };
+export { acquireLock, claimSlot, createRoundMessage, getNightlySlot, getTimeZoneParts, getWindowDate, loadSlackEnvFile, nextSlotLabel, nightlyOffset, parseArgs, readSlotState };
 
-async function main({ argv = process.argv.slice(2), env = process.env, fetchImpl = fetch, output = console.log, nowMs = Date.now() } = {}) {
+async function main({ argv = process.argv.slice(2), env = process.env, fetchImpl = fetch, output = console.log, nowDate = new Date(), nowMs = Date.now(), slackTimeoutMs = 15_000 } = {}) {
   const options = parseArgs(argv);
   if (options.help) {
     output(usage());
     return;
   }
 
+  if (options.execute && (options.now || env.A01_NIGHTLY_NOW)) {
+    throw new Error("--now and A01_NIGHTLY_NOW are dry-run only");
+  }
+  const windowDate = options.windowDate || env.A01_NIGHTLY_WINDOW_DATE;
+  if (windowDate && !isValidWindowDate(windowDate)) throw new Error("Invalid A01_NIGHTLY_WINDOW_DATE");
+  if (options.execute && !windowDate) throw new Error("A01_NIGHTLY_WINDOW_DATE is required for --execute");
   const timeZone = options.timeZone || env.A01_NIGHTLY_TIMEZONE || DEFAULT_TIME_ZONE;
+  if (options.execute && timeZone !== DEFAULT_TIME_ZONE) {
+    throw new Error("--execute requires Asia/Taipei time zone");
+  }
   const now = options.now
     ? new Date(options.now)
     : env.A01_NIGHTLY_NOW
       ? new Date(env.A01_NIGHTLY_NOW)
-      : new Date();
+      : nowDate;
   if (Number.isNaN(now.getTime())) throw new Error("Invalid --now or A01_NIGHTLY_NOW value");
 
   const parts = getTimeZoneParts(now, timeZone);
   const slot = getNightlySlot(parts);
-  if (!slot && !options.force) {
+  if (!slot) {
     output(`SKIP ${parts.label} (${timeZone}): outside the 23:50–09:00 schedule.`);
+    return;
+  }
+  if (windowDate && getWindowDate(parts) !== windowDate) {
+    output(`SKIP ${parts.label}: outside the configured one-time window ${windowDate}.`);
     return;
   }
 
@@ -327,13 +369,18 @@ async function main({ argv = process.argv.slice(2), env = process.env, fetchImpl
     : env;
   const repo = resolve(options.repo || runtimeEnv.A01_NIGHTLY_REPO || process.cwd());
   const git = readGitState(repo);
-  const next = slot ? nextSlotLabel(now, timeZone, slot) : "手動執行";
+  const next = nextSlotLabel(now, timeZone, slot);
+  const mentions = options.mentions || runtimeEnv.A01_NIGHTLY_AGENT_MENTIONS;
+  if (options.execute && (typeof mentions !== "string" || !/^<@[A-Z0-9]+>(?:\s+<@[A-Z0-9]+>)*$/.test(mentions.trim()))) {
+    throw new Error("A01_NIGHTLY_AGENT_MENTIONS must contain explicit Slack user mentions");
+  }
   const message = createRoundMessage({
     parts,
     next,
-    mentions: options.mentions || runtimeEnv.A01_NIGHTLY_AGENT_MENTIONS,
+    mentions,
     focus: options.focus || runtimeEnv.A01_NIGHTLY_FOCUS || "main／開啟中的 PR",
     git,
+    windowDate,
   });
 
   if (!options.execute) {
@@ -357,13 +404,13 @@ async function main({ argv = process.argv.slice(2), env = process.env, fetchImpl
   }
 
   try {
-    const slotKey = slot?.key || `manual:${parts.date}T${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
+    const slotKey = slot.key;
     if (!claimSlot(statePath, slotKey, nowMs)) {
       output(`SKIP: slot ${slotKey} was already attempted.`);
       return;
     }
     try {
-      const result = await postToSlack({ token, channel, text: message, fetchImpl });
+      const result = await postToSlack({ token, channel, text: message, fetchImpl, timeoutMs: slackTimeoutMs });
       finishSlot(statePath, slotKey, "sent", result.ts);
       output(`SENT ${slotKey} to ${channel} (ts=${result.ts || "unknown"})`);
     } catch (error) {
