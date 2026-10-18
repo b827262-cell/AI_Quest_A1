@@ -31,6 +31,7 @@ import { makeAiMultiModelPilotRepo } from "./aiMultiModelPilot.repo";
 import { makeAdminSessionRepo } from "./adminSession.repo";
 import { makeStudentUserRepo } from "./studentUser.repo";
 import { makeStudentSessionRepo } from "./studentSession.repo";
+import { makeStudentLearningHistoryRepo } from "./studentLearningHistory.repo";
 import { makeStudentOAuthStateRepo } from "./studentOAuthState.repo";
 
 export * from "./book.repo";
@@ -66,6 +67,7 @@ export * from "./aiMultiModelPilot.repo";
 export * from "./adminSession.repo";
 export * from "./studentUser.repo";
 export * from "./studentSession.repo";
+export * from "./studentLearningHistory.repo";
 export * from "./studentOAuthState.repo";
 
 export interface Repositories {
@@ -101,6 +103,7 @@ export interface Repositories {
   adminSessions: ReturnType<typeof makeAdminSessionRepo>;
   studentUsers: ReturnType<typeof makeStudentUserRepo>;
   studentSessions: ReturnType<typeof makeStudentSessionRepo>;
+  studentLearningHistory: ReturnType<typeof makeStudentLearningHistoryRepo>;
   studentOAuthStates: ReturnType<typeof makeStudentOAuthStateRepo>;
 }
 
@@ -139,6 +142,7 @@ export function createRepositories(db: Db): Repositories {
     adminSessions: makeAdminSessionRepo(db),
     studentUsers: makeStudentUserRepo(db),
     studentSessions: makeStudentSessionRepo(db),
+    studentLearningHistory: makeStudentLearningHistoryRepo(db),
     studentOAuthStates: makeStudentOAuthStateRepo(db)
   };
 }

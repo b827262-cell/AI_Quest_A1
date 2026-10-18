@@ -15,7 +15,13 @@ import {
   type StudentDataSource
 } from "@ai-smartbook/student-runtime";
 import { DEFAULT_APPEARANCE, readerOutlineResponseSchema, studentChatRequestSchema } from "@ai-smartbook/schema";
-import { createStudentAuthRouter, createStudentSessionMiddleware } from "@ai-smartbook/auth/express";
+import {
+  createStudentAuthRouter,
+  createStudentSessionMiddleware,
+  createStudentLearningHistoryRouter,
+  oversizeJsonBodyHandler,
+  MAX_LEARNING_HISTORY_BODY_BYTES
+} from "@ai-smartbook/auth/express";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
 
 const config = loadStudentRuntimeConfig();
@@ -114,6 +120,7 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
 }
 
 const app = express();
+app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
 app.use(express.json());
 
 // Appearance is authored in the admin system; the standalone student server
@@ -126,6 +133,7 @@ app.get("/api/appearance-settings", (_req, res) => {
 // endpoints below them require the same server-side Student session.
 app.use("/api/student/auth", createStudentAuthRouter(studentAuthRuntime.auth, studentAuthConfig));
 app.use("/api/student", createStudentSessionMiddleware(studentAuthRuntime.auth, studentAuthConfig));
+app.use("/api/student", createStudentLearningHistoryRouter(studentAuthRuntime.learningHistory, studentAuthConfig));
 
 // Scoped RAG question endpoint: session + completed profile are already
 // enforced by the middleware above; the route derives studentId/bookId from
@@ -295,6 +303,12 @@ if (existsSync(publicDir)) {
     res.sendFile(resolve(publicDir, "index.html"));
   });
 }
+
+// Last error boundary: oversize JSON bodies answer a stable JSON 413 instead of
+// Express' HTML page (which prints a stack trace in development). Only the
+// learning-history endpoints use BATCH_TOO_LARGE; every other route answers the
+// generic PAYLOAD_TOO_LARGE. Non-parser errors keep the default behaviour.
+app.use(oversizeJsonBodyHandler());
 
 app.listen(config.apiPort, () => {
   console.log(
