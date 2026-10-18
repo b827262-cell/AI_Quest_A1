@@ -1,0 +1,10 @@
+# Example only; do not install until the scheduler time zone is verified.
+# CRON_TZ requires a cron implementation that supports it (for example cronie).
+# Otherwise the host scheduler must use Asia/Taipei, or use a systemd timer.
+# /etc/a01-nightly/slack.env must be owner-only (0600) and contain only Slack keys.
+# Replace YYYY-MM-DD with the local date on which the single window starts at 23:50.
+# After that window ends, this repeating cron entry only logs SKIP until reconfigured.
+CRON_TZ=Asia/Taipei
+A01_NIGHTLY_WINDOW_DATE=YYYY-MM-DD
+50 23 * * * cd /opt/AI-Quest-A1 && /usr/bin/node scripts/a01-nightly-round.mjs --execute --env-file /etc/a01-nightly/slack.env >> /var/log/a01-nightly-round.log 2>&1
+20,50 0-8 * * * cd /opt/AI-Quest-A1 && /usr/bin/node scripts/a01-nightly-round.mjs --execute --env-file /etc/a01-nightly/slack.env >> /var/log/a01-nightly-round.log 2>&1
