@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import request from "supertest";
@@ -6,6 +6,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDbHandle } from "@ai-smartbook/db";
 import { createAdminApp } from "./app";
 import { createAdminTestDependencies } from "./dependencies";
+
+let cleanupFailEnabled = false;
+
+vi.mock("node:fs", () => {
+  const fs = require("node:fs");
+  const originalUnlinkSync = fs.unlinkSync;
+  return {
+    ...fs,
+    unlinkSync: vi.fn((path) => {
+      if (cleanupFailEnabled) {
+        throw new Error("cleanup denied");
+      }
+      return originalUnlinkSync(path);
+    }),
+  };
+});
 
 const directories: string[] = [];
 const originalEnv = { ...process.env };
@@ -193,9 +209,9 @@ describe("admin upload security boundaries", () => {
     const bookDir = join(uploadDir, book.id);
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(dependencies.repos.files, "create").mockImplementation(() => {
-      chmodSync(bookDir, 0o500);
       throw new Error("private database fault");
     });
+    cleanupFailEnabled = true;
     try {
       const failed = await request(app).post(`/api/admin/books/${book.id}/files`).set("x-admin-token", token)
         .attach("file", pdf, { filename: "valid.pdf", contentType: "application/pdf" });
@@ -206,7 +222,8 @@ describe("admin upload security boundaries", () => {
       const raw = await request(app).get(`/api/admin/books/${book.id}/files/no-row/raw`).set("x-admin-token", token);
       expect(raw.status).toBe(404);
     } finally {
-      chmodSync(bookDir, 0o700);
+      cleanupFailEnabled = false;
+      vi.restoreAllMocks();
     }
   });
 });
