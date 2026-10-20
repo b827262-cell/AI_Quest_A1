@@ -1,8 +1,8 @@
 import { bookPromptBuilders } from "./book-core-ai";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import express, { type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import {
   createStudentAuthService,
   resolveStudentAuthConfig
@@ -281,44 +281,89 @@ function sanitizeUploadFileName(name: string): string {
   return safe || "upload.pdf";
 }
 
+const BOOK_UPLOAD_LIMIT = 25 * 1024 * 1024;
+const BOOK_UPLOAD_PENDING_DIR = resolve(UPLOAD_ROOT, ".pending");
+
+function removeUncommittedUpload(path: string | undefined): void {
+  if (!path) return;
+  try {
+    if (existsSync(path)) unlinkSync(path);
+  } catch {
+    // A cleanup fault is operationally visible without disclosing file paths.
+    console.warn("[upload] failed to remove uncommitted file");
+  }
+}
+
+function writeNewUploadFile(path: string, contents: Buffer | string): void {
+  let created = false;
+  try {
+    const fd = openSync(path, "wx", 0o600);
+    created = true;
+    try {
+      writeFileSync(fd, contents);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    // Never delete a pre-existing file if exclusive creation failed.
+    if (created) removeUncommittedUpload(path);
+    throw error;
+  }
+}
+
 const storage = multer.diskStorage({
-  destination(req, _file, cb) {
-    const dir = resolve(UPLOAD_ROOT, String(req.params.bookId));
+  destination(_req, _file, cb) {
+    const dir = BOOK_UPLOAD_PENDING_DIR;
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
   filename(_req, file, cb) {
     const safe = sanitizeUploadFileName(file.originalname);
-    cb(null, `${Date.now()}_${safe}`);
+    cb(null, `${randomUUID()}_${safe}`);
   }
 });
-const upload = multer({ storage });
+// Busboy can signal its limit at equality, so allow one extra byte and reject
+// sizes above the public 25 MiB boundary after Multer has finished.
+const upload = multer({ storage, limits: { fileSize: BOOK_UPLOAD_LIMIT + 1, files: 1, fields: 20, parts: 22 } });
+
+class UnsupportedUploadMediaError extends Error {}
 
 // ---- Appearance image uploads (logo / banner icon) -----------------------
 // Stored under a gitignored uploads dir and served read-only via /api/uploads.
 const APPEARANCE_UPLOAD_DIR = appearanceUploadDir;
+const APPEARANCE_UPLOAD_LIMIT = 2 * 1024 * 1024;
 const APPEARANCE_IMAGE_TYPES = new Map<string, string>([
   ["image/png", ".png"],
   ["image/jpeg", ".jpg"],
-  ["image/webp", ".webp"],
-  ["image/svg+xml", ".svg"]
+  ["image/webp", ".webp"]
 ]);
 const appearanceUpload = multer({
-  storage: multer.diskStorage({
-    destination(_req, _file, cb) {
-      if (!existsSync(APPEARANCE_UPLOAD_DIR)) mkdirSync(APPEARANCE_UPLOAD_DIR, { recursive: true });
-      cb(null, APPEARANCE_UPLOAD_DIR);
-    },
-    filename(_req, file, cb) {
-      const ext = APPEARANCE_IMAGE_TYPES.get(file.mimetype) || "";
-      cb(null, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`);
-    }
-  }),
-  limits: { fileSize: 2 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: APPEARANCE_UPLOAD_LIMIT + 1, files: 1, fields: 0, parts: 2 },
   fileFilter(_req, file, cb) {
-    cb(null, APPEARANCE_IMAGE_TYPES.has(file.mimetype));
+    if (!APPEARANCE_IMAGE_TYPES.has(file.mimetype)) return cb(new UnsupportedUploadMediaError());
+    cb(null, true);
   }
 });
+
+function matchesAppearanceSignature(mimeType: string, bytes: Buffer): boolean {
+  if (mimeType === "image/png") return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mimeType === "image/jpeg") return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (mimeType === "image/webp") return bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
+  return false;
+}
+
+function matchesStoredRasterSignature(mimeType: string, filePath: string): boolean {
+  if (!APPEARANCE_IMAGE_TYPES.has(mimeType)) return false;
+  const prefix = Buffer.alloc(12);
+  const fd = openSync(filePath, "r");
+  try {
+    const length = readSync(fd, prefix, 0, prefix.length, 0);
+    return matchesAppearanceSignature(mimeType, prefix.subarray(0, length));
+  } finally {
+    closeSync(fd);
+  }
+}
 
 const app = express();
 app.set("trust proxy", "loopback");
@@ -340,7 +385,12 @@ app.get("/health/ready", (_req, res) => {
 });
 app.use("/api/admin", createAdminOriginMiddleware(env));
 // Serve uploaded appearance images read-only (rides the /api proxy in both apps).
-app.use("/api/uploads/appearance", express.static(APPEARANCE_UPLOAD_DIR));
+app.use("/api/uploads/appearance", (req, res, next) => {
+  if (!/^\/[a-zA-Z0-9_-]+\.(?:png|jpg|webp)$/.test(req.path)) return res.sendStatus(404);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "sandbox");
+  next();
+}, express.static(APPEARANCE_UPLOAD_DIR));
 
 // Browser authentication is a revocable, HttpOnly session. Token/Bearer
 // authentication remains available to CLI/internal automation through the
@@ -426,6 +476,20 @@ app.use("/api/admin", (req, res, next) => {
 
 function fail(res: Response, status: number, message: string) {
   res.status(status).json({ error: message });
+}
+
+function uploadErrorHandler(error: unknown, req: Request, res: Response, next: NextFunction): void {
+  if (res.headersSent) return next(error);
+  if (error instanceof UnsupportedUploadMediaError) return fail(res, 415, "unsupported image type");
+  if (error instanceof multer.MulterError) {
+    return fail(res, error.code === "LIMIT_FILE_SIZE" ? 413 : 400,
+      error.code === "LIMIT_FILE_SIZE" ? "uploaded file is too large" : "invalid multipart upload");
+  }
+  if (req.is("multipart/form-data") && error instanceof Error &&
+      ["Unexpected end of form", "Multipart: Boundary not found"].includes(error.message)) {
+    return fail(res, 400, "invalid multipart upload");
+  }
+  next(error);
 }
 
 function publicEvaluationRun(row: {
@@ -543,8 +607,15 @@ function isPdfBookFile(file: BookFile): boolean {
   return file.fileType === "application/pdf" || file.fileName.toLowerCase().endsWith(".pdf");
 }
 
-function isPdfUpload(fileName: string, fileType: string): boolean {
-  return fileType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf");
+function isPdfUpload(fileName: string, fileType: string, filePath: string): boolean {
+  if (fileType !== "application/pdf" || !fileName.toLowerCase().endsWith(".pdf")) return false;
+  const signature = Buffer.alloc(5);
+  const fd = openSync(filePath, "r");
+  try {
+    return readSync(fd, signature, 0, signature.length, 0) === signature.length && signature.toString("ascii") === "%PDF-";
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function isImageMimeType(mimeType: string): boolean {
@@ -804,7 +875,7 @@ function parseReaderTocImportFromPayload(
 // ---- JSON index artifacts / QA reference ---------------------------------
 // Stored JSON indexes are managed `book_files` with role "json_index". The
 // active QA reference is a per-book pointer in app_settings (no migration).
-const jsonUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+const jsonUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: BOOK_UPLOAD_LIMIT + 1, files: 1, fields: 0, parts: 2 } });
 
 function qaReferenceKey(bookId: string): string {
   return `qa_reference:${bookId}`;
@@ -821,8 +892,8 @@ function writeJsonIndexArtifact(bookId: string, baseName: string, json: PdfJsonI
   const dir = resolve(UPLOAD_ROOT, bookId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const safe = sanitizeUploadFileName(baseName).replace(/\.json$/i, "");
-  const path = resolve(dir, `${Date.now()}_${safe || "index"}.json`);
-  writeFileSync(path, JSON.stringify(json, null, 2), "utf8");
+  const path = resolve(dir, `${randomUUID()}_${safe || "index"}.json`);
+  writeNewUploadFile(path, JSON.stringify(json, null, 2));
   return path;
 }
 
@@ -1846,64 +1917,95 @@ app.patch("/api/admin/books/:bookId", (req, res) => {
 });
 
 // ---- Files & parsing ------------------------------------------------------
-app.post("/api/admin/books/:bookId/files", upload.single("file"), (req, res) => {
+app.post("/api/admin/books/:bookId/files", (req: Request, res: Response, next: NextFunction) => {
+  if (!repos.books.findById(String(req.params.bookId))) return fail(res, 404, "book not found");
+  next();
+}, upload.single("file"), (req: Request, res: Response, next: NextFunction) => {
   const book = repos.books.findById(String(req.params.bookId));
-  if (!book) return fail(res, 404, "book not found");
   const file = (req as Request & { file?: Express.Multer.File }).file;
   if (!file) return fail(res, 400, "file is required (multipart field 'file')");
-  const rawDisplayName =
-    typeof req.body?.displayName === "string" && req.body.displayName.trim() !== ""
-      ? req.body.displayName
-      : file.originalname;
-  const displayName = sanitizeUploadFileName(rawDisplayName);
-  const parsedRole = bookFileRoleSchema.safeParse(req.body?.role ?? "source_document");
-  if (!parsedRole.success) return fail(res, 400, parsedRole.error.message);
-
-  const role = parsedRole.data;
-  if (role === READER_TOC_ROLE) {
-    return fail(res, 400, "Use /reader-toc/import to create structured TOC files.");
+  if (file.size > BOOK_UPLOAD_LIMIT) {
+    removeUncommittedUpload(file.path);
+    return fail(res, 413, "uploaded file is too large");
   }
-  const relatedFileId =
-    typeof req.body?.relatedFileId === "string" && req.body.relatedFileId.trim() !== ""
-      ? req.body.relatedFileId.trim()
-      : null;
+  let storedPath: string | undefined;
+  let committed = false;
+  try {
+    if (!book) return fail(res, 404, "book not found");
+    const rawDisplayName =
+      typeof req.body?.displayName === "string" && req.body.displayName.trim() !== ""
+        ? req.body.displayName
+        : file.originalname;
+    const displayName = sanitizeUploadFileName(rawDisplayName);
+    const parsedRole = bookFileRoleSchema.safeParse(req.body?.role ?? "source_document");
+    if (!parsedRole.success) return fail(res, 400, parsedRole.error.message);
 
-  if (role === "source_document" && !isPdfUpload(displayName, file.mimetype || "")) {
-    return fail(res, 400, "Source documents must be uploaded as PDF files.");
+    const role = parsedRole.data;
+    if (role === READER_TOC_ROLE) {
+      return fail(res, 400, "Use /reader-toc/import to create structured TOC files.");
+    }
+    const relatedFileId =
+      typeof req.body?.relatedFileId === "string" && req.body.relatedFileId.trim() !== ""
+        ? req.body.relatedFileId.trim()
+        : null;
+
+    if (role === "source_document" && !isPdfUpload(displayName, file.mimetype || "", file.path)) {
+      return fail(res, 415, "Source documents must be uploaded as PDF files.");
+    }
+
+    if (role === "reference_image") {
+      if (!matchesStoredRasterSignature(file.mimetype || "", file.path)) {
+        return fail(res, 415, "Reference images must be PNG, JPEG, or WebP files.");
+      }
+      if (!relatedFileId) {
+        return fail(res, 400, "Reference images require a relatedFileId.");
+      }
+      const relatedFile = repos.files.findById(relatedFileId);
+      if (!relatedFile || relatedFile.bookId !== book.id) {
+        return fail(res, 404, "Related PDF file not found.");
+      }
+      if (!isPdfBookFile(relatedFile)) {
+        return fail(res, 400, "Reference images can only be attached to a PDF source document.");
+      }
+    }
+
+    const dir = resolve(UPLOAD_ROOT, book.id);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    storedPath = resolve(dir, `${randomUUID()}_${displayName}`);
+    renameSync(file.path, storedPath);
+    const record = repos.files.create({
+      bookId: book.id,
+      fileName: displayName,
+      filePath: storedPath,
+      fileType: file.mimetype || "application/octet-stream",
+      fileSize: file.size,
+      role,
+      relatedFileId: role === "reference_image" ? relatedFileId : null,
+      parseStatus: "pending"
+    });
+    committed = true;
+    res.status(201).json({ file: record });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (!committed) {
+      removeUncommittedUpload(file.path);
+      removeUncommittedUpload(storedPath);
+    }
   }
-
-  if (role === "reference_image") {
-    if (!isImageMimeType(file.mimetype || "")) {
-      return fail(res, 400, "Reference images must use an image/* content type.");
-    }
-    if (!relatedFileId) {
-      return fail(res, 400, "Reference images require a relatedFileId.");
-    }
-    const relatedFile = repos.files.findById(relatedFileId);
-    if (!relatedFile || relatedFile.bookId !== book.id) {
-      return fail(res, 404, "Related PDF file not found.");
-    }
-    if (!isPdfBookFile(relatedFile)) {
-      return fail(res, 400, "Reference images can only be attached to a PDF source document.");
-    }
-  }
-
-  const record = repos.files.create({
-    bookId: book.id,
-    fileName: displayName,
-    filePath: file.path,
-    fileType: file.mimetype || "application/octet-stream",
-    fileSize: file.size,
-    role,
-    relatedFileId: role === "reference_image" ? relatedFileId : null,
-    parseStatus: "pending"
-  });
-  res.status(201).json({ file: record });
-});
+}, uploadErrorHandler);
 
 app.get("/api/admin/books/:bookId/files/:fileId/raw", (req, res) => {
   const file = repos.files.findById(req.params.fileId);
   if (!file || file.bookId !== req.params.bookId) return fail(res, 404, "file not found");
+  if (file.fileType === "image/svg+xml" || file.fileName.toLowerCase().endsWith(".svg") || file.filePath.toLowerCase().endsWith(".svg")) {
+    return fail(res, 404, "file not found");
+  }
+  if (file.role === "reference_image" && !matchesStoredRasterSignature(file.fileType, file.filePath)) {
+    return fail(res, 404, "file not found");
+  }
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "sandbox");
   res.sendFile(file.filePath);
 });
 
@@ -2031,6 +2133,8 @@ app.post("/api/admin/books/:bookId/files/:fileId/save-json-index", async (req, r
   const parsed = saveJsonIndexInputSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, parsed.error.message);
 
+  let storedPath: string | undefined;
+  let committed = false;
   try {
     const { contents, pageCount } = await parsePdfToContents(source.filePath, book.id, source.id);
     const index = buildPdfJsonIndex({
@@ -2043,20 +2147,22 @@ app.post("/api/admin/books/:bookId/files/:fileId/save-json-index", async (req, r
       chapters: repos.chapters.findByBookId(book.id)
     });
     const baseName = `${source.fileName.replace(/\.pdf$/i, "")}-${index.level}-index`;
-    const path = writeJsonIndexArtifact(book.id, baseName, index);
+    storedPath = writeJsonIndexArtifact(book.id, baseName, index);
     const record = repos.files.create({
       bookId: book.id,
       fileName: `${baseName}.json`,
-      filePath: path,
+      filePath: storedPath,
       fileType: "application/json",
       fileSize: Buffer.byteLength(JSON.stringify(index)),
       role: JSON_INDEX_ROLE,
       relatedFileId: source.id,
       parseStatus: "parsed"
     });
+    committed = true;
     if (parsed.data.setActive) setActiveQaReferenceId(book.id, record.id);
     res.status(201).json({ index: summarizeStoredJsonIndex(record, getActiveQaReferenceId(book.id)) });
   } catch (err) {
+    if (!committed) removeUncommittedUpload(storedPath);
     if (err instanceof InvalidPdfPageNumberError) {
       return fail(res, 400, err.message);
     }
@@ -2065,11 +2171,12 @@ app.post("/api/admin/books/:bookId/files/:fileId/save-json-index", async (req, r
 });
 
 // Manually upload a JSON index file (validated against the v1 schema).
-app.post("/api/admin/books/:bookId/json-indexes/upload", jsonUpload.single("file"), (req, res) => {
+app.post("/api/admin/books/:bookId/json-indexes/upload", jsonUpload.single("file"), (req: Request, res: Response) => {
   const book = repos.books.findById(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
   const file = (req as Request & { file?: Express.Multer.File }).file;
   if (!file) return fail(res, 400, "file is required (multipart field 'file')");
+  if (file.size > BOOK_UPLOAD_LIMIT) return fail(res, 413, "uploaded file is too large");
 
   let json: unknown;
   try {
@@ -2089,13 +2196,14 @@ app.post("/api/admin/books/:bookId/json-indexes/upload", jsonUpload.single("file
     );
   }
 
+  let storedPath: string | undefined;
   try {
     const baseName = `${parsed.data.fileName.replace(/\.pdf$/i, "")}-${parsed.data.level}-index`;
-    const path = writeJsonIndexArtifact(book.id, baseName, parsed.data);
+    storedPath = writeJsonIndexArtifact(book.id, baseName, parsed.data);
     const record = repos.files.create({
       bookId: book.id,
       fileName: sanitizeUploadFileName(file.originalname) || `${baseName}.json`,
-      filePath: path,
+      filePath: storedPath,
       fileType: "application/json",
       fileSize: file.size,
       role: JSON_INDEX_ROLE,
@@ -2104,9 +2212,10 @@ app.post("/api/admin/books/:bookId/json-indexes/upload", jsonUpload.single("file
     });
     res.status(201).json({ index: summarizeStoredJsonIndex(record, getActiveQaReferenceId(book.id)) });
   } catch (err) {
+    removeUncommittedUpload(storedPath);
     fail(res, 500, "upload json index failed");
   }
-});
+}, uploadErrorHandler);
 
 // List stored JSON index artifacts for the book (newest first).
 app.get("/api/admin/books/:bookId/json-indexes", (req, res) => {
@@ -4850,11 +4959,26 @@ app.put("/api/admin/appearance-settings", (req, res) => {
   res.json({ settings: merged });
 });
 
-app.post("/api/admin/appearance-settings/upload", appearanceUpload.single("file"), (req, res) => {
+app.post("/api/admin/appearance-settings/upload", appearanceUpload.single("file"), (req: Request, res: Response, next: NextFunction) => {
   const file = (req as Request & { file?: Express.Multer.File }).file;
-  if (!file) return fail(res, 400, "image is required (png/jpg/jpeg/webp/svg, <=2MB)");
-  res.status(201).json({ url: `/api/uploads/appearance/${file.filename}` });
-});
+  if (!file) return fail(res, 400, "image is required (png/jpg/jpeg/webp, <=2MB)");
+  if (file.size > APPEARANCE_UPLOAD_LIMIT) return fail(res, 413, "uploaded file is too large");
+  if (!matchesAppearanceSignature(file.mimetype, file.buffer)) {
+    return fail(res, 415, "unsupported image content");
+  }
+  if (!existsSync(APPEARANCE_UPLOAD_DIR)) mkdirSync(APPEARANCE_UPLOAD_DIR, { recursive: true });
+  const filename = `${randomUUID()}${APPEARANCE_IMAGE_TYPES.get(file.mimetype)}`;
+  const path = resolve(APPEARANCE_UPLOAD_DIR, filename);
+  let persisted = false;
+  try {
+    writeNewUploadFile(path, file.buffer);
+    persisted = true;
+    res.status(201).json({ url: `/api/uploads/appearance/${filename}` });
+  } catch (error) {
+    if (persisted) removeUncommittedUpload(path);
+    next(error);
+  }
+}, uploadErrorHandler);
 
 // The 256 KiB parser mounted for learning history raises the same
 // `entity.too.large` type as the global 2 MB parser, so the error type alone
