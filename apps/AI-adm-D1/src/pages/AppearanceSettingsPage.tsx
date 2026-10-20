@@ -157,7 +157,7 @@ export function AppearanceSettingsPage() {
         <label>Logo 圖片網址（headerLogoUrl）</label>
         <input value={form.headerLogoUrl} onChange={(e) => setField("headerLogoUrl", e.target.value)} placeholder="https://… 或上傳" />
         <div className="row" style={{ margin: "8px 0" }}>
-          <input ref={logoInput} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden
+          <input ref={logoInput} type="file" accept="image/png,image/jpeg,image/webp" hidden
             onChange={(e) => void onUpload("headerLogoUrl", e.target.files?.[0])} />
           <button type="button" className="admin-btn secondary" onClick={() => logoInput.current?.click()}>上傳圖片</button>
         </div>
@@ -179,7 +179,7 @@ export function AppearanceSettingsPage() {
         <label>Banner 圖片網址（bannerIconUrl）</label>
         <input value={form.bannerIconUrl} onChange={(e) => setField("bannerIconUrl", e.target.value)} placeholder="https://… 或上傳" />
         <div className="row" style={{ margin: "8px 0" }}>
-          <input ref={iconInput} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden
+          <input ref={iconInput} type="file" accept="image/png,image/jpeg,image/webp" hidden
             onChange={(e) => void onUpload("bannerIconUrl", e.target.files?.[0])} />
           <button type="button" className="admin-btn secondary" onClick={() => iconInput.current?.click()}>上傳圖片</button>
         </div>
@@ -319,7 +319,7 @@ export function AppearanceSettingsPage() {
         <label>背景圖片網址（studentPageBackgroundImageUrl）</label>
         <input value={form.studentPageBackgroundImageUrl} onChange={(e) => setField("studentPageBackgroundImageUrl", e.target.value)} placeholder="https://… 或上傳" />
         <div className="row" style={{ margin: "8px 0" }}>
-          <input ref={bgInput} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden
+          <input ref={bgInput} type="file" accept="image/png,image/jpeg,image/webp" hidden
             onChange={(e) => void onUpload("studentPageBackgroundImageUrl", e.target.files?.[0])} />
           <button type="button" className="admin-btn secondary" onClick={() => bgInput.current?.click()}>上傳背景圖</button>
         </div>
@@ -356,7 +356,7 @@ export function AppearanceSettingsPage() {
         <label>品牌圖示網址（studentHeaderBrandLogoUrl）</label>
         <input value={form.studentHeaderBrandLogoUrl} onChange={(e) => setField("studentHeaderBrandLogoUrl", e.target.value)} placeholder="https://… 或上傳（留空用內建 icon）" />
         <div className="row" style={{ margin: "8px 0" }}>
-          <input ref={brandInput} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden
+          <input ref={brandInput} type="file" accept="image/png,image/jpeg,image/webp" hidden
             onChange={(e) => void onUpload("studentHeaderBrandLogoUrl", e.target.files?.[0])} />
           <button type="button" className="admin-btn secondary" onClick={() => brandInput.current?.click()}>上傳品牌圖示</button>
         </div>
