@@ -11,6 +11,7 @@ import express, { type Express } from "express";
 import {
   createStudentAuthRuntime,
   resolveStudentAuthConfig,
+  type StudentAuthConfig,
   type StudentAuthRuntime
 } from "@ai-smartbook/auth/server";
 import {
@@ -23,6 +24,7 @@ import {
 import type { StudentDataSource } from "@ai-smartbook/student-runtime";
 import type { Book, BookContent } from "@ai-smartbook/schema";
 import { createStudentRagRouter } from "./student-rag";
+import { startFakeAccessCerts } from "../../../scripts/student-access-fixture";
 
 /**
  * Shared in-process Student API test harness. It composes the same express
@@ -31,45 +33,7 @@ import { createStudentRagRouter } from "./student-rag";
  * HTTP boundary instead of calling services directly.
  */
 
-export const FAKE_GOOGLE_ENDPOINTS = {
-  authorization: "https://accounts.example.test/oauth/authorize",
-  token: "https://accounts.example.test/oauth/token",
-  userinfo: "https://accounts.example.test/oauth/userinfo"
-};
-
-/** Provider fixture paths served by the test app itself, so the auth
- * service's server-side fetch travels real TCP like production. */
-export const LOCAL_FAKE_GOOGLE_ENDPOINTS = {
-  authorization: "https://accounts.example.test/oauth/authorize",
-  token: "/test-provider/token",
-  userinfo: "/test-provider/userinfo"
-};
-
 export const STUDENT_TEST_ORIGIN = "https://student.example.test";
-
-/** Deterministic Google provider fixture. The subject can be swapped between
- * logins to simulate different Google accounts. */
-export function installFakeGoogleProvider(
-  originalFetch: typeof fetch,
-  getSubject: () => string
-): void {
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url === FAKE_GOOGLE_ENDPOINTS.token) {
-      return new Response(JSON.stringify({ access_token: "provider-access-token" }), { status: 200 });
-    }
-    if (url === FAKE_GOOGLE_ENDPOINTS.userinfo) {
-      return new Response(JSON.stringify({
-        sub: getSubject(),
-        email: "student@example.test",
-        email_verified: true,
-        name: "Student",
-        picture: "https://example.test/avatar.png"
-      }), { status: 200 });
-    }
-    return originalFetch(input as RequestInfo, init);
-  }) as typeof fetch;
-}
 
 export const BOOK_ALPHA: Book = {
   id: "book-alpha",
@@ -132,30 +96,29 @@ export function createMemoryDataSource(): StudentDataSource {
 export interface StudentTestApp {
   baseUrl: string;
   runtime: StudentAuthRuntime;
+  config: StudentAuthConfig;
+  assertion(overrides?: Record<string, unknown>, headerOverrides?: Record<string, unknown>): string;
+  certs: Awaited<ReturnType<typeof startFakeAccessCerts>>;
   close(): Promise<void>;
 }
 
 export interface StartStudentTestAppOptions {
   sessionTtlMs: number;
   port?: number;
-  /** Serve a deterministic Google provider fixture on the app itself. */
-  fakeProvider?: { getSubject: () => string };
+  secureCookies?: boolean;
 }
 
 export async function startStudentTestApp(options: StartStudentTestAppOptions): Promise<StudentTestApp> {
   const directory = mkdtempSync(join(tmpdir(), "ai-quest-student-testapp-"));
-  const googleEndpoints = options.fakeProvider ? LOCAL_FAKE_GOOGLE_ENDPOINTS : FAKE_GOOGLE_ENDPOINTS;
+  const certs = await startFakeAccessCerts();
   const config = resolveStudentAuthConfig({
     NODE_ENV: "test",
-    STUDENT_GOOGLE_AUTH_ENABLED: "true",
-    GOOGLE_CLIENT_ID: "client-id",
-    GOOGLE_CLIENT_SECRET: "server-only-provider-secret",
-    GOOGLE_REDIRECT_URI: `${STUDENT_TEST_ORIGIN}/api/student/auth/google/callback`,
+    STUDENT_SESSION_SECURE: options.secureCookies === false ? "false" : "true",
+    STUDENT_ACCESS_TEAM_DOMAIN: certs.teamDomain,
+    STUDENT_ACCESS_AUD: certs.aud,
+    STUDENT_ACCESS_CERTS_URL: certs.certsUrl,
     STUDENT_SESSION_SECRET: "a-test-session-secret-that-is-longer-than-32-chars",
     STUDENT_ALLOWED_ORIGINS: STUDENT_TEST_ORIGIN,
-    GOOGLE_AUTHORIZATION_ENDPOINT: googleEndpoints.authorization,
-    GOOGLE_TOKEN_ENDPOINT: googleEndpoints.token,
-    GOOGLE_USERINFO_ENDPOINT: googleEndpoints.userinfo,
     STUDENT_SESSION_TTL_MS: String(options.sessionTtlMs)
   });
   const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config);
@@ -164,21 +127,6 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   const app: Express = express();
   app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
   app.use(express.json());
-  if (options.fakeProvider) {
-    const { getSubject } = options.fakeProvider;
-    app.post("/test-provider/token", (_req, res) => {
-      res.json({ access_token: "provider-access-token" });
-    });
-    app.get("/test-provider/userinfo", (_req, res) => {
-      res.json({
-        sub: getSubject(),
-        email: "student@example.test",
-        email_verified: true,
-        name: "Student",
-        picture: "https://example.test/avatar.png"
-      });
-    });
-  }
   app.use("/api/student/auth", createStudentAuthRouter(runtime.auth, config));
   app.use("/api/student", createStudentSessionMiddleware(runtime.auth, config));
   app.use("/api/student", createStudentLearningHistoryRouter(runtime.learningHistory, config));
@@ -213,9 +161,13 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   return {
     baseUrl,
     runtime,
+    config,
+    assertion: certs.assertion,
+    certs,
     async close() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       runtime.dbHandle.sqlite.close();
+      await certs.close();
       const { rmSync } = await import("node:fs");
       rmSync(directory, { recursive: true, force: true });
     }
@@ -246,14 +198,11 @@ export function createTestBrowserSession(): TestBrowserSession {
   return browser;
 }
 
-export async function completeOAuthLogin(baseUrl: string, browser: TestBrowserSession): Promise<void> {
-  const start = await browser.fetch(`${baseUrl}/api/student/auth/google/start?returnTo=${encodeURIComponent("/dashboard")}`);
-  if (start.status !== 302) throw new Error(`google/start failed: ${start.status}`);
-  const authorizationUrl = new URL(start.headers.get("location") ?? "");
-  const state = authorizationUrl.searchParams.get("state") ?? "";
-  if (!state) throw new Error("oauth state missing from authorization url");
-  const callback = await browser.fetch(`${baseUrl}/api/student/auth/google/callback?state=${encodeURIComponent(state)}&code=authorization-code`);
-  if (callback.status !== 302) throw new Error(`google/callback failed: ${callback.status}`);
+export async function completeAccessLogin(baseUrl: string, browser: TestBrowserSession, assertion: string): Promise<void> {
+  const response = await browser.fetch(`${baseUrl}/api/student/auth/access/login?returnTo=%2Fdashboard`, {
+    headers: { "Cf-Access-Jwt-Assertion": assertion }, redirect: "manual"
+  });
+  if (response.status !== 302) throw new Error(`access/login failed: ${response.status}`);
   if (!browser.cookie) throw new Error("session cookie was not established");
 }
 
@@ -321,15 +270,12 @@ export function rawHttpRequest(
  * globalThis.fetch; UI integration suites use them to establish a real
  * session cookie before mounting the app.
  */
-export async function oauthLoginViaRawHttp(baseUrl: string): Promise<string> {
-  const start = await rawHttpRequest(new URL(`${baseUrl}/api/student/auth/google/start?returnTo=${encodeURIComponent("/dashboard")}`));
-  if (start.status !== 302) throw new Error(`google/start failed: ${start.status}`);
-  const location = start.headers["location"]?.[0] ?? "";
-  const state = new URL(location).searchParams.get("state") ?? "";
-  if (!state) throw new Error("oauth state missing from authorization url");
-  const callback = await rawHttpRequest(new URL(`${baseUrl}/api/student/auth/google/callback?state=${encodeURIComponent(state)}&code=authorization-code`));
-  if (callback.status !== 302) throw new Error(`google/callback failed: ${callback.status}`);
-  const cookie = (callback.headers["set-cookie"] ?? []).find((entry) => entry.startsWith("ai_student_session="));
+export async function accessLoginViaRawHttp(baseUrl: string, assertion: string): Promise<string> {
+  const response = await rawHttpRequest(new URL(`${baseUrl}/api/student/auth/access/login?returnTo=%2Fdashboard`), {
+    headers: { "Cf-Access-Jwt-Assertion": assertion }
+  });
+  if (response.status !== 302) throw new Error(`access/login failed: ${response.status} ${response.bodyText}`);
+  const cookie = (response.headers["set-cookie"] ?? []).find((entry) => entry.startsWith("ai_student_session="));
   if (!cookie) throw new Error("session cookie was not established");
   return cookie.split(";", 1)[0];
 }

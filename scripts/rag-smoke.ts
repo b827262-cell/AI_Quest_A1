@@ -7,13 +7,13 @@ import {
   createSmokeBrowser,
   createThrowawayDir,
   GateReport,
-  loginViaSmokeOAuth,
+  loginViaSmokeAccess,
   repoRoot,
   seedThrowawayStudentDb,
-  startFakeGoogleProvider,
   startStudentApi,
   type StudentApiHandle
 } from "./student-smoke-harness";
+import { startFakeAccessCerts } from "./student-access-fixture";
 
 /**
  * rag:smoke — drives POST /api/student/books/:bookId/rag-ask on the REAL
@@ -23,7 +23,7 @@ import {
  */
 
 const studentAppRequire = createRequire(join(repoRoot, "apps/AI-Stu-R1/package.json"));
-const { studentRagAskResponseV1Schema } = studentAppRequire("@ai-smartbook/contracts") as typeof import("@ai-smartbook/contracts");
+const { studentRagAskResponseV1Schema } = studentAppRequire("@ai-smartbook/contracts") as typeof import("../packages/contracts/src/browser");
 
 async function getFreePort(): Promise<number> {
   return new Promise((resolvePort, rejectPort) => {
@@ -44,12 +44,7 @@ async function main(): Promise<void> {
   const directory = createThrowawayDir("ai-quest-rag-smoke-");
   const studentDbPath = join(directory, "student.db");
   seedThrowawayStudentDb(studentDbPath);
-  const provider = await startFakeGoogleProvider();
-  const googleEndpoints = {
-    authorize: `${provider.baseUrl}/authorize`,
-    token: `${provider.baseUrl}/token`,
-    userinfo: `${provider.baseUrl}/userinfo`
-  };
+  const certs = await startFakeAccessCerts();
   let app: StudentApiHandle | null = null;
   let invalidCitationApp: StudentApiHandle | null = null;
   const extraApps: StudentApiHandle[] = [];
@@ -62,7 +57,7 @@ async function main(): Promise<void> {
       authDbPath: join(directory, "auth.db"),
       sessionTtlMs: 3_600_000,
       ragProvider: "fake",
-      googleEndpoints
+      accessCerts: certs
     });
     const browser = createSmokeBrowser(app.baseUrl, app.baseUrl);
 
@@ -70,7 +65,7 @@ async function main(): Promise<void> {
     const anonymous = await browser.request("/api/student/books/book-alpha/rag-ask", { method: "POST", body: { query: "光合作用" } });
     report.expect(anonymous.status === 401, "unauthenticated rag-ask rejected", `status=${anonymous.status}`);
 
-    await loginViaSmokeOAuth(app.baseUrl, browser);
+    await loginViaSmokeAccess(browser, certs.assertion());
     await completeSmokeProfile(browser, "RAG Smoke Student");
 
     // 2. Grounded in-scope question: contract response with verified citation.
@@ -129,10 +124,10 @@ async function main(): Promise<void> {
       sessionTtlMs: 3_600_000,
       ragProvider: "fake",
       ragFakeMode: "invalid_citation",
-      googleEndpoints
+      accessCerts: certs
     });
     const invalidBrowser = createSmokeBrowser(invalidCitationApp.baseUrl, invalidCitationApp.baseUrl);
-    await loginViaSmokeOAuth(invalidCitationApp.baseUrl, invalidBrowser);
+    await loginViaSmokeAccess(invalidBrowser, certs.assertion({ email: "citation@example.test" }));
     await completeSmokeProfile(invalidBrowser, "Citation Student");
     const forged = await invalidBrowser.request("/api/student/books/book-alpha/rag-ask", { method: "POST", body: { query: "光合作用" } });
     const forgedBody = JSON.parse(forged.bodyText);
@@ -152,11 +147,11 @@ async function main(): Promise<void> {
         sessionTtlMs: 3_600_000,
         ragProvider: "fake",
         ragFakeMode: fakeMode,
-        googleEndpoints
+        accessCerts: certs
       });
       extraApps.push(modeApp);
       const modeBrowser = createSmokeBrowser(modeApp.baseUrl, modeApp.baseUrl);
-      await loginViaSmokeOAuth(modeApp.baseUrl, modeBrowser);
+      await loginViaSmokeAccess(modeBrowser, certs.assertion({ email: `mode-${authDbSuffix}@example.test` }));
       await completeSmokeProfile(modeBrowser, `Mode ${fakeMode} Student`);
       const res = await modeBrowser.request("/api/student/books/book-alpha/rag-ask", { method: "POST", body: { query } });
       return { status: res.status, body: JSON.parse(res.bodyText) };
@@ -217,7 +212,7 @@ async function main(): Promise<void> {
 
     console.log(`\nrag:smoke PASS (${report.steps.length} checks)`);
   } finally {
-    await Promise.allSettled([app?.close(), invalidCitationApp?.close(), ...extraApps.map((a) => a.close()), provider.close()]);
+    await Promise.allSettled([app?.close(), invalidCitationApp?.close(), ...extraApps.map((a) => a.close()), certs.close()]);
     rmSync(directory, { recursive: true, force: true });
   }
 }

@@ -10,7 +10,7 @@ import {
   type StudentAuthService
 } from "./server";
 import type { StudentAuthMeResponse } from "./index";
-import { safeStudentReturnTo } from "./shared";
+import { AccessEmailConflictError, AccessInvalidTokenError, AccessUnavailableError } from "./access";
 export {
   createStudentLearningHistoryRouter,
   safeLearningSourceUrl,
@@ -96,53 +96,28 @@ export function createStudentAuthRouter(
 ): Router {
   const router = express.Router();
 
-  router.get("/google/start", (req, res) => {
-    try {
-      const returnTo = typeof req.query.returnTo === "string" ? req.query.returnTo : undefined;
-      const { authorizationUrl } = auth.beginGoogleLogin(returnTo);
-      res.setHeader("Cache-Control", "no-store");
-      res.redirect(302, authorizationUrl);
-    } catch {
-      res.status(503).json({ error: "GOOGLE_AUTH_NOT_CONFIGURED" });
-    }
+  router.get(["/google/start", "/google/callback"], (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.status(404).json({ error: "GOOGLE_AUTH_DISABLED" });
   });
 
-  router.get("/google/callback", async (req, res) => {
-    const state = typeof req.query.state === "string" ? req.query.state : "";
-    const code = typeof req.query.code === "string" ? req.query.code : "";
-    const providerError = typeof req.query.error === "string" ? req.query.error : "";
-    if (providerError) {
-      const cancelled = auth.cancelOAuthLogin(state);
-      if (!cancelled) {
-        res.status(400).json({ error: "OAUTH_STATE_INVALID" });
-        return;
-      }
-      // Keep the actual provider message out of the browser URL/logs. The SPA
-      // gets a stable reason and the same validated return-to contract.
-      const reason = providerError === "access_denied" ? "oauth_cancelled" : "oauth_failed";
-      res.setHeader("Cache-Control", "no-store");
-      res.redirect(302, `/auth/callback?error=${reason}&next=${encodeURIComponent(safeStudentReturnTo(cancelled.returnTo))}`);
-      return;
-    }
-    if (!state || !code) {
-      res.status(400).json({ error: "OAUTH_STATE_INVALID" });
-      return;
-    }
+  router.get("/access/login", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
     try {
-      const result = await auth.completeGoogleLogin({
-        state,
-        code,
+      const result = await auth.completeAccessLogin({
+        assertion: req.header("Cf-Access-Jwt-Assertion"),
+        returnTo: typeof req.query.returnTo === "string" ? req.query.returnTo : undefined,
         ipAddress: req.ip || null,
         userAgent: req.header("user-agent") || null
       });
       setStudentSessionCookie(res, config, result.sessionToken);
-      res.setHeader("Cache-Control", "no-store");
       const target = result.profile.profileCompleted ? result.returnTo : `/profile-completion?next=${encodeURIComponent(result.returnTo)}`;
       res.redirect(302, target);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      const stateError = message === "oauth state is invalid";
-      res.status(stateError ? 400 : 502).json({ error: stateError ? "OAUTH_STATE_INVALID" : "OAUTH_PROVIDER_ERROR" });
+      if (error instanceof AccessEmailConflictError) res.status(403).json({ error: "ACCESS_EMAIL_CONFLICT" });
+      else if (error instanceof AccessUnavailableError) res.status(503).json({ error: "ACCESS_UNAVAILABLE" });
+      else if (error instanceof AccessInvalidTokenError) res.status(401).json({ error: "ACCESS_ASSERTION_INVALID" });
+      else res.status(503).json({ error: "ACCESS_UNAVAILABLE" });
     }
   });
 

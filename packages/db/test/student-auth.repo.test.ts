@@ -14,6 +14,10 @@ describe("Student Auth repositories", () => {
       expect(repos.studentUsers.count()).toBe(0);
       const user = repos.studentUsers.create({ googleSubject: "google-subject", email: "s@example.test", displayName: "Student" });
       expect(repos.studentUsers.count()).toBe(1);
+      expect(repos.studentUsers.findByEmail("S@EXAMPLE.TEST").map((item) => item.id)).toEqual([user.id]);
+      expect(repos.studentUsers.findByEmail("missing@example.test")).toEqual([]);
+      const collision = repos.studentUsers.create({ googleSubject: "another-google-subject", email: " S@Example.Test ", displayName: "Other" });
+      expect(repos.studentUsers.findByEmail("s@example.test").map((item) => item.id)).toEqual([user.id, collision.id]);
       const session = repos.studentSessions.create({ tokenDigest: "digest-only", userId: user.id, expiresAt: "2999-01-01T00:00:00.000Z" });
       expect(repos.studentSessions.findActiveByTokenDigest("digest-only")?.userId).toBe(user.id);
       expect(handle.sqlite.prepare("SELECT token_digest FROM student_sessions WHERE id = ?").get(session.id)).toEqual({ token_digest: "digest-only" });

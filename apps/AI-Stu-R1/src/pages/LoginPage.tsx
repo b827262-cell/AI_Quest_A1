@@ -16,12 +16,12 @@ export function LoginPage() {
     if (status === "authenticated") navigate(from, { replace: true });
   }, [status, navigate, from]);
 
-  function beginGoogleLogin() {
+  function beginAccessLogin() {
     setError("");
     try {
-      window.location.assign(`/api/student/auth/google/start?returnTo=${encodeURIComponent(from)}`);
+      window.location.assign(`/api/student/auth/access/login?returnTo=${encodeURIComponent(from)}`);
     } catch {
-      setError("無法啟動 Google 登入，請稍後再試。" );
+      setError("無法啟動電子郵件登入，請稍後再試。" );
     }
   }
 
@@ -34,11 +34,9 @@ export function LoginPage() {
           <p>智能學習書本入口</p>
         </div>
         {reason === "session_expired" ? <p className="login-error">登入狀態已到期，請重新登入。</p> : null}
-        {reason === "oauth_cancelled" ? <p className="login-error">已取消登入，尚未建立登入狀態。</p> : null}
-        {reason === "oauth_failed" ? <p className="login-error">登入驗證失敗，請重新嘗試。</p> : null}
         {error ? <p className="login-error">{error}</p> : null}
-        <PrimaryButton type="button" onClick={beginGoogleLogin} disabled={status === "loading"}>
-          使用 Google 登入
+        <PrimaryButton type="button" onClick={beginAccessLogin} disabled={status === "loading"}>
+          以電子郵件登入（Cloudflare Access）
         </PrimaryButton>
         <p className="muted login-help-text">登入後，系統會在伺服器建立可撤銷的學員 session。</p>
       </div>

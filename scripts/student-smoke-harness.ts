@@ -2,8 +2,9 @@ import { createRequire } from "node:module";
 import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createServer, request as nodeHttpRequest, type Server } from "node:http";
+import { request as nodeHttpRequest } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
+import type { startFakeAccessCerts } from "./student-access-fixture";
 
 /**
  * Shared harness for the student auth / dashboard / RAG smoke gates.
@@ -18,7 +19,11 @@ export const repoRoot = resolve(new URL("..", import.meta.url).pathname);
 const studentAppRequire = createRequire(join(repoRoot, "apps/AI-Stu-R1/package.json"));
 // better-sqlite3 is a native dependency of the student app; resolve it from
 // there so root-level smoke scripts do not need their own native dep.
-const Database = studentAppRequire("better-sqlite3") as typeof import("better-sqlite3");
+const Database = studentAppRequire("better-sqlite3") as new (path: string) => {
+  exec(sql: string): void;
+  prepare(sql: string): { run(...params: unknown[]): unknown };
+  close(): void;
+};
 
 export function createThrowawayDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -93,64 +98,6 @@ export function seedThrowawayStudentDb(dbPath: string): void {
   db.close();
 }
 
-export interface FakeProviderHandle {
-  baseUrl: string;
-  setSubject(subject: string): void;
-  close(): Promise<void>;
-}
-
-/**
- * Deterministic Google OAuth provider fixture. The /authorize endpoint
- * behaves like a consent screen that immediately approves: it redirects the
- * browser straight back to the redirect_uri with the original state, so the
- * real browser smoke can complete the full round trip.
- */
-export async function startFakeGoogleProvider(): Promise<FakeProviderHandle> {
-  let subject = "smoke-google-subject";
-  const server: Server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://internal");
-    if (req.method === "GET" && url.pathname === "/authorize") {
-      const redirectUri = url.searchParams.get("redirect_uri") ?? "";
-      const state = url.searchParams.get("state") ?? "";
-      const target = `${redirectUri}?state=${encodeURIComponent(state)}&code=deterministic-auth-code`;
-      res.statusCode = 302;
-      res.setHeader("Location", target);
-      res.end();
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/token") {
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ access_token: "smoke-provider-access-token" }));
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/userinfo") {
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({
-        sub: subject,
-        email: "smoke-student@example.test",
-        email_verified: true,
-        name: "Smoke Student",
-        picture: "https://example.test/avatar.png"
-      }));
-      return;
-    }
-    res.statusCode = 404;
-    res.end("not found");
-  });
-  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("fixture provider has no address");
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    setSubject(next: string) {
-      subject = next;
-    },
-    async close() {
-      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-    }
-  };
-}
-
 export interface StudentApiHandle {
   baseUrl: string;
   port: number;
@@ -166,7 +113,7 @@ export interface StudentApiOptions {
   ragProvider?: string;
   ragFakeMode?: string;
   publicDir?: string;
-  googleEndpoints: { authorize: string; token: string; userinfo: string };
+  accessCerts?: Awaited<ReturnType<typeof startFakeAccessCerts>>;
 }
 
 /** Spawn the real student API (server/stu-api.ts) against throwaway state. */
@@ -183,13 +130,9 @@ export async function startStudentApi(options: StudentApiOptions): Promise<Stude
     STUDENT_SESSION_SECRET: "smoke-session-secret-that-is-longer-than-32-characters",
     STUDENT_ALLOWED_ORIGINS: origin,
     STUDENT_SESSION_TTL_MS: String(options.sessionTtlMs),
-    STUDENT_GOOGLE_AUTH_ENABLED: "true",
-    GOOGLE_CLIENT_ID: "smoke-client-id",
-    GOOGLE_CLIENT_SECRET: "smoke-client-secret",
-    GOOGLE_REDIRECT_URI: `${origin}/api/student/auth/google/callback`,
-    GOOGLE_AUTHORIZATION_ENDPOINT: options.googleEndpoints.authorize,
-    GOOGLE_TOKEN_ENDPOINT: options.googleEndpoints.token,
-    GOOGLE_USERINFO_ENDPOINT: options.googleEndpoints.userinfo,
+    STUDENT_ACCESS_TEAM_DOMAIN: options.accessCerts?.teamDomain,
+    STUDENT_ACCESS_AUD: options.accessCerts?.aud,
+    STUDENT_ACCESS_CERTS_URL: options.accessCerts?.certsUrl,
     STUDENT_RAG_PROVIDER: options.ragProvider ?? "fake",
     ...(options.ragFakeMode ? { STUDENT_RAG_FAKE_MODE: options.ragFakeMode } : {})
   };
@@ -231,7 +174,7 @@ export async function startStudentApi(options: StudentApiOptions): Promise<Stude
   };
 }
 
-async function waitForHttp(url: string, timeoutMs: number, diagnostic: () => string | string): Promise<void> {
+async function waitForHttp(url: string, timeoutMs: number, diagnostic: (() => string) | string): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError = "";
   while (Date.now() < deadline) {
@@ -317,15 +260,12 @@ export function createSmokeBrowser(baseUrl: string, origin: string): SmokeBrowse
   return browser;
 }
 
-/** Full deterministic login through the real OAuth routes. */
-export async function loginViaSmokeOAuth(baseUrl: string, browser: SmokeBrowser): Promise<void> {
-  const start = await browser.request("/api/student/auth/google/start?returnTo=%2Fdashboard");
-  if (start.status !== 302) throw new Error(`google/start failed: ${start.status} ${start.bodyText}`);
-  const location = start.headers["location"]?.[0] ?? "";
-  const state = new URL(location).searchParams.get("state") ?? "";
-  if (!state) throw new Error("oauth state missing");
-  const callback = await browser.request(`/api/student/auth/google/callback?state=${encodeURIComponent(state)}&code=deterministic-auth-code`);
-  if (callback.status !== 302) throw new Error(`google/callback failed: ${callback.status} ${callback.bodyText}`);
+/** Signed local assertion through the real student API. */
+export async function loginViaSmokeAccess(browser: SmokeBrowser, assertion: string): Promise<void> {
+  const response = await browser.request("/api/student/auth/access/login?returnTo=%2Fdashboard", {
+    headers: { "Cf-Access-Jwt-Assertion": assertion }
+  });
+  if (response.status !== 302) throw new Error(`access/login failed: ${response.status} ${response.bodyText}`);
   if (!browser.cookie) throw new Error("session cookie was not established");
 }
 

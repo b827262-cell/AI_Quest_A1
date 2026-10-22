@@ -1,207 +1,123 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { Request, Response } from "express";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  createStudentAuthRuntime,
-  resolveStudentAuthConfig
-} from "@ai-smartbook/auth/server";
-import { createStudentAuthRouter, createStudentSessionMiddleware } from "@ai-smartbook/auth/express";
+import { rawHttpRequest, startStudentTestApp, type StudentTestApp } from "./testApp";
+import { createRepositories } from "../../../packages/db/src";
 
-const temporaryDirectories: string[] = [];
-const originalFetch = globalThis.fetch;
+let app: StudentTestApp | null = null;
+afterEach(async () => { await app?.close(); app = null; });
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
-});
-
-class FakeResponse {
-  statusCode = 200;
-  body: unknown;
-  headers: Record<string, string | string[]> = {};
-  private finishCallback: (() => void) | undefined;
-
-  onFinish(callback: () => void): void {
-    this.finishCallback = callback;
-  }
-
-  status(code: number): this {
-    this.statusCode = code;
-    return this;
-  }
-
-  setHeader(name: string, value: string): this {
-    this.headers[name.toLowerCase()] = value;
-    return this;
-  }
-
-  append(name: string, value: string): this {
-    const key = name.toLowerCase();
-    const current = this.headers[key];
-    this.headers[key] = current === undefined ? value : Array.isArray(current) ? [...current, value] : [current, value];
-    return this;
-  }
-
-  json(body: unknown): this {
-    this.body = body;
-    this.finishCallback?.();
-    return this;
-  }
-
-  redirect(code: number, location: string): this {
-    this.statusCode = code;
-    this.setHeader("Location", location);
-    this.finishCallback?.();
-    return this;
-  }
-
-  end(): this {
-    this.finishCallback?.();
-    return this;
-  }
-}
-
-function requestFor(path: string, method: string, query: Record<string, string> = {}, body: unknown = undefined, headers: Record<string, string> = {}): Request {
-  return {
-    method,
-    url: path,
-    originalUrl: path,
-    query,
-    body,
-    ip: "127.0.0.1",
-    header(name: string) {
-      return headers[name.toLowerCase()];
-    }
-  } as unknown as Request;
-}
-
-async function dispatch(router: unknown, req: Request): Promise<FakeResponse> {
-  const response = new FakeResponse();
-  const routerWithHandle = router as { handle: (request: Request, response: Response, next: () => void) => void };
-  await new Promise<void>((resolve) => {
-    response.onFinish(resolve);
-    routerWithHandle.handle(req, response as unknown as Response, resolve);
+function login(assertion?: string, returnTo = "/dashboard", extraHeaders: Record<string, string> = {}) {
+  return rawHttpRequest(new URL(`${app!.baseUrl}/api/student/auth/access/login?returnTo=${encodeURIComponent(returnTo)}`), {
+    headers: { ...(assertion ? { "Cf-Access-Jwt-Assertion": assertion } : {}), ...extraHeaders }
   });
-  return response;
 }
 
-describe("Student Auth HTTP integration", () => {
+describe("Student Cloudflare Access HTTP integration", () => {
   it("omits Secure from the session cookie when explicitly disabled outside production", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "ai-quest-student-http-"));
-    temporaryDirectories.push(directory);
-    const config = resolveStudentAuthConfig({
-      NODE_ENV: "test",
-      STUDENT_SESSION_SECURE: "false",
-      GOOGLE_CLIENT_ID: "client-id",
-      GOOGLE_CLIENT_SECRET: "provider-secret",
-      GOOGLE_REDIRECT_URI: "http://localhost/callback",
-      STUDENT_SESSION_SECRET: "a-test-session-secret-that-is-longer-than-32-chars"
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, secureCookies: false });
+    const response = await login(app.assertion());
+    expect(response.status).toBe(302);
+    expect(response.headers["set-cookie"]?.[0]).not.toMatch(/;\s*Secure/i);
+  });
+  it("creates a session from a signed assertion, gates the profile, and preserves a safe returnTo", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const response = await login(app.assertion({ email: " Student@Example.Test " }), "//attacker.example");
+    expect(response.status).toBe(302);
+    expect(response.headers.location?.[0]).toBe("/profile-completion?next=%2Fbooks");
+    const cookie = response.headers["set-cookie"]?.[0];
+    expect(cookie).toMatch(/ai_student_session=.*HttpOnly.*Secure.*SameSite=strict/i);
+    const session = cookie?.split(";", 1)[0] ?? "";
+    const me = await rawHttpRequest(new URL(`${app.baseUrl}/api/student/auth/me`), { headers: { cookie: session } });
+    expect(JSON.parse(me.bodyText)).toMatchObject({ authenticated: true, user: { email: "student@example.test", profileCompleted: false } });
+    const gated = await rawHttpRequest(new URL(`${app.baseUrl}/api/student/books`), { headers: { cookie: session } });
+    expect(gated.status).toBe(403);
+    const profile = await rawHttpRequest(new URL(`${app.baseUrl}/api/student/auth/profile`), {
+      method: "PATCH", headers: { cookie: session, origin: "https://student.example.test", "content-type": "application/json" },
+      body: JSON.stringify({ displayName: "Student", schoolName: "School", gradeLevel: "1" })
     });
-    const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config);
-    const router = createStudentAuthRouter(runtime.auth, config);
-    globalThis.fetch = (async (input) => {
-      if (String(input) === config.googleTokenEndpoint) {
-        return new Response(JSON.stringify({ access_token: "test-token" }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ sub: "test-subject", email: "student@example.test", email_verified: true, name: "Student" }), { status: 200 });
-    }) as typeof fetch;
-
-    const start = await dispatch(router, requestFor("/google/start", "GET"));
-    const state = new URL(String(start.headers.location)).searchParams.get("state")!;
-    const callback = await dispatch(router, requestFor("/google/callback", "GET", { state, code: "test-code" }));
-    expect(callback.statusCode).toBe(302);
-    expect(String(callback.headers["set-cookie"])).toMatch(/HttpOnly/);
-    expect(String(callback.headers["set-cookie"])).not.toMatch(/(?:^|;\s*)Secure(?:;|$)/);
+    expect(profile.status).toBe(200);
+    const next = await login(app.assertion(), "/dashboard");
+    expect(next.headers.location?.[0]).toBe("/dashboard");
+    expect(app.certs.requestCount()).toBe(1); // JWKS reused across requests.
+    expect((await rawHttpRequest(new URL(`${app.baseUrl}/api/student/auth/google/start`))).status).toBe(404);
+    expect((await rawHttpRequest(new URL(`${app.baseUrl}/api/student/auth/google/callback`))).status).toBe(404);
   });
 
-  it("covers Google callback, state replay, profile gate, cookie boundary and logout revocation", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "ai-quest-student-http-"));
-    temporaryDirectories.push(directory);
-    const config = resolveStudentAuthConfig({
-      NODE_ENV: "test",
-      STUDENT_GOOGLE_AUTH_ENABLED: "true",
-      GOOGLE_CLIENT_ID: "client-id",
-      GOOGLE_CLIENT_SECRET: "server-only-provider-secret",
-      GOOGLE_REDIRECT_URI: "https://student.example.test/api/student/auth/google/callback",
-      STUDENT_SESSION_SECRET: "a-test-session-secret-that-is-longer-than-32-chars",
-      STUDENT_ALLOWED_ORIGINS: "https://student.example.test",
-      GOOGLE_AUTHORIZATION_ENDPOINT: "https://accounts.example.test/oauth/authorize",
-      GOOGLE_TOKEN_ENDPOINT: "https://accounts.example.test/oauth/token",
-      GOOGLE_USERINFO_ENDPOINT: "https://accounts.example.test/oauth/userinfo",
-      STUDENT_SESSION_TTL_MS: "3600000"
-    });
-    const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config);
-    const router = createStudentAuthRouter(runtime.auth, config);
-    const guard = createStudentSessionMiddleware(runtime.auth, config);
+  it("rejects missing, forged, expired, premature, wrong kid, audience and issuer assertions", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const now = Math.floor(Date.now() / 1000);
+    const forgedHeaders = { "Cf-Access-Authenticated-User-Email": "forged@example.test", cookie: "CF_Authorization=forged", "oai-email": "forged@example.test" };
+    expect((await login(undefined, "/dashboard", forgedHeaders)).status).toBe(401);
+    for (const token of [
+      app.assertion({ exp: now - 61 }),
+      app.assertion({ nbf: now + 61 }),
+      app.assertion({ iat: now + 61 }),
+      app.assertion({}, { kid: "wrong-kid" }),
+      app.assertion({ aud: "wrong-aud" }),
+      app.assertion({ iss: "https://evil.example.test" }),
+      `${app.assertion().slice(0, -2)}xx`
+    ]) {
+      const response = await login(token, "/dashboard", forgedHeaders);
+      expect(response.status).toBe(401);
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    }
+  });
 
-    globalThis.fetch = (async (input) => {
-      const url = String(input);
-      if (url === config.googleTokenEndpoint) return new Response(JSON.stringify({ access_token: "provider-access-token" }), { status: 200 });
-      if (url === config.googleUserinfoEndpoint) return new Response(JSON.stringify({
-        sub: "google-subject",
-        email: "student@example.test",
-        email_verified: true,
-        name: "Student",
-        picture: "https://example.test/avatar.png"
-      }), { status: 200 });
-      return new Response("not found", { status: 404 });
-    }) as typeof fetch;
+  it("returns 503 for absent config and unavailable certs", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const token = app.assertion();
+    app.config.accessAud = undefined;
+    expect((await login(token)).status).toBe(503);
+    app.config.accessAud = app.certs.aud;
+    app.certs.setFailure(true);
+    expect((await login(token)).status).toBe(503);
+  });
 
-    const cancelledStart = await dispatch(router, requestFor("/google/start", "GET", { returnTo: "//attacker.example" }));
-    const cancelledState = new URL(String(cancelledStart.headers.location)).searchParams.get("state")!;
-    const cancelled = await dispatch(router, requestFor("/google/callback", "GET", { state: cancelledState, error: "access_denied" }));
-    expect(cancelled.statusCode).toBe(302);
-    expect(cancelled.headers.location).toBe("/auth/callback?error=oauth_cancelled&next=%2Fbooks");
-    expect(cancelled.headers["set-cookie"]).toBeUndefined();
-    const cancelledReplay = await dispatch(router, requestFor("/google/callback", "GET", { state: cancelledState, code: "authorization-code" }));
-    expect(cancelledReplay.statusCode).toBe(400);
-    expect(cancelledReplay.body).toEqual({ error: "OAUTH_STATE_INVALID" });
+  it("matches an existing Google user by verified email despite legacy case and whitespace", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const users = createRepositories(app.runtime.dbHandle.db).studentUsers;
+    const old = users.create({ googleSubject: "old-google-subject", email: " Student@Example.Test ", displayName: "Old Student" });
+    users.updateProfile(old.id, { displayName: "Existing Profile", schoolName: "School", gradeLevel: "1" });
+    const response = await login(app.assertion());
+    expect(response.status).toBe(302);
+    expect(response.headers.location?.[0]).toBe("/dashboard");
+    const cookie = response.headers["set-cookie"]?.[0].split(";", 1)[0] ?? "";
+    const me = await rawHttpRequest(new URL(`${app.baseUrl}/api/student/auth/me`), { headers: { cookie } });
+    expect(JSON.parse(me.bodyText).user.email).toBe("student@example.test");
+    expect(users.findByEmail("student@example.test").map((user) => user.id)).toEqual([old.id]);
+    expect(users.findByGoogleSubject("old-google-subject")?.id).toBe(old.id);
+  });
 
-    const start = await dispatch(router, requestFor("/google/start", "GET", { returnTo: "/books" }));
-    expect(start.statusCode).toBe(302);
-    const authorizationUrl = new URL(String(start.headers.location));
-    const state = authorizationUrl.searchParams.get("state")!;
-    const callback = await dispatch(router, requestFor("/google/callback", "GET", { state, code: "authorization-code" }));
-    expect(callback.statusCode).toBe(302);
-    expect(String(callback.headers.location)).toContain("/profile-completion");
-    const rawCookie = callback.headers["set-cookie"];
-    const sessionCookie = Array.isArray(rawCookie) ? rawCookie[0].split(";", 1)[0] : String(rawCookie).split(";", 1)[0];
-    expect(String(rawCookie)).toMatch(/HttpOnly/);
-    expect(String(rawCookie)).toMatch(/Secure/);
-    expect(String(rawCookie)).toMatch(/SameSite=strict/i);
-    expect(String(rawCookie)).toMatch(/Max-Age=3600/);
+  it("rejects empty or malformed email claims with 401 and no session", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    for (const email of ["", "  ", "not-an-email", "x@y", "x@y..test"]) {
+      const response = await login(app.assertion({ email }));
+      expect(response.status, email).toBe(401);
+      expect(JSON.parse(response.bodyText)).toEqual({ error: "ACCESS_ASSERTION_INVALID" });
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    }
+  });
 
-    const me = await dispatch(router, requestFor("/me", "GET", {}, undefined, { cookie: sessionCookie }));
-    expect(me.body).toMatchObject({ authenticated: true, user: { email: "student@example.test", profileCompleted: false } });
+  it.each(["student@example.test", "STUDENT@EXAMPLE.TEST"])("rejects a second legacy user with email %s", async (secondEmail) => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const users = createRepositories(app.runtime.dbHandle.db).studentUsers;
+    users.create({ googleSubject: "google-1", email: "student@example.test", displayName: "One" });
+    users.create({ googleSubject: "google-2", email: secondEmail, displayName: "Two" });
+    const response = await login(app.assertion());
+    expect(response.status).toBe(403);
+    expect(JSON.parse(response.bodyText)).toEqual({ error: "ACCESS_EMAIL_CONFLICT" });
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(users.findByEmail("student@example.test")).toHaveLength(2);
+  });
 
-    const incompleteResponse = new FakeResponse();
-    let incompleteNext = false;
-    guard(requestFor("/protected", "GET", {}, undefined, { cookie: sessionCookie }), incompleteResponse as unknown as Response, () => { incompleteNext = true; });
-    expect(incompleteResponse.statusCode).toBe(403);
-    expect(incompleteNext).toBe(false);
-
-    const completed = await dispatch(router, requestFor("/profile", "PATCH", {}, { displayName: "Student", schoolName: "Test University", gradeLevel: "Year 1" }, { cookie: sessionCookie, origin: "https://student.example.test" }));
-    expect(completed.statusCode).toBe(200);
-    expect(completed.body).toMatchObject({ profile: { profileCompleted: true } });
-
-    const allowedResponse = new FakeResponse();
-    let allowedNext = false;
-    guard(requestFor("/protected", "GET", {}, undefined, { cookie: sessionCookie }), allowedResponse as unknown as Response, () => { allowedNext = true; });
-    expect(allowedNext).toBe(true);
-
-    const replay = await dispatch(router, requestFor("/google/callback", "GET", { state, code: "authorization-code" }));
-    expect(replay.statusCode).toBe(400);
-    expect(replay.body).toEqual({ error: "OAUTH_STATE_INVALID" });
-
-    const logout = await dispatch(router, requestFor("/logout", "POST", {}, undefined, { cookie: sessionCookie, origin: "https://student.example.test" }));
-    expect(logout.statusCode).toBe(204);
-    const revokedResponse = new FakeResponse();
-    let revokedNext = false;
-    guard(requestFor("/protected", "GET", {}, undefined, { cookie: sessionCookie }), revokedResponse as unknown as Response, () => { revokedNext = true; });
-    expect(revokedResponse.statusCode).toBe(401);
-    expect(revokedNext).toBe(false);
-    runtime.dbHandle.sqlite.close();
+  it("concurrent Access logins create one normalized account with separate sessions", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const token = app.assertion({ email: " New@Example.Test " });
+    const responses = await Promise.all(Array.from({ length: 12 }, () => login(token)));
+    expect(responses.every((response) => response.status === 302)).toBe(true);
+    expect(new Set(responses.map((response) => response.headers["set-cookie"]?.[0].split(";", 1)[0])).size).toBe(12);
+    const users = createRepositories(app.runtime.dbHandle.db).studentUsers;
+    const matches = users.findByEmail("new@example.test");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].email).toBe("new@example.test");
   });
 });

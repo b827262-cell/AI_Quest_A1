@@ -9,17 +9,16 @@ import {
   createThrowawayDir,
   repoRoot,
   seedThrowawayStudentDb,
-  startFakeGoogleProvider,
   startStudentApi
 } from "./student-smoke-harness";
+import { startFakeAccessCerts } from "./student-access-fixture";
 
 /**
  * student:dashboard-smoke — REAL browser gate.
  *
  * Boots the real student API (server/stu-api.ts) serving the built SPA from
  * apps/AI-Stu-R1/dist against throwaway SQLite databases, plus a
- * deterministic Google OAuth fixture provider whose /authorize endpoint
- * auto-approves. Chromium then exercises the full login → profile
+ * deterministic local RSA Access fixture. Chromium then exercises the full login → profile
  * completion → dashboard → books flow at desktop/tablet/mobile viewports.
  */
 
@@ -51,7 +50,11 @@ function ensureStudentBundle(): void {
 }
 
 function expireAllSessions(authDbPath: string): void {
-  const Database = studentAppRequire("better-sqlite3") as typeof import("better-sqlite3");
+  const Database = studentAppRequire("better-sqlite3") as new (path: string) => {
+    pragma(sql: string): unknown;
+    prepare(sql: string): { run(...params: unknown[]): unknown };
+    close(): void;
+  };
   const db = new Database(authDbPath);
   db.pragma("busy_timeout = 3000");
   db.prepare("UPDATE student_sessions SET expires_at = ?").run("2000-01-01T00:00:00.000Z");
@@ -130,12 +133,14 @@ async function runViewport(
   browser: Browser,
   baseUrl: string,
   viewport: (typeof VIEWPORTS)[number],
-  report: GateReport
+  report: GateReport,
+  assertion: string
 ): Promise<ViewportRun> {
   const consoleSink: ConsoleLog[] = [];
   let phase = "bootstrap";
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
   const page = await context.newPage();
+  await page.route("**/api/student/auth/access/login**", (route) => route.continue({ headers: { ...route.request().headers(), "Cf-Access-Jwt-Assertion": assertion } }));
   attachConsoleCollector(page, consoleSink, viewport.name, () => phase);
   attachNotFoundTracker(page, consoleSink, viewport.name, () => phase);
   const screenshotPath = join(artifactsDir, `dashboard-${viewport.name}-${viewport.width}x${viewport.height}.png`);
@@ -144,7 +149,7 @@ async function runViewport(
     phase = "anonymous redirects";
     await page.goto(`${baseUrl}/dashboard`, { waitUntil: "networkidle" });
     await page.waitForURL(/\/login$/, { timeout: 15_000 });
-    await page.waitForSelector("text=使用 Google 登入", { timeout: 15_000 });
+    await page.waitForSelector("text=以電子郵件登入（Cloudflare Access）", { timeout: 15_000 });
     const anonymousBody = await page.textContent("body");
     report.expect(
       Boolean(anonymousBody) && !anonymousBody!.includes("Alpha Botany"),
@@ -159,10 +164,10 @@ async function runViewport(
 
     phase = "oauth login";
     await page.goto(`${baseUrl}/dashboard`, { waitUntil: "networkidle" });
-    await page.waitForSelector("text=使用 Google 登入", { timeout: 15_000 });
-    await page.click("text=使用 Google 登入");
+    await page.waitForSelector("text=以電子郵件登入（Cloudflare Access）", { timeout: 15_000 });
+    await page.click("text=以電子郵件登入（Cloudflare Access）");
     await page.waitForURL(/\/profile-completion/, { timeout: 30_000 });
-    report.pass(`[${viewport.name}] real OAuth round trip lands on /profile-completion`);
+    report.pass(`[${viewport.name}] signed Access login lands on /profile-completion`);
 
     phase = "profile completion";
     await page.fill("#student-display-name", "Browser Smoke Student");
@@ -210,18 +215,20 @@ async function verifySessionExpiryUi(
   browser: Browser,
   baseUrl: string,
   authDbPath: string,
-  report: GateReport
+  report: GateReport,
+  assertion: string
 ): Promise<ConsoleLog[]> {
   const consoleSink: ConsoleLog[] = [];
   let phase = "expiry-login";
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  await page.route("**/api/student/auth/access/login**", (route) => route.continue({ headers: { ...route.request().headers(), "Cf-Access-Jwt-Assertion": assertion } }));
   attachConsoleCollector(page, consoleSink, "expiry", () => phase);
   attachNotFoundTracker(page, consoleSink, "expiry", () => phase);
   try {
     await page.goto(`${baseUrl}/dashboard`, { waitUntil: "networkidle" });
-    await page.waitForSelector("text=使用 Google 登入", { timeout: 15_000 });
-    await page.click("text=使用 Google 登入");
+    await page.waitForSelector("text=以電子郵件登入（Cloudflare Access）", { timeout: 15_000 });
+    await page.click("text=以電子郵件登入（Cloudflare Access）");
     await page.waitForURL(/\/profile-completion/, { timeout: 30_000 });
     await page.fill("#student-display-name", "Expiry Student");
     await page.fill("#student-school-name", "Smoke University");
@@ -261,7 +268,7 @@ async function main(): Promise<void> {
   const authDbPath = join(workDir, "auth.db");
   seedThrowawayStudentDb(studentDbPath);
 
-  const provider = await startFakeGoogleProvider();
+  const certs = await startFakeAccessCerts();
   const port = await getFreePort();
   const api = await startStudentApi({
     port,
@@ -269,24 +276,16 @@ async function main(): Promise<void> {
     authDbPath,
     sessionTtlMs: 3_600_000,
     publicDir: join(repoRoot, "apps/AI-Stu-R1/dist"),
-    googleEndpoints: {
-      authorize: `${provider.baseUrl}/authorize`,
-      token: `${provider.baseUrl}/token`,
-      userinfo: `${provider.baseUrl}/userinfo`
-    }
+    accessCerts: certs
   });
 
   const browser = await chromium.launch({ executablePath: CHROMIUM_PATH, headless: true });
   const runs: ViewportRun[] = [];
   try {
     for (const viewport of VIEWPORTS) {
-      // Fresh Google subject per viewport: every run must hit the
-      // incomplete-profile path against the shared auth database.
-      provider.setSubject(`smoke-subject-${viewport.name}`);
-      runs.push(await runViewport(browser, api.baseUrl, viewport, report));
+      runs.push(await runViewport(browser, api.baseUrl, viewport, report, certs.assertion({ email: `smoke-${viewport.name}@example.test` })));
     }
-    provider.setSubject("smoke-subject-expiry");
-    const expiryErrors = await verifySessionExpiryUi(browser, api.baseUrl, authDbPath, report);
+    const expiryErrors = await verifySessionExpiryUi(browser, api.baseUrl, authDbPath, report, certs.assertion({ email: "smoke-expiry@example.test" }));
     runs.push({ name: "expiry", width: 1440, height: 900, consoleErrors: expiryErrors, screenshot: "" });
 
     for (const run of runs) {
@@ -306,7 +305,7 @@ async function main(): Promise<void> {
   } finally {
     await browser.close();
     await api.close();
-    await provider.close();
+    await certs.close();
   }
 
   const evidence = {
