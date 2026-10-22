@@ -7,7 +7,7 @@ import { StudentAppRoutes } from "./App";
 import { dashboardProfileFromSession } from "./dashboard/dashboardQueries";
 import {
   completeStudentProfileViaRawHttp,
-  oauthLoginViaRawHttp,
+  accessLoginViaRawHttp,
   rawHttpRequest,
   startStudentTestApp,
   type StudentTestApp
@@ -31,7 +31,6 @@ let app: StudentTestApp | null = null;
 let root: Root | null = null;
 let container: HTMLElement | null = null;
 let sessionCookie: string | null = null;
-let googleSubject = "google-subject";
 
 const baseFetch = globalThis.fetch;
 
@@ -45,7 +44,6 @@ afterEach(async () => {
   container = null;
   globalThis.fetch = baseFetch;
   sessionCookie = null;
-  googleSubject = "google-subject";
   localStorage.clear();
   if (app) {
     await app.close();
@@ -116,15 +114,15 @@ async function waitForPath(expected: string, timeoutMs = 8_000): Promise<void> {
   throw new Error(`expected route ${expected}, stayed at ${currentPath()}`);
 }
 
-async function loginViaRealOAuth(baseUrl: string, displayName?: string): Promise<void> {
-  // Real OAuth round-trip over raw TCP against the express auth router.
-  sessionCookie = await oauthLoginViaRawHttp(baseUrl);
+async function loginViaRealAccess(baseUrl: string, displayName?: string): Promise<void> {
+  // Real Access assertion over raw TCP against the express auth router.
+  sessionCookie = await accessLoginViaRawHttp(baseUrl, app!.assertion());
   if (displayName) await completeStudentProfileViaRawHttp(baseUrl, sessionCookie, displayName);
 }
 
 describe("Student router + real session boundary (H-4)", () => {
   it("sends unauthenticated visitors from /dashboard, /books and /books/:bookId to /login and never exposes book content", async () => {
-    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT, fakeProvider: { getSubject: () => googleSubject } });
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT });
     (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL(`http://127.0.0.1:${TEST_PORT}/`);
     installBrowserFetch(app.baseUrl);
     // Forged identity claims in localStorage must not authenticate anyone.
@@ -135,6 +133,8 @@ describe("Student router + real session boundary (H-4)", () => {
       await renderAt(path);
       await waitForPath("/login");
       const html = container?.innerHTML ?? "";
+      expect(html).toContain("以電子郵件登入（Cloudflare Access）");
+      expect(html).not.toContain("使用 Google 登入");
       expect(html).not.toContain("Alpha Botany");
       expect(html).not.toContain("光合作用");
       if (root) {
@@ -148,7 +148,7 @@ describe("Student router + real session boundary (H-4)", () => {
   });
 
   it("renders /knowledge-ai without authentication and provides the 4-mode search form", async () => {
-    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT, fakeProvider: { getSubject: () => googleSubject } });
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT });
     (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL(`http://127.0.0.1:${TEST_PORT}/`);
     installBrowserFetch(app.baseUrl);
 
@@ -175,10 +175,10 @@ describe("Student router + real session boundary (H-4)", () => {
   });
 
   it("renders the dashboard from the real session profile and ignores forged localStorage identity", async () => {
-    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT, fakeProvider: { getSubject: () => googleSubject } });
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT });
     (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL(`http://127.0.0.1:${TEST_PORT}/`);
     installBrowserFetch(app.baseUrl);
-    await loginViaRealOAuth(app.baseUrl, "Real Session Student");
+    await loginViaRealAccess(app.baseUrl, "Real Session Student");
     localStorage.setItem("smartbook.student.name", "Forged Name");
 
     await renderAt("/dashboard");
@@ -193,11 +193,10 @@ describe("Student router + real session boundary (H-4)", () => {
   });
 
   it("routes an authenticated user with an incomplete profile to /profile-completion, then back to /dashboard", async () => {
-    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT, fakeProvider: { getSubject: () => googleSubject } });
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT });
     (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL(`http://127.0.0.1:${TEST_PORT}/`);
     installBrowserFetch(app.baseUrl);
-    googleSubject = "google-subject-incomplete";
-    await loginViaRealOAuth(app.baseUrl);
+    await loginViaRealAccess(app.baseUrl);
 
     await renderAt("/dashboard");
     await waitForPath("/profile-completion");
@@ -218,10 +217,10 @@ describe("Student router + real session boundary (H-4)", () => {
   });
 
   it("redirects back to /login once the server session expires", async () => {
-    app = await startStudentTestApp({ sessionTtlMs: 300, port: TEST_PORT, fakeProvider: { getSubject: () => googleSubject } });
+    app = await startStudentTestApp({ sessionTtlMs: 300, port: TEST_PORT });
     (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL(`http://127.0.0.1:${TEST_PORT}/`);
     installBrowserFetch(app.baseUrl);
-    await loginViaRealOAuth(app.baseUrl, "Expiring Student");
+    await loginViaRealAccess(app.baseUrl, "Expiring Student");
 
     await renderAt("/dashboard");
     await waitForPath("/dashboard");

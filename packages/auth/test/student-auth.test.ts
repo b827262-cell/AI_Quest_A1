@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   StudentAuthService,
   buildGoogleAuthorizationUrl,
@@ -11,6 +11,9 @@ import {
   type GoogleIdentity
 } from "../src/server";
 import { safeStudentReturnTo } from "../src/shared";
+import { startFakeAccessCerts } from "../../../scripts/student-access-fixture";
+import { assertStudentAuthConfig, resolveStudentAuthConfig } from "../src/server";
+import { AccessUnavailableError } from "../src/access";
 
 function buildFakeAuth(now: () => number, exchangeIdentity: (code: string, verifier: string) => Promise<GoogleIdentity>) {
   const users = new Map<string, StudentAuthUserRecord>();
@@ -24,6 +27,9 @@ function buildFakeAuth(now: () => number, exchangeIdentity: (code: string, verif
       findByGoogleSubject(subject) {
         const id = subjects.get(subject);
         return id ? users.get(id) : undefined;
+      },
+      findByEmail(email) {
+        return [...users.values()].filter((user) => user.email.trim().toLowerCase() === email.trim().toLowerCase());
       },
       create(input) {
         const user: StudentAuthUserRecord = {
@@ -117,11 +123,95 @@ function buildFakeAuth(now: () => number, exchangeIdentity: (code: string, verif
   return {
     service: new StudentAuthService(config, repositories, now, exchangeIdentity),
     config,
+    repositories,
     stats: { userCreates: () => userCreates, sessionCreates: () => sessionCreates }
   };
 }
 
 describe("Student Auth Foundation", () => {
+  it("accepts a signed Access email, reuses the existing Google user, and keeps the same session path", async () => {
+    const certs = await startFakeAccessCerts();
+    try {
+      const { service, config, stats } = buildFakeAuth(Date.now, async () => ({ subject: "old-google", email: "student@example.test", displayName: "Old Google", avatarUrl: null }));
+      config.accessTeamDomain = certs.teamDomain;
+      config.accessAud = certs.aud;
+      config.accessCertsUrl = certs.certsUrl;
+      const googleStart = service.beginGoogleLogin();
+      const state = new URL(googleStart.authorizationUrl).searchParams.get("state")!;
+      const old = await service.completeGoogleLogin({ state, code: "code" });
+      const result = await service.completeAccessLogin({ assertion: certs.assertion({ email: " Student@Example.Test " }), returnTo: "//attacker.example" });
+      expect(result.user.id).toBe(old.user.id);
+      expect(result.returnTo).toBe("/books");
+      expect(stats.userCreates()).toBe(1);
+      expect(service.restoreSession(result.sessionToken)?.user.email).toBe("student@example.test");
+      await expect(service.completeAccessLogin({ assertion: undefined })).rejects.toThrow();
+    } finally { await certs.close(); }
+  });
+
+  it("rejects empty and malformed verified emails before creating a session", async () => {
+    const certs = await startFakeAccessCerts();
+    try {
+      const { service, config, stats } = buildFakeAuth(Date.now, async () => ({ subject: "unused", email: "unused@example.test", displayName: "Unused", avatarUrl: null }));
+      Object.assign(config, { accessTeamDomain: certs.teamDomain, accessAud: certs.aud, accessCertsUrl: certs.certsUrl });
+      for (const email of ["", "   ", "not-an-email", "a@b", "a@b.", "a@b..test"]) {
+        await expect(service.completeAccessLogin({ assertion: certs.assertion({ email }) })).rejects.toThrow("invalid email");
+      }
+      expect(stats.userCreates()).toBe(0);
+      expect(stats.sessionCreates()).toBe(0);
+    } finally { await certs.close(); }
+  });
+
+  it("reuses one user for concurrent logins and recovers a competing creator's unique-subject insert", async () => {
+    const certs = await startFakeAccessCerts();
+    try {
+      const { service, config, repositories, stats } = buildFakeAuth(Date.now, async () => ({ subject: "unused", email: "unused@example.test", displayName: "Unused", avatarUrl: null }));
+      Object.assign(config, { accessTeamDomain: certs.teamDomain, accessAud: certs.aud, accessCertsUrl: certs.certsUrl });
+      const assertion = certs.assertion({ email: " NEW@Example.Test " });
+      const results = await Promise.all(Array.from({ length: 12 }, () => service.completeAccessLogin({ assertion })));
+      expect(new Set(results.map((result) => result.user.id)).size).toBe(1);
+      expect(stats.userCreates()).toBe(1);
+      expect(stats.sessionCreates()).toBe(12);
+
+      const originalCreate = repositories.users.create;
+      repositories.users.create = (input) => {
+        originalCreate(input); // Simulate the other process winning the insert.
+        throw new Error("UNIQUE constraint failed: student_users.google_subject");
+      };
+      const raced = await service.completeAccessLogin({ assertion: certs.assertion({ email: "race@example.test" }) });
+      expect(raced.user.email).toBe("race@example.test");
+      expect(stats.userCreates()).toBe(2);
+    } finally { await certs.close(); }
+  });
+
+  it("rejects duplicate normalized email matches and logs only a digest and count", async () => {
+    const certs = await startFakeAccessCerts();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { service, config, repositories, stats } = buildFakeAuth(Date.now, async () => ({ subject: "unused", email: "unused@example.test", displayName: "Unused", avatarUrl: null }));
+      Object.assign(config, { accessTeamDomain: certs.teamDomain, accessAud: certs.aud, accessCertsUrl: certs.certsUrl });
+      repositories.users.create({ googleSubject: "google-1", email: "Student@Example.Test", displayName: "One" });
+      repositories.users.create({ googleSubject: "google-2", email: " student@example.test ", displayName: "Two" });
+      const assertion = certs.assertion({ email: "student@example.test" });
+      await expect(service.completeAccessLogin({ assertion })).rejects.toThrow("multiple student users");
+      expect(stats.sessionCreates()).toBe(0);
+      expect(warning).toHaveBeenCalledWith("STUDENT_ACCESS_EMAIL_CONFLICT", {
+        emailSha256: digestStudentSecret("student@example.test"), matchCount: 2
+      });
+      expect(JSON.stringify(warning.mock.calls)).not.toContain(assertion);
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("student@example.test");
+    } finally { warning.mockRestore(); await certs.close(); }
+  });
+
+  it("requires Access config in production without Google client credentials", () => {
+    const config = resolveStudentAuthConfig({ NODE_ENV: "production", STUDENT_SESSION_SECRET: "a-secret-that-is-longer-than-thirty-two-characters", STUDENT_ACCESS_TEAM_DOMAIN: "team", STUDENT_ACCESS_AUD: "aud" });
+    expect(() => assertStudentAuthConfig(config)).not.toThrow();
+    expect(() => assertStudentAuthConfig({ ...config, accessAud: undefined })).toThrow();
+  });
+
+  it("fails with service unavailable when Access config is absent", async () => {
+    const { service } = buildFakeAuth(Date.now, async () => ({ subject: "unused", email: "unused@example.test", displayName: "Unused", avatarUrl: null }));
+    await expect(service.completeAccessLogin({ assertion: "untrusted.jwt.value" })).rejects.toBeInstanceOf(AccessUnavailableError);
+  });
   it("creates one user for repeated Google logins and keeps profile state server-side", async () => {
     let clock = Date.parse("2026-08-05T00:00:00.000Z");
     const identity = { subject: "google-subject-1", email: "student@example.test", displayName: "學員一號", avatarUrl: null };

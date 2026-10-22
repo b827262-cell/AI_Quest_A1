@@ -1,11 +1,9 @@
 import { rmSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  completeOAuthLogin,
+  completeAccessLogin,
   completeStudentProfile,
   createTestBrowserSession,
-  FAKE_GOOGLE_ENDPOINTS,
-  installFakeGoogleProvider,
   startStudentTestApp,
   STUDENT_TEST_ORIGIN,
   type StudentTestApp
@@ -33,12 +31,11 @@ afterEach(async () => {
 
 async function startAndLogin(options: { sessionTtlMs: number; completeProfile?: boolean; displayName?: string } = { sessionTtlMs: 3_600_000 }) {
   app = await startStudentTestApp({ sessionTtlMs: options.sessionTtlMs });
-  let subject = "google-subject";
-  installFakeGoogleProvider(originalFetch, () => subject);
+
   const browser = createTestBrowserSession();
-  await completeOAuthLogin(app.baseUrl, browser);
+  await completeAccessLogin(app.baseUrl, browser, app.assertion());
   if (options.completeProfile) await completeStudentProfile(app.baseUrl, browser, options.displayName);
-  return { baseUrl: app.baseUrl, browser, setSubject: (next: string) => { subject = next; } };
+  return { baseUrl: app.baseUrl, browser };
 }
 
 describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () => {
@@ -210,7 +207,7 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
     // Logout revocation: a fresh login followed by logout makes the old
     // session cookie un-replayable.
     const replayBrowser = createTestBrowserSession();
-    await completeOAuthLogin(baseUrl, replayBrowser);
+    await completeAccessLogin(baseUrl, replayBrowser, app!.assertion());
     await completeStudentProfile(baseUrl, replayBrowser);
     const staleCookie = replayBrowser.cookie;
     const logout = await replayBrowser.fetch(`${baseUrl}/api/student/auth/logout`, {
@@ -223,17 +220,14 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
     expect(replayed.status).toBe(401);
   });
 
-  it("rejects OAuth state replay", async () => {
+  it("rejects forged identity headers without a signed Access assertion", async () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
-    installFakeGoogleProvider(originalFetch, () => "google-subject");
-    const browser = createTestBrowserSession();
-    const start = await browser.fetch(`${app.baseUrl}/api/student/auth/google/start?returnTo=/dashboard`);
-    const state = new URL(start.headers.get("location") ?? "").searchParams.get("state") ?? "";
-    const first = await browser.fetch(`${app.baseUrl}/api/student/auth/google/callback?state=${encodeURIComponent(state)}&code=authorization-code`);
-    expect(first.status).toBe(302);
-    const replay = await originalFetch(`${app.baseUrl}/api/student/auth/google/callback?state=${encodeURIComponent(state)}&code=authorization-code`, { redirect: "manual" });
-    expect(replay.status).toBe(400);
-    expect(await replay.json()).toEqual({ error: "OAUTH_STATE_INVALID" });
+    const response = await originalFetch(`${app.baseUrl}/api/student/auth/access/login`, {
+      headers: { "Cf-Access-Authenticated-User-Email": "attacker@example.test", cookie: "CF_Authorization=forged", "oai-email": "attacker@example.test" },
+      redirect: "manual"
+    });
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
   });
 
   it("derives the RAG scope from the session: browser-supplied identity is rejected and retrieval stays inside the book", async () => {
@@ -300,6 +294,4 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
   });
 });
 
-// Reference kept so unused-import lint stays quiet if fixtures move later.
-void FAKE_GOOGLE_ENDPOINTS;
 void rmSync;
