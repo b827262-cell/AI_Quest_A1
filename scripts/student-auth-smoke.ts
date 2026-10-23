@@ -101,6 +101,12 @@ async function main(): Promise<void> {
     report.expect(oldRoute.status === 404, "Google login route disabled");
     const invalid = await browser.request("/api/student/auth/access/login", { headers: { "Cf-Access-Jwt-Assertion": certs.assertion({ aud: "wrong" }) } });
     report.expect(invalid.status === 401, "wrong audience rejected");
+    certs.setFailure(true);
+    const unavailable = await browser.request("/api/student/auth/access/login", {
+      headers: { "Cf-Access-Jwt-Assertion": certs.assertion({}, { kid: "unknown-during-jwks-failure" }) }
+    });
+    report.expect(unavailable.status === 503 && JSON.parse(unavailable.bodyText).error === "ACCESS_UNAVAILABLE", "JWKS refresh failure remains 503");
+    certs.setFailure(false);
 
     // 6. Logout revokes the session; the old cookie cannot be replayed.
     const staleCookie = browser.cookie;
