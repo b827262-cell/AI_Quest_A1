@@ -13,9 +13,11 @@ export interface AccessConfig {
 
 const CLOCK_SKEW_SECONDS = 60;
 const CERTS_TTL_MS = 5 * 60 * 1000;
+const UNKNOWN_KID_REFRESH_COOLDOWN_MS = 30 * 1000;
 type AccessJwk = JsonWebKey & { kid: string };
 const certsCache = new Map<string, { expires: number; keys: AccessJwk[] }>();
 const pendingCerts = new Map<string, Promise<AccessJwk[]>>();
+const lastUnknownKidRefresh = new Map<string, number>();
 
 function accessIssuer(domain: string): string {
   return `https://${domain}.cloudflareaccess.com`;
@@ -38,11 +40,17 @@ function decodePart(value: string): Record<string, unknown> {
   throw new AccessInvalidTokenError("invalid JWT JSON");
 }
 
-async function certificates(url: string): Promise<AccessJwk[]> {
+async function certificates(url: string, force = false): Promise<AccessJwk[]> {
   const cached = certsCache.get(url);
-  if (cached && cached.expires > Date.now()) return cached.keys;
+  if (!force && cached && cached.expires > Date.now()) return cached.keys;
   const existing = pendingCerts.get(url);
   if (existing) return existing;
+  if (force) {
+    const now = Date.now();
+    const last = lastUnknownKidRefresh.get(url);
+    if (last !== undefined && now - last < UNKNOWN_KID_REFRESH_COOLDOWN_MS && cached && cached.expires > now) return cached.keys;
+    lastUnknownKidRefresh.set(url, now);
+  }
   const request = (async () => {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -54,8 +62,9 @@ async function certificates(url: string): Promise<AccessJwk[]> {
       certsCache.set(url, { expires: Date.now() + CERTS_TTL_MS, keys });
       return keys;
     } catch {
-      // Never accept an expired cache entry after a refresh failure.
-      certsCache.delete(url);
+      // A failed forced refresh is unavailable for this request. Keep only a still-valid
+      // cache entry so unknown kids cannot trigger repeated fetches during cooldown.
+      if (!force || !cached || cached.expires <= Date.now()) certsCache.delete(url);
       throw new AccessUnavailableError("Cloudflare Access certificates unavailable");
     } finally {
       pendingCerts.delete(url);
@@ -77,8 +86,13 @@ export async function verifyAccessAssertion(token: string | undefined, config: A
   if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid) throw new AccessInvalidTokenError("invalid algorithm or kid");
   const issuer = accessIssuer(config.accessTeamDomain);
   const url = config.accessCertsUrl ?? `${issuer}/cdn-cgi/access/certs`;
+  const hadFreshCache = (certsCache.get(url)?.expires ?? 0) > Date.now();
   const keys = await certificates(url);
-  const key = keys.find((candidate) => candidate.kid === header.kid);
+  let key = keys.find((candidate) => candidate.kid === header.kid);
+  if (!key && hadFreshCache) {
+    const refreshed = await certificates(url, true);
+    key = refreshed.find((candidate) => candidate.kid === header.kid);
+  }
   if (!key) throw new AccessInvalidTokenError("unknown kid");
   let signatureValid = false;
   try {
