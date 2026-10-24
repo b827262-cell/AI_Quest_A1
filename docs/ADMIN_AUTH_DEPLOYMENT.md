@@ -48,10 +48,11 @@ requests also require the matching CSRF header, so a cross-origin page cannot
 reuse the cookie for state changes.
 
 The central API also hosts the Student Auth boundary used by the Student SPA.
-Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`,
-`STUDENT_SESSION_SECRET`, and `STUDENT_ALLOWED_ORIGINS` in the same protected
-server environment. The Google secret and session secret never enter `VITE_*`,
-the browser bundle, logs, or API responses.
+Configure `STUDENT_ACCESS_TEAM_DOMAIN`, `STUDENT_ACCESS_AUD`,
+`STUDENT_SESSION_SECRET`, and `STUDENT_ALLOWED_ORIGINS` in the protected
+server environment. Cloudflare Access must enforce email one-time PIN and
+forward its signed assertion to the Student API. The session secret never
+enters `VITE_*`, the browser bundle, logs, or API responses.
 
 ## OIDC/SSO boundary
 

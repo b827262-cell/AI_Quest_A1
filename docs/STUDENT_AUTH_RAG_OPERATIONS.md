@@ -1,49 +1,43 @@
 # Student Auth + RAG Operations Guide (Phase 6)
 
 Scope: the student app (`apps/AI-Stu-R1`), its standalone server
-(`server/stu-api.ts`), the Google OAuth student session, and the scoped
-Cerebras RAG question endpoint. Phase 6 integration branch:
-`agent/student-rag-release-gate`.
+(`server/stu-api.ts`), Cloudflare Access student sessions, and the scoped
+Cerebras RAG question endpoint.
 
-## 1. Google OAuth local setup
+## 1. Cloudflare Access setup
 
-Student login is **Google OAuth only**. There is no name/password login; the
-server-side session is the single source of truth for identity.
+The student login button opens `GET /api/student/auth/access/login?returnTo=<path>`.
+Cloudflare Access must protect this path with **email one-time PIN only** and
+forward `Cf-Access-Jwt-Assertion` to the Student API. Set these server-only
+values from the Access application:
 
-1. Create OAuth credentials in Google Cloud Console (Web application).
-2. Add the authorized redirect URI:
-   `http://127.0.0.1:<port>/api/student/auth/google/callback`
-   (or the HTTPS origin in staging/production).
-3. Export the environment for the student server:
+| Variable | Purpose |
+| --- | --- |
+| `STUDENT_ACCESS_TEAM_DOMAIN` | Access team subdomain (or full `*.cloudflareaccess.com` hostname) |
+| `STUDENT_ACCESS_AUD` | Access application audience tag |
 
-   | Variable | Purpose |
-   | --- | --- |
-   | `STUDENT_GOOGLE_AUTH_ENABLED` | `true` to enable the OAuth routes |
-   | `GOOGLE_CLIENT_ID` | OAuth client id |
-   | `GOOGLE_CLIENT_SECRET` | OAuth client secret (server-only) |
-   | `GOOGLE_REDIRECT_URI` | must match the registered redirect URI |
-   | `GOOGLE_AUTHORIZATION_ENDPOINT` | defaults to Google; override for fixtures |
-   | `GOOGLE_TOKEN_ENDPOINT` | defaults to Google; override for fixtures |
-   | `GOOGLE_USERINFO_ENDPOINT` | defaults to Google; override for fixtures |
+The API verifies the RS256 signature using Cloudflare's certs, exact `kid`,
+issuer, audience, and time claims. Certs are cached for five minutes. Missing
+or invalid assertions return 401; missing configuration or unavailable certs
+return 503. `Cf-Access-Authenticated-User-Email`, `CF_Authorization`, and
+`oai-*` are never identity sources. The old Google start and callback routes
+return 404. Existing Google users are linked by a case-insensitive,
+trimmed verified email only when exactly one row matches. Duplicate matches
+return 403 `ACCESS_EMAIL_CONFLICT`; an event containing only an email digest
+and match count is logged for manual resolution. No accounts are merged.
 
-4. The login flow is `GET /api/student/auth/google/start?returnTo=<path>` →
-   Google consent → `GET /api/student/auth/google/callback` → session cookie →
-   redirect to profile completion or the requested page. PKCE is enforced
-   (`code_challenge` on start, verifier kept server-side encrypted) and the
-   OAuth `state` is one-time-use.
-
-Deterministic smoke fixture: the smoke gates run a fake provider whose
-`/authorize` immediately redirects back with a fixed code; see
-`scripts/student-smoke-harness.ts`. Never point the fixture at production.
+Local tests and smoke use generated RSA keys and a loopback JWKS fixture.
+`STUDENT_ACCESS_CERTS_URL` is accepted only outside production for this
+fixture; production always fetches the team's Cloudflare certs endpoint.
 
 ## 2. Student session configuration
 
 | Variable | Purpose |
 | --- | --- |
-| `STUDENT_SESSION_SECRET` | ≥32-char secret used to sign/hash session tokens |
+| `STUDENT_SESSION_SECRET` | ≥32-char server secret retained for session configuration |
 | `STUDENT_ALLOWED_ORIGINS` | comma-separated origins allowed for mutating calls |
 | `STUDENT_SESSION_TTL_MS` | session lifetime in milliseconds |
-| `STUDENT_AUTH_DB_PATH` | SQLite file holding `student_sessions`, OAuth states, profiles |
+| `STUDENT_AUTH_DB_PATH` | SQLite file holding `student_sessions` and profiles |
 
 Session cookie: `ai_student_session`, `HttpOnly`, `Secure`, `SameSite=Strict`.
 Browsers can never read or forge it; the UI derives identity exclusively from
@@ -53,7 +47,7 @@ old cookie fails. Expired sessions return `401` from every
 
 ## 3. Profile completion flow
 
-After the first successful OAuth login the session exists but the profile is
+After the first successful Access login the session exists but the profile is
 incomplete:
 
 - `GET /api/student/auth/me` → `authenticated: true`, `profileCompleted: false`
@@ -208,8 +202,8 @@ validator-approved entries).
 | --- | --- |
 | `401` on every `/api/student/*` call | session expired/revoked — re-login; check `STUDENT_SESSION_TTL_MS` |
 | `403` after login | profile incomplete — finish `/profile-completion` |
-| callback returns `OAUTH_STATE_INVALID` | state replayed or expired — start a fresh login; do not refresh the callback URL |
-| `redirect_uri_mismatch` at Google | `GOOGLE_REDIRECT_URI` ≠ registered URI |
+| Access login returns `ACCESS_ASSERTION_INVALID` | Access assertion is missing, expired, or does not match issuer/audience; check the Access application and proxy header forwarding |
+| Access login returns `ACCESS_UNAVAILABLE` | team domain/audience is missing or certs cannot be fetched |
 | RAG `503 provider-unavailable` | Cerebras key/base URL wrong or rate-limited; switch `STUDENT_RAG_PROVIDER=fake` to isolate |
 | RAG abstains for a real question | book not published / content not synced / query outside book scope |
 | browser console 404 `/api/appearance-settings` | student server older than Phase 6 — update `stu-api` |
@@ -240,7 +234,7 @@ validator-approved entries).
 
 | Item | Status |
 | --- | --- |
-| Single real student login (OAuth + PKCE + one-time state) | VERIFIED (unit + auth smoke) |
+| Student Access assertion login and server session | VERIFIED (unit + auth smoke) |
 | Dashboard/books/book-detail server session gating | VERIFIED (negative integration tests + browser smoke) |
 | Forged `localStorage` identity rejected | VERIFIED (UI router integration test) |
 | Session expiry / logout revocation replay fails | VERIFIED (auth smoke + browser smoke) |
@@ -263,5 +257,5 @@ validator-approved entries).
 | Prompt injection block | VERIFIED (rag smoke) |
 | Cerebras baseUrl SSRF guard | VERIFIED (adapter unit tests) |
 | Desktop/Tablet/Mobile browser smoke, no overflow/console errors | VERIFIED (dashboard smoke, 3 viewports) |
-| Live Google OAuth with production credentials | NOT ATTEMPTED (no approved credentials) |
+| Live Cloudflare Access email one-time PIN | NOT ATTEMPTED (Access configuration was out of scope) |
 | Live Cerebras generation | NOT ATTEMPTED (no approved credentials) |

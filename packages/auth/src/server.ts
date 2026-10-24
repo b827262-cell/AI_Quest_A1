@@ -13,6 +13,7 @@ import type {
   StudentUser
 } from "./shared";
 import { safeStudentReturnTo } from "./shared";
+import { AccessEmailConflictError, verifyAccessAssertion, type AccessConfig } from "./access";
 
 export const STUDENT_SESSION_COOKIE = "ai_student_session";
 export const DEFAULT_STUDENT_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
@@ -21,7 +22,7 @@ export const DEFAULT_GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.co
 export const DEFAULT_GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 export const DEFAULT_GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo";
 
-export interface StudentAuthConfig {
+export interface StudentAuthConfig extends AccessConfig {
   production: boolean;
   enabled: boolean;
   googleClientId: string | undefined;
@@ -57,6 +58,7 @@ export interface StudentAuthSessionRecord {
 export interface StudentAuthRepositories {
   users: {
     findByGoogleSubject(subject: string): StudentAuthUserRecord | undefined;
+    findByEmail(email: string): StudentAuthUserRecord[];
     create(input: {
       googleSubject: string;
       email: string;
@@ -119,6 +121,9 @@ export function resolveStudentAuthConfig(env: NodeJS.ProcessEnv = process.env): 
   );
   return {
     production: env.NODE_ENV === "production",
+    accessTeamDomain: env.STUDENT_ACCESS_TEAM_DOMAIN?.trim().toLowerCase().replace(/\.cloudflareaccess\.com$/i, "") || undefined,
+    accessAud: env.STUDENT_ACCESS_AUD?.trim() || undefined,
+    accessCertsUrl: env.NODE_ENV === "production" ? undefined : env.STUDENT_ACCESS_CERTS_URL?.trim() || undefined,
     enabled: env.STUDENT_GOOGLE_AUTH_ENABLED !== "false",
     googleClientId: env.GOOGLE_CLIENT_ID?.trim() || undefined,
     googleClientSecret: env.GOOGLE_CLIENT_SECRET || undefined,
@@ -143,15 +148,11 @@ export function resolveStudentAuthConfig(env: NodeJS.ProcessEnv = process.env): 
 
 export function assertStudentAuthConfig(config: StudentAuthConfig): void {
   if (!config.production) return;
-  if (!config.enabled) throw new Error("production Student auth cannot disable Google auth");
-  if (!config.googleClientId || !config.googleClientSecret || !config.googleRedirectUri) {
-    throw new Error("production Student auth requires Google client credentials and redirect URI");
+  if (!config.accessTeamDomain || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/.test(config.accessTeamDomain) || !config.accessAud || config.accessCertsUrl) {
+    throw new Error("production Student auth requires valid Cloudflare Access team domain and AUD");
   }
   if (!config.sessionSecret || config.sessionSecret.length < 32) {
     throw new Error("production Student auth requires a 32-character session secret");
-  }
-  for (const endpoint of [config.googleAuthorizationEndpoint, config.googleTokenEndpoint, config.googleUserinfoEndpoint]) {
-    if (!endpoint.startsWith("https://")) throw new Error("production Google auth endpoints must use HTTPS");
   }
 }
 
@@ -254,7 +255,7 @@ async function exchangeGoogleCode(config: StudentAuthConfig, code: string, verif
 function toStudentUser(row: StudentAuthUserRecord): StudentUser {
   return {
     id: row.id,
-    email: row.email,
+    email: row.email.trim().toLowerCase(),
     displayName: row.displayName,
     avatarUrl: row.avatarUrl,
     profileCompleted: row.profileCompleted
@@ -272,6 +273,51 @@ export class StudentAuthService {
     private readonly now: () => number = Date.now,
     private readonly exchangeIdentity: (code: string, verifier: string) => Promise<GoogleIdentity> = (code, verifier) => exchangeGoogleCode(config, code, verifier)
   ) {}
+
+  async completeAccessLogin(input: {
+    assertion: string | undefined;
+    returnTo?: string;
+    ipAddress?: string | null;
+    userAgent?: string | null;
+  }): Promise<{ sessionToken: string; session: StudentSession; user: StudentUser; profile: StudentProfile; returnTo: string }> {
+    const email = await verifyAccessAssertion(input.assertion, this.config, this.now());
+    const uniqueMatch = (): StudentAuthUserRecord | undefined => {
+      const matches = this.repositories.users.findByEmail(email);
+      if (matches.length > 1) {
+        // A stable digest lets operators correlate incidents without logging
+        // the address, assertion, or any other credential.
+        console.warn("STUDENT_ACCESS_EMAIL_CONFLICT", {
+          emailSha256: digestStudentSecret(email),
+          matchCount: matches.length
+        });
+        throw new AccessEmailConflictError("multiple student users have this email");
+      }
+      return matches[0];
+    };
+    let user = uniqueMatch();
+    if (!user) {
+      const accessSubject = `cf-access:${email}`;
+      try {
+        user = this.repositories.users.create({ googleSubject: accessSubject, email, displayName: email });
+      } catch (error) {
+        // Concurrent creators share the schema's unique google_subject. Only
+        // reuse the winner if it is now the sole normalized-email match.
+        const winner = this.repositories.users.findByGoogleSubject(accessSubject);
+        user = uniqueMatch();
+        if (!winner || !user || user.id !== winner.id) throw error;
+      }
+    }
+    this.repositories.sessions.purgeExpired(new Date(this.now()).toISOString());
+    const { sessionToken } = createStudentSessionSecrets();
+    const session = this.repositories.sessions.create({
+      tokenDigest: digestStudentSecret(sessionToken),
+      userId: user.id,
+      expiresAt: new Date(this.now() + this.config.sessionTtlMs).toISOString(),
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent
+    });
+    return { sessionToken, session, user: toStudentUser(user), profile: toStudentProfile(user), returnTo: safeStudentReturnTo(input.returnTo) };
+  }
 
   beginGoogleLogin(returnTo?: string): { authorizationUrl: string } {
     if (!this.config.enabled || !this.config.googleClientId || !this.config.googleRedirectUri || !this.config.sessionSecret) {
