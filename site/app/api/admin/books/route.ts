@@ -45,7 +45,7 @@ export async function GET(request: Request) {
   if (auth.isMalformed) {
     return Response.json(
       { error: "malformed_auth", message: auth.malformedReason },
-      { status: 400, headers: cors.corsHeaders }
+      { status: 401, headers: cors.corsHeaders }
     );
   }
 
@@ -115,7 +115,7 @@ export async function DELETE(request: Request) {
   if (auth.isMalformed) {
     return Response.json(
       { error: "malformed_auth", message: auth.malformedReason },
-      { status: 400, headers: cors.corsHeaders }
+      { status: 401, headers: cors.corsHeaders }
     );
   }
 
