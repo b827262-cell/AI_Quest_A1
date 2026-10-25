@@ -131,9 +131,7 @@ export function resolveStudentAuthConfig(env: NodeJS.ProcessEnv = process.env): 
       ? Math.floor(configuredStateTtl)
       : DEFAULT_STUDENT_OAUTH_STATE_TTL_MS,
     sessionCookie: env.STUDENT_SESSION_COOKIE?.trim() || STUDENT_SESSION_COOKIE,
-    // Secure is deliberately not configurable off. Local HTTP tests can still
-    // inspect the Set-Cookie boundary; real browser deployments must use HTTPS.
-    secureCookies: true,
+    secureCookies: env.STUDENT_SESSION_SECURE !== "false",
     allowedOrigins,
     googleAuthorizationEndpoint: env.GOOGLE_AUTHORIZATION_ENDPOINT?.trim() || DEFAULT_GOOGLE_AUTHORIZATION_ENDPOINT,
     googleTokenEndpoint: env.GOOGLE_TOKEN_ENDPOINT?.trim() || DEFAULT_GOOGLE_TOKEN_ENDPOINT,
@@ -143,6 +141,9 @@ export function resolveStudentAuthConfig(env: NodeJS.ProcessEnv = process.env): 
 
 export function assertStudentAuthConfig(config: StudentAuthConfig): void {
   if (!config.production) return;
+  if (!config.secureCookies) {
+    throw new Error("production Student auth requires STUDENT_SESSION_SECURE=true");
+  }
   if (!config.enabled) throw new Error("production Student auth cannot disable Google auth");
   if (!config.googleClientId || !config.googleClientSecret || !config.googleRedirectUri) {
     throw new Error("production Student auth requires Google client credentials and redirect URI");

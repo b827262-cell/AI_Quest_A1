@@ -88,6 +88,34 @@ async function dispatch(router: unknown, req: Request): Promise<FakeResponse> {
 }
 
 describe("Student Auth HTTP integration", () => {
+  it("omits Secure from the session cookie when explicitly disabled outside production", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ai-quest-student-http-"));
+    temporaryDirectories.push(directory);
+    const config = resolveStudentAuthConfig({
+      NODE_ENV: "test",
+      STUDENT_SESSION_SECURE: "false",
+      GOOGLE_CLIENT_ID: "client-id",
+      GOOGLE_CLIENT_SECRET: "provider-secret",
+      GOOGLE_REDIRECT_URI: "http://localhost/callback",
+      STUDENT_SESSION_SECRET: "a-test-session-secret-that-is-longer-than-32-chars"
+    });
+    const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config);
+    const router = createStudentAuthRouter(runtime.auth, config);
+    globalThis.fetch = (async (input) => {
+      if (String(input) === config.googleTokenEndpoint) {
+        return new Response(JSON.stringify({ access_token: "test-token" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ sub: "test-subject", email: "student@example.test", email_verified: true, name: "Student" }), { status: 200 });
+    }) as typeof fetch;
+
+    const start = await dispatch(router, requestFor("/google/start", "GET"));
+    const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+    const callback = await dispatch(router, requestFor("/google/callback", "GET", { state, code: "test-code" }));
+    expect(callback.statusCode).toBe(302);
+    expect(String(callback.headers["set-cookie"])).toMatch(/HttpOnly/);
+    expect(String(callback.headers["set-cookie"])).not.toMatch(/(?:^|;\s*)Secure(?:;|$)/);
+  });
+
   it("covers Google callback, state replay, profile gate, cookie boundary and logout revocation", async () => {
     const directory = mkdtempSync(join(tmpdir(), "ai-quest-student-http-"));
     temporaryDirectories.push(directory);

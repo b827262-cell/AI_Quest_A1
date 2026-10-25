@@ -4,6 +4,8 @@ import {
   buildGoogleAuthorizationUrl,
   createPkceChallenge,
   digestStudentSecret,
+  assertStudentAuthConfig,
+  resolveStudentAuthConfig,
   studentSessionCookieOptions,
   type StudentAuthConfig,
   type StudentAuthRepositories,
@@ -122,6 +124,17 @@ function buildFakeAuth(now: () => number, exchangeIdentity: (code: string, verif
 }
 
 describe("Student Auth Foundation", () => {
+  it("rejects insecure session cookies in production", () => {
+    const config = resolveStudentAuthConfig({ NODE_ENV: "production", STUDENT_SESSION_SECURE: "false" });
+    expect(config.secureCookies).toBe(false);
+    expect(() => assertStudentAuthConfig(config)).toThrow("production Student auth requires STUDENT_SESSION_SECURE=true");
+  });
+
+  it("keeps Secure enabled by default", () => {
+    const config = resolveStudentAuthConfig({ NODE_ENV: "development" });
+    expect(studentSessionCookieOptions(config).secure).toBe(true);
+  });
+
   it("creates one user for repeated Google logins and keeps profile state server-side", async () => {
     let clock = Date.parse("2026-08-05T00:00:00.000Z");
     const identity = { subject: "google-subject-1", email: "student@example.test", displayName: "學員一號", avatarUrl: null };
