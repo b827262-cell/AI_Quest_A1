@@ -58,10 +58,14 @@ function isString(value: unknown): value is string {
 // Reject C0/C1 control characters (U+0000-U+001F, U+007F-U+009F) plus the
 // U+2028/U+2029 line separators. This covers "\r", VT, FF, NEL (U+0085), and
 // "\n" itself.
-const FORBIDDEN_CHAR_PATTERN = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/;
-
 function hasForbiddenChar(value: string): boolean {
-  return FORBIDDEN_CHAR_PATTERN.test(value);
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Reject unpaired UTF-16 surrogates. Two distinct strings can otherwise

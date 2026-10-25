@@ -94,6 +94,20 @@ test("control characters and line separators are rejected in every field", async
   }
 });
 
+test("control ranges reject their boundaries and allow adjacent characters", async () => {
+  const rejected = [0x0000, 0x001f, 0x007f, 0x009f, 0x2028, 0x2029];
+  for (const code of rejected) {
+    const userId = `user-${String.fromCharCode(code)}`;
+    assert.deepEqual(await signRelay({ ...vector, userId }, "test-secret"), { ok: false }, `U+${code.toString(16)}`);
+  }
+
+  const allowed = [0x0020, 0x007e, 0x00a0, 0x2027, 0x202a];
+  for (const code of allowed) {
+    const userId = `user-${String.fromCharCode(code)}`;
+    assert.equal(typeof await buildCanonicalString({ ...vector, userId }), "string", `U+${code.toString(16)}`);
+  }
+});
+
 test("unpaired surrogates are rejected so distinct strings cannot share a signature", async () => {
   const loneSurrogates = ["a\ud800", "a\ud801", "a\ud83d", "a\udc00", "a\udfff", "\ud800"];
   for (const value of loneSurrogates) {
