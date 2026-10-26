@@ -65,3 +65,21 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   .v2-diagnostics{padding:9px 10px}
   .v2-diagnostics summary{min-height:32px}
 }
+
+/* Admin identity gate and shell. These selectors stay inside the admin pages. */
+.admin-gate{min-height:100vh;display:grid;place-items:center;padding:24px;background:#f3f6fb}
+.admin-gate-card{width:min(100%,480px);padding:32px;border:1px solid #dce4f0;border-radius:16px;background:#fff;box-shadow:0 8px 22px #3654770d}
+.admin-gate-card h1{margin:0;font-size:25px}.admin-gate-card p{color:#50627d;line-height:1.7}
+.admin-gate-card button,.admin-gate-card a{display:inline-block;margin:8px 12px 0 0;padding:9px 14px;border:1px solid #bbcee9;border-radius:9px;color:#15529c;background:#eef5ff;font-weight:700;cursor:pointer}
+.admin-shell-page .admin-topbar{gap:20px}
+.admin-shell-brand{display:flex;align-items:center;gap:14px;min-width:0}.admin-shell-brand strong{font-size:16px}
+.admin-shell-page .admin-brand-mark{position:static;flex:none;width:48px;height:48px;border-radius:10px}
+.admin-shell-page .admin-account{min-width:0}.admin-shell-page .admin-account span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-shell-page .admin-sidebar nav a{display:block;padding:8px 12px;border-radius:10px;font-weight:700}
+.admin-shell-page .admin-sidebar nav .admin-shell-nav-active{color:#fff;background:#086bd5}
+.admin-shell-nav-group h2{margin:24px 10px 10px}.admin-shell-nav-group ul{display:grid;gap:4px;margin:0;padding:0;list-style:none}
+.admin-shell-nav-group li{display:flex;justify-content:space-between;gap:8px;padding:8px 12px;color:#526787;font-size:14px}
+.admin-shell-nav-group small{flex:none;color:#6d7f9a;font-size:11px}
+.admin-shell-empty{margin-top:20px}.admin-shell-empty p{line-height:1.7}
+@media(max-width:900px){.admin-shell-page .admin-sidebar{display:block;max-height:170px;overflow-y:auto}.admin-shell-nav-group h2{display:block}}
+@media(max-width:520px){.admin-shell-brand strong{font-size:13px}.admin-shell-page .admin-account{gap:8px}.admin-shell-page .admin-account a{display:none}.admin-shell-page .admin-account b{flex:none}.admin-gate-card{padding:24px}}
