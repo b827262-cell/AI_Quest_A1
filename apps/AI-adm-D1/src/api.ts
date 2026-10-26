@@ -901,6 +901,9 @@ export interface AdminDashboardStats {
   totalConversations: number;
   totalMessages: number;
   dailyConversations: DailyConversationPoint[];
+  source: "real" | "empty" | "unavailable";
+  asOf: string;
+  isSynthetic: false;
 }
 
 export type RiskLevel = "safe" | "risk" | "dangerous";

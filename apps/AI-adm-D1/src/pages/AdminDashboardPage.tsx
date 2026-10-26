@@ -193,7 +193,7 @@ export function AdminDashboardPage() {
   }
 
   const statCards = [
-    { title: "總用戶數", value: stats?.totalUsers ?? "—", meta: "前台累計使用者編號" },
+    { title: "總用戶數", value: stats?.totalUsers ?? "—", meta: "已建立的學生帳號" },
     { title: "活躍用戶", value: stats?.activeUsers ?? "—", meta: "最近 15 分鐘活動" },
     { title: "總對話數", value: stats?.totalConversations ?? "—", meta: "累計對話 session" },
     { title: "總訊息數", value: stats?.totalMessages ?? "—", meta: "提問 + 回覆累計" }
