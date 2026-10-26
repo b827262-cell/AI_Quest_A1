@@ -251,21 +251,51 @@ test("GET /api/admin/auth/me enforces controlled 401 and 403 access control", as
   assert.equal(dataAdmin.role, "admin");
 });
 
-test("GET /api/admin/overview returns metrics for admin and blocks unauthorized requests", async () => {
+test("GET /api/admin/overview keeps auth and reports unavailable without a DB", async () => {
   // Unauthorized -> 401
   const resUnauth = await requestWorker("/api/admin/overview");
   assert.equal(resUnauth.status, 401);
 
-  // Admin -> 200 OK
+  // Authorized requests fail closed when the DB binding is absent.
   const resAdmin = await requestWorker("/api/admin/overview", {
     headers: {
       "x-admin-key": "synthetic-admin-secret",
     },
   });
-  assert.equal(resAdmin.status, 200);
+  assert.equal(resAdmin.status, 503);
   const data = await resAdmin.json();
-  assert.equal(data.isSynthetic, true);
-  assert.ok(data.totals.totalUsers > 0);
-  assert.ok(Array.isArray(data.topSubjects));
-  assert.ok(Array.isArray(data.recentKeywords));
+  assert.deepEqual(data, {
+    totalUsers: 0, activeUsers: 0, totalConversations: 0,
+    totalMessages: 0, dailyConversations: [], source: "unavailable",
+    asOf: data.asOf, isSynthetic: false,
+  });
+  assert.ok(Number.isFinite(Date.parse(data.asOf)));
+});
+
+test("GET /api/admin/overview reports empty aggregates before a real source is connected", async () => {
+  const response = await requestWorker("/api/admin/overview", {
+    headers: { "x-admin-key": "synthetic-admin-secret" },
+    db: { prepare: () => ({ bind: () => ({ run: async () => ({ success: true }) }) }) },
+  });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.deepEqual(data, {
+    totalUsers: 0, activeUsers: 0, totalConversations: 0,
+    totalMessages: 0, dailyConversations: [], source: "empty",
+    asOf: data.asOf, isSynthetic: false,
+  });
+  assert.ok(Number.isFinite(Date.parse(data.asOf)));
+});
+
+test("GET /api/admin/overview returns 503 when a bound DB cannot answer", async () => {
+  const response = await requestWorker("/api/admin/overview", {
+    headers: { "x-admin-key": "synthetic-admin-secret" },
+    db: { prepare: () => { throw new Error("DB offline"); } },
+  });
+  assert.equal(response.status, 503);
+  const data = await response.json();
+  assert.equal(data.source, "unavailable");
+  assert.equal(data.isSynthetic, false);
+  assert.equal(data.totalUsers, 0);
+  assert.equal(JSON.stringify(data).includes("DB offline"), false);
 });
