@@ -40,8 +40,6 @@ import { makeAnalyticsService, todayTaipei } from "./ai/analytics-service";
 import {
   adminCredentialsMatch,
   clearAdminSessionCookies,
-  createAdminAuthMiddleware,
-  createAdminCsrfMiddleware,
   createAdminLoginThrottle,
   createAdminSessionSecrets,
   digestAdminSecret,
@@ -49,6 +47,7 @@ import {
   setAdminSessionCookies
 } from "./ai/admin-auth";
 import { createAdminOriginMiddleware } from "./ai/admin-origin";
+import { adminActorId, createAdminRouteBoundary } from "./admin-route-boundary";
 import { createExamSnapshotRouter } from "./exam-snapshot/admin-router";
 import { EvaluationServiceError, makeEvaluationService } from "./ai/evaluation-service";
 import { LiveEvaluationServiceError, makeLiveEvaluationService } from "./ai/live-evaluation-service";
@@ -396,8 +395,9 @@ app.use("/api/uploads/appearance", (req, res, next) => {
 // authentication remains available to CLI/internal automation through the
 // same middleware, but the SPA never receives or stores the token.
 const adminAuthConfig = resolveAdminAuthConfig(env);
-const adminAuthMiddleware = createAdminAuthMiddleware(env, repos.adminSessions);
-const adminCsrfMiddleware = createAdminCsrfMiddleware(env, repos.adminSessions);
+const adminBoundary = createAdminRouteBoundary(env, repos);
+const adminAuthMiddleware = adminBoundary.authenticate;
+const adminCsrfMiddleware = adminBoundary.csrf;
 const adminLoginThrottle = createAdminLoginThrottle();
 
 app.post("/api/admin/auth/login", async (req, res) => {
@@ -457,22 +457,7 @@ app.post("/api/admin/auth/logout", adminAuthMiddleware, adminCsrfMiddleware, (re
 
 // Security boundary: every current and future admin route is protected here.
 // Public and student routes are mounted outside this prefix and are unaffected.
-app.use("/api/admin", adminAuthMiddleware);
-app.use("/api/admin", adminCsrfMiddleware);
-app.use("/api/admin", (req, res, next) => {
-  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method.toUpperCase())) {
-    return next();
-  }
-  res.once("finish", () => {
-    repos.aiProviders.audit("admin.request.mutation", "admin_route", req.path.slice(0, 200), {
-      actorId: adminActorId(req),
-      method: req.method,
-      path: req.path.slice(0, 200),
-      statusCode: res.statusCode
-    });
-  });
-  return next();
-});
+adminBoundary.protectRoutes(app);
 
 function fail(res: Response, status: number, message: string) {
   res.status(status).json({ error: message });
@@ -1089,13 +1074,6 @@ function requireAdminAccess(req: Request, res: Response): boolean {
     return false;
   }
   return true;
-}
-
-/** Stable non-secret actor identifier for audit/preflight binding. */
-function adminActorId(req: Request): string {
-  if (req.adminAuth?.kind === "session") return `admin:session:${req.adminAuth.id}`;
-  if (req.adminAuth?.kind === "token") return "admin:token";
-  return "admin:unknown";
 }
 
 function guestDayKey(): string {

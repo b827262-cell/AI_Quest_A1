@@ -8,6 +8,7 @@ import { createAdminApp } from "./app";
 import { createAdminTestDependencies } from "./dependencies";
 import { createDbHandle, type DbHandle } from "@ai-smartbook/db";
 import { createAdminSessionSecrets, digestAdminSecret } from "./ai/admin-auth";
+import { createStudentSessionSecrets, digestStudentSecret } from "@ai-smartbook/auth/server";
 
 const temporaryDirectories: string[] = [];
 const originalEnv = { ...process.env };
@@ -83,6 +84,38 @@ async function login(app: ReturnType<typeof createAdminApp>) {
 }
 
 describe("Admin API HTTP authentication and quota behavior", () => {
+  it("keeps anonymous, student-only and administrator overview access distinct", async () => {
+    const { app, dependencies, token } = buildTestApp();
+    const student = dependencies.repos.studentUsers.create({
+      googleSubject: "student-only-subject", email: "student-only@example.test", displayName: "Student Only"
+    });
+    const { sessionToken } = createStudentSessionSecrets();
+    const studentSession = dependencies.repos.studentSessions.create({
+      tokenDigest: digestStudentSecret(sessionToken),
+      userId: student.id,
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const studentCookie = `ai_student_session=${sessionToken}`;
+    const anonymous = await request(app).get("/api/admin/dashboard/stats");
+    const studentOnly = await request(app).get("/api/admin/dashboard/stats").set("Cookie", studentCookie);
+    const wrongOrigin = await request(app).get("/api/admin/dashboard/stats")
+      .set("x-admin-token", token).set("Origin", "https://not-admin.example.test");
+    const administrator = await request(app).get("/api/admin/dashboard/stats").set("x-admin-token", token);
+
+    expect(studentSession.userId).toBe(student.id);
+    expect(anonymous.status).toBe(401);
+    expect(studentOnly.status).toBe(401);
+    expect(wrongOrigin.status).toBe(403);
+    expect(administrator.status).toBe(200);
+    expect(administrator.body).toMatchObject({
+      totalUsers: 1, activeUsers: 0, totalConversations: 0, totalMessages: 0,
+      dailyConversations: [], source: "real", isSynthetic: false
+    });
+    for (const response of [anonymous, studentOnly, wrongOrigin, administrator]) {
+      expect(JSON.stringify(response.body)).not.toMatch(/student-only@example\.test|student-only-subject|session_/);
+    }
+  });
+
   it("returns student identity count and aggregate-only overview metadata", async () => {
     const { app, dependencies, token } = buildTestApp();
     expect((await request(app).get("/api/admin/dashboard/stats")).status).toBe(401);
