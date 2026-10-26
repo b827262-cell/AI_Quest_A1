@@ -240,9 +240,9 @@ describe("canonical CSRF cookie contract", () => {
   });
 
   it("CSRF-CONTRACT-6: the SPA reads the shared canonical contract", () => {
-    const apiSource = readFileSync(join(process.cwd(), "src/api.ts"), "utf8");
-    expect(apiSource).toContain('import { ADMIN_CSRF_COOKIE } from "./admin-auth-contract"');
-    expect(apiSource).toContain("`${ADMIN_CSRF_COOKIE}=`");
-    expect(apiSource).not.toContain('const prefix = "ai_admin_csrf="');
+    const transportSource = readFileSync(join(process.cwd(), "src/api-transport.ts"), "utf8");
+    expect(transportSource).toContain('import { ADMIN_CSRF_COOKIE } from "./admin-auth-contract"');
+    expect(transportSource).toContain("`${ADMIN_CSRF_COOKIE}=`");
+    expect(transportSource).not.toContain('const prefix = "ai_admin_csrf="');
   });
 });
