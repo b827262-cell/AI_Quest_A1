@@ -11,7 +11,9 @@ describe("Student Auth repositories", () => {
     try {
       runMigrations(handle.sqlite);
       const repos = createRepositories(handle.db);
+      expect(repos.studentUsers.count()).toBe(0);
       const user = repos.studentUsers.create({ googleSubject: "google-subject", email: "s@example.test", displayName: "Student" });
+      expect(repos.studentUsers.count()).toBe(1);
       const session = repos.studentSessions.create({ tokenDigest: "digest-only", userId: user.id, expiresAt: "2999-01-01T00:00:00.000Z" });
       expect(repos.studentSessions.findActiveByTokenDigest("digest-only")?.userId).toBe(user.id);
       expect(handle.sqlite.prepare("SELECT token_digest FROM student_sessions WHERE id = ?").get(session.id)).toEqual({ token_digest: "digest-only" });

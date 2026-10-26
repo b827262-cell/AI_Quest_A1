@@ -1,10 +1,14 @@
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import type { Db } from "../client";
 import { studentUsers } from "../schema";
 import { newId, nowIso } from "./util";
 
 export function makeStudentUserRepo(db: Db) {
   return {
+    /** Aggregate only; no student identity leaves the repository. */
+    count(): number {
+      return db.select({ value: count() }).from(studentUsers).get()?.value ?? 0;
+    },
     findByGoogleSubject(googleSubject: string) {
       return db.select().from(studentUsers).where(eq(studentUsers.googleSubject, googleSubject)).get();
     },

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAdminApp } from "./app";
 import { createAdminTestDependencies } from "./dependencies";
 import { createDbHandle, type DbHandle } from "@ai-smartbook/db";
@@ -83,6 +83,41 @@ async function login(app: ReturnType<typeof createAdminApp>) {
 }
 
 describe("Admin API HTTP authentication and quota behavior", () => {
+  it("returns student identity count and aggregate-only overview metadata", async () => {
+    const { app, dependencies, token } = buildTestApp();
+    expect((await request(app).get("/api/admin/dashboard/stats")).status).toBe(401);
+    dependencies.repos.studentUsers.create({
+      googleSubject: "fixture-subject", email: "fixture@example.test", displayName: "Fixture Student"
+    });
+    const recent = dependencies.repos.chat.createSession({ bookId: "fixture-book" });
+    dependencies.repos.chat.createSession({ bookId: "fixture-book" });
+    dependencies.repos.chat.addMessage({ sessionId: recent.id, role: "user", content: "private fixture question" });
+    const response = await request(app).get("/api/admin/dashboard/stats?range=all").set("x-admin-token", token);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      totalUsers: 1, activeUsers: 2, totalConversations: 2, totalMessages: 1,
+      source: "real", isSynthetic: false
+    });
+    expect(response.body.dailyConversations).toHaveLength(1);
+    expect(response.body.dailyConversations[0].count).toBe(1);
+    expect(Number.isNaN(Date.parse(response.body.asOf))).toBe(false);
+    expect(JSON.stringify(response.body)).not.toMatch(/fixture@example\.test|private fixture question|session_/);
+  });
+
+  it("returns 503 and no data when the student count source is unavailable", async () => {
+    const { app, dependencies, token } = buildTestApp();
+    vi.spyOn(dependencies.repos.studentUsers, "count").mockImplementation(() => {
+      throw new Error("fixture unavailable");
+    });
+    const response = await request(app).get("/api/admin/dashboard/stats").set("x-admin-token", token);
+    expect(response.status).toBe(503);
+    expect(response.body).toMatchObject({
+      totalUsers: 0, activeUsers: 0, totalConversations: 0, totalMessages: 0,
+      dailyConversations: [], source: "unavailable", isSynthetic: false
+    });
+    expect(JSON.stringify(response.body)).not.toContain("fixture unavailable");
+  });
+
   it("supports login, me, session access, CSRF, logout and failed credentials", async () => {
     const { app, dbHandle } = buildTestApp();
 

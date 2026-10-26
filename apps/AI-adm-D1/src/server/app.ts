@@ -3202,34 +3202,41 @@ function sessionLastActivityMs(session: ChatSession, messageLastSeen: Map<string
 }
 
 app.get("/api/admin/dashboard/stats", (req, res) => {
-  const range = String(req.query.range || "month");
-  const sessions = repos.chat.listSessions();
-  const messages = repos.chat.listAllMessages();
-  const now = Date.now();
-  const lastSeen = lastSeenBySession(messages);
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const range = String(req.query.range || "month");
+    const totalUsers = repos.studentUsers.count();
+    const sessions = repos.chat.listSessions();
+    const messages = repos.chat.listAllMessages();
+    const now = Date.now();
+    const lastSeen = lastSeenBySession(messages);
 
-  // One account proxy per session (no real user identity is tracked).
-  const accountLast = sessions.map((s) => sessionLastActivityMs(s, lastSeen));
-  const totalUsers = accountLast.length;
-  const activeUsers = accountLast.filter((t) => now - t <= ONLINE_WINDOW_MS).length;
-  const totalConversations = sessions.length;
-  const totalMessages = messages.length;
+    // Preserve the existing 15-minute chat-session activity definition.
+    const accountLast = sessions.map((s) => sessionLastActivityMs(s, lastSeen));
+    const activeUsers = accountLast.filter((t) => now - t <= ONLINE_WINDOW_MS).length;
+    const totalConversations = sessions.length;
+    const totalMessages = messages.length;
 
-  // Daily trend = student question records per local day, within range. This is
-  // the same source as the student-question list so the two always agree.
-  const start = rangeStartMs(range);
-  const dayMap = new Map<string, number>();
-  for (const m of messages) {
-    if (m.role !== "user") continue;
-    if (Date.parse(m.createdAt) < start) continue;
-    const key = localDateKey(m.createdAt);
-    dayMap.set(key, (dayMap.get(key) ?? 0) + 1);
+    // Daily trend remains the number of student questions per local day.
+    const start = rangeStartMs(range);
+    const dayMap = new Map<string, number>();
+    for (const m of messages) {
+      if (m.role !== "user") continue;
+      if (Date.parse(m.createdAt) < start) continue;
+      const key = localDateKey(m.createdAt);
+      dayMap.set(key, (dayMap.get(key) ?? 0) + 1);
+    }
+    const dailyConversations = [...dayMap.entries()]
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    return res.json({ totalUsers, activeUsers, totalConversations, totalMessages,
+      dailyConversations, source: "real", asOf: new Date(now).toISOString(), isSynthetic: false });
+  } catch {
+    return res.status(503).json({ totalUsers: 0, activeUsers: 0, totalConversations: 0,
+      totalMessages: 0, dailyConversations: [], source: "unavailable",
+      asOf: new Date().toISOString(), isSynthetic: false });
   }
-  const dailyConversations = [...dayMap.entries()]
-    .map(([date, count]) => ({ date, count }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  res.json({ totalUsers, activeUsers, totalConversations, totalMessages, dailyConversations });
 });
 
 app.get("/api/admin/accounts", (_req, res) => {
