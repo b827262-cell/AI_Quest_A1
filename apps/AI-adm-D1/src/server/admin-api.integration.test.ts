@@ -84,6 +84,46 @@ async function login(app: ReturnType<typeof createAdminApp>) {
 }
 
 describe("Admin API HTTP authentication and quota behavior", () => {
+  it("keeps book routes behind Origin, administrator authentication, CSRF and mutation audit", async () => {
+    const { app, dependencies, dbHandle, token } = buildTestApp();
+    const student = dependencies.repos.studentUsers.create({
+      googleSubject: "books-student-subject", email: "books-student@example.test", displayName: "Books Student"
+    });
+    const { sessionToken } = createStudentSessionSecrets();
+    dependencies.repos.studentSessions.create({
+      tokenDigest: digestStudentSecret(sessionToken),
+      userId: student.id,
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    expect((await request(app).get("/api/admin/books")).status).toBe(401);
+    expect((await request(app).get("/api/admin/books")
+      .set("Cookie", `ai_student_session=${sessionToken}`)).status).toBe(401);
+    expect((await request(app).get("/api/admin/books")
+      .set("x-admin-token", token).set("Origin", "https://not-admin.example.test")).status).toBe(403);
+    const authorized = await request(app).get("/api/admin/books").set("x-admin-token", token);
+    expect(authorized.status).toBe(200);
+    expect(authorized.body).toEqual({ books: [] });
+
+    const session = await login(app);
+    const blockedMutation = await request(app).post("/api/admin/books")
+      .set("Cookie", session.cookieHeader)
+      .set("Origin", "http://127.0.0.1:5174")
+      .send({ title: "Test Book" });
+    expect(blockedMutation.status).toBe(403);
+    const created = await request(app).post("/api/admin/books")
+      .set("Cookie", session.cookieHeader)
+      .set("Origin", "http://127.0.0.1:5174")
+      .set("x-csrf-token", session.csrf)
+      .send({ title: "Test Book" });
+    expect(created.status).toBe(201);
+    const audits = dbHandle.sqlite.prepare("SELECT action, metadata_json FROM ai_admin_audit_logs").all() as
+      Array<{ action: string; metadata_json: string }>;
+    expect(audits.some((row) => row.action === "admin.request.mutation" &&
+      row.metadata_json.includes('"path":"/api/admin/books"') &&
+      row.metadata_json.includes('"statusCode":201'))).toBe(true);
+  });
+
   it("keeps anonymous, student-only and administrator overview access distinct", async () => {
     const { app, dependencies, token } = buildTestApp();
     const student = dependencies.repos.studentUsers.create({
