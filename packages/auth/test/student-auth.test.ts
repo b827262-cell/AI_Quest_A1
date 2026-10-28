@@ -14,7 +14,7 @@ import {
 } from "../src/server";
 import { safeStudentReturnTo } from "../src/shared";
 import { startFakeAccessCerts } from "../../../scripts/student-access-fixture";
-import { AccessUnavailableError } from "../src/access";
+import { AccessInvalidTokenError, AccessUnavailableError, verifyAccessAssertion } from "../src/access";
 
 function buildFakeAuth(now: () => number, exchangeIdentity: (code: string, verifier: string) => Promise<GoogleIdentity>) {
   const users = new Map<string, StudentAuthUserRecord>();
@@ -212,6 +212,26 @@ describe("Student Auth Foundation", () => {
       expect(JSON.stringify(warning.mock.calls)).not.toContain(assertion);
       expect(JSON.stringify(warning.mock.calls)).not.toContain("student@example.test");
     } finally { warning.mockRestore(); await certs.close(); }
+  });
+
+  it("revalidates reused assertions against signature, audience, issuer and time on every use", async () => {
+    const certs = await startFakeAccessCerts();
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const config = { accessTeamDomain: certs.teamDomain, accessAud: certs.aud, accessCertsUrl: certs.certsUrl };
+      const token = certs.assertion({ iat: now, nbf: now, exp: now + 120 });
+      expect(await verifyAccessAssertion(token, config, now * 1000)).toBe("student@example.test");
+      expect(await verifyAccessAssertion(token, config, now * 1000)).toBe("student@example.test");
+      await expect(verifyAccessAssertion(token, { ...config, accessAud: "other" }, now * 1000)).rejects.toBeInstanceOf(AccessInvalidTokenError);
+      await expect(verifyAccessAssertion(token, { ...config, accessTeamDomain: "other" }, now * 1000)).rejects.toBeInstanceOf(AccessInvalidTokenError);
+      await expect(verifyAccessAssertion(token, config, (now + 181) * 1000)).rejects.toBeInstanceOf(AccessInvalidTokenError);
+      await expect(verifyAccessAssertion(token, config, (now - 61) * 1000)).rejects.toBeInstanceOf(AccessInvalidTokenError);
+      const parts = token.split(".");
+      const altered = `${parts[0]}.${parts[1]}.${parts[2][0] === "A" ? "B" : "A"}${parts[2].slice(1)}`;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(verifyAccessAssertion(altered, config, now * 1000)).rejects.toBeInstanceOf(AccessInvalidTokenError);
+      }
+    } finally { await certs.close(); }
   });
 
   it("ignores a fixture certs URL in production while permitting it in tests", () => {

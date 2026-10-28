@@ -51,22 +51,28 @@ describe("Student Cloudflare Access HTTP integration", () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
     const now = Math.floor(Date.now() / 1000);
     const forgedHeaders = { "Cf-Access-Authenticated-User-Email": "forged@example.test", cookie: "CF_Authorization=forged", "oai-email": "forged@example.test" };
-    const missing = await login(undefined, "/dashboard", forgedHeaders);
-    expect(missing.status).toBe(401);
-    expect(JSON.parse(missing.bodyText)).toEqual({ error: "ACCESS_ASSERTION_INVALID" });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const missing = await login(undefined, "/dashboard", forgedHeaders);
+      expect(missing.status).toBe(401);
+      expect(JSON.parse(missing.bodyText)).toEqual({ error: "ACCESS_ASSERTION_INVALID" });
+    }
+    const parts = app.assertion().split(".");
+    const forged = `${parts[0]}.${parts[1]}.${parts[2][0] === "A" ? "B" : "A"}${parts[2].slice(1)}`;
     for (const token of [
-      app.assertion({ exp: now - 61 }),
-      app.assertion({ nbf: now + 61 }),
-      app.assertion({ iat: now + 61 }),
+      app.assertion({ exp: now - 300 }),
+      app.assertion({ nbf: now + 300 }),
+      app.assertion({ iat: now + 300 }),
       app.assertion({}, { kid: "wrong-kid" }),
       app.assertion({ aud: "wrong-aud" }),
       app.assertion({ iss: "https://evil.example.test" }),
-      `${app.assertion().slice(0, -2)}xx`
+      forged
     ]) {
-      const response = await login(token, "/dashboard", forgedHeaders);
-      expect(response.status).toBe(401);
-      expect(JSON.parse(response.bodyText)).toEqual({ error: "ACCESS_ASSERTION_INVALID" });
-      expect(response.headers["set-cookie"]).toBeUndefined();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await login(token, "/dashboard", forgedHeaders);
+        expect(response.status).toBe(401);
+        expect(JSON.parse(response.bodyText)).toEqual({ error: "ACCESS_ASSERTION_INVALID" });
+        expect(response.headers["set-cookie"]).toBeUndefined();
+      }
     }
   });
 
