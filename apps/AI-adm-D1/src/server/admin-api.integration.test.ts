@@ -124,6 +124,48 @@ describe("Admin API HTTP authentication and quota behavior", () => {
       row.metadata_json.includes('"statusCode":201'))).toBe(true);
   });
 
+  it("protects account routes with Origin, authentication and CSRF, and audits successful mutations", async () => {
+    const { app, dependencies, dbHandle, token } = buildTestApp();
+    const student = dependencies.repos.studentUsers.create({
+      googleSubject: "accounts-student-subject", email: "accounts-student@example.test", displayName: "Accounts Student"
+    });
+    const { sessionToken } = createStudentSessionSecrets();
+    dependencies.repos.studentSessions.create({
+      tokenDigest: digestStudentSecret(sessionToken), userId: student.id,
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const account = dependencies.repos.chat.createSession({ bookId: "accounts-fixture" });
+    const riskPath = `/api/admin/accounts/${account.id}/risk`;
+    const blockPath = `/api/admin/accounts/${account.id}/block`;
+    expect((await request(app).get("/api/admin/accounts")).status).toBe(401);
+    expect((await request(app).patch(riskPath).set("Cookie", `ai_student_session=${sessionToken}`)
+      .send({ riskLevel: "risk" })).status).toBe(401);
+    expect((await request(app).get("/api/admin/accounts").set("x-admin-token", token)
+      .set("Origin", "https://not-admin.example.test")).status).toBe(403);
+    const session = await login(app);
+    expect((await request(app).patch(riskPath).set("Cookie", session.cookieHeader)
+      .set("Origin", "http://127.0.0.1:5174").send({ riskLevel: "risk" })).status).toBe(403);
+    const list = await request(app).get("/api/admin/accounts").set("Cookie", session.cookieHeader);
+    expect(list.status).toBe(200);
+    expect(list.body.accounts).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId: account.id })]));
+    const risk = await request(app).patch(riskPath).set("Cookie", session.cookieHeader)
+      .set("Origin", "http://127.0.0.1:5174").set("x-csrf-token", session.csrf)
+      .send({ riskLevel: "risk", note: "fixture" });
+    expect(risk.status).toBe(200);
+    expect(risk.body.account).toMatchObject({ id: account.id, riskLevel: "risk", riskNote: "fixture" });
+    const blocked = await request(app).patch(blockPath).set("Cookie", session.cookieHeader)
+      .set("Origin", "http://127.0.0.1:5174").set("x-csrf-token", session.csrf)
+      .send({ blocked: true, reason: "fixture" });
+    expect(blocked.status).toBe(200);
+    expect(blocked.body.account).toMatchObject({ id: account.id, isBlocked: true });
+    const audits = dbHandle.sqlite.prepare("SELECT action, metadata_json FROM ai_admin_audit_logs").all() as
+      Array<{ action: string; metadata_json: string }>;
+    for (const path of [riskPath, blockPath]) {
+      expect(audits.some((row) => row.action === "admin.request.mutation" &&
+        row.metadata_json.includes(`"path":"${path}"`) && row.metadata_json.includes('"statusCode":200'))).toBe(true);
+    }
+  });
+
   it("keeps anonymous, student-only and administrator overview access distinct", async () => {
     const { app, dependencies, token } = buildTestApp();
     const student = dependencies.repos.studentUsers.create({
