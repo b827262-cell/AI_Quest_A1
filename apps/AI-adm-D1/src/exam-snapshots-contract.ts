@@ -11,7 +11,7 @@
  * CSRF, 401 handling) instead of opening a second HTTP path.
  */
 
-export const EXAM_SNAPSHOT_YEARS = ["115", "116"] as const;
+export const EXAM_SNAPSHOT_YEARS = ["116"] as const;
 
 /** MOC 年度 (民国年). Kept as `string` because the URL segment is a string. */
 export type ExamSnapshotYear = (typeof EXAM_SNAPSHOT_YEARS)[number] | (string & Record<never, never>);
@@ -70,7 +70,7 @@ export const EXAM_SNAPSHOT_ENDPOINTS = {
 
 /** Machine codes the admin API may return, mapped to the text the page shows. */
 export const EXAM_SNAPSHOT_ERROR_LABELS: Readonly<Record<string, string>> = {
-  invalid_exam_year: "只支援 115 / 116 年度",
+  invalid_exam_year: "只支援 116 年度",
   missing_idempotency_key: "缺少更新識別碼",
   database_not_configured: "尚未設定資料庫連線（DATABASE_URL）",
   pg_driver_missing: "PostgreSQL 驅動程式未安裝",

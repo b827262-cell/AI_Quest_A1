@@ -5,7 +5,7 @@ import {
   type ExamCourseSourceSearchModeV1
 } from "@ai-smartbook/contracts";
 
-export type PublicExamYear = "115" | "116";
+export type PublicExamYear = "116";
 export type PublicSourceSearchMode = ExamCourseSourceSearchModeV1;
 export const PUBLIC_SEARCH_MODE_OPTIONS: ReadonlyArray<{ value: PublicSourceSearchMode; label: string }> = [
   { value: "product_name", label: "品名" },
@@ -27,7 +27,7 @@ export interface PublicCourseSearchResult {
 }
 
 export interface PublicCourseSearchRequest {
-  examYear?: PublicExamYear | "all";
+  examYear?: PublicExamYear;
   query: string;
   searchMode?: PublicSourceSearchMode;
 }
@@ -59,7 +59,7 @@ export function adaptPublicCourseResult(
 function searchUrl(request: PublicCourseSearchRequest): URLSearchParams {
   const searchMode = request.searchMode ?? "product_name";
   const params = new URLSearchParams({ search_mode: searchMode, limit: "20" });
-  if (request.examYear && request.examYear !== "all") params.set("exam_year", request.examYear);
+  if (request.examYear) params.set("exam_year", request.examYear);
   const query = request.query.trim();
   if (searchMode === "product_code") params.set("course_code", query);
   else if (searchMode === "teacher") params.set("teacher", query);

@@ -7,7 +7,7 @@ import {
 import { EXAM_COURSE_SOURCE_HOSTS_V1, type ExamCourseRecordV1 } from "@ai-smartbook/contracts";
 
 /**
- * Bounded 115/116 高普考 snapshot crawl.
+ * Bounded 116 高普考 snapshot crawl.
  *
  * The seed list below is explicit and complete for the scope agreed in A-01:
  * the 高普考 (bkid_1=1) category listing pages of ec.ibrain.com.tw plus the
@@ -141,8 +141,9 @@ export async function runExamSnapshotCrawl(options: ExamSnapshotCrawlOptions = {
         continue;
       }
       const html = decodeIbrainHtml(page.body);
+      // Owner decision 2026-10-28: only 116 is in crawl scope; 115 links are ignored here.
       const links = parseListingCourseLinks(html, IBRAIN_ORIGIN).filter(
-        (link) => /11[56]/.test(link.courseName) && /高考|普考/.test(link.courseName)
+        (link) => /\b116\b/.test(link.courseName) && /高考|普考/.test(link.courseName)
       );
       listingPagesFetched += 1;
       for (const link of links) {
