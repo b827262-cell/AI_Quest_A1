@@ -175,6 +175,20 @@ describe("student learning history sync and admin visibility", () => {
     expect(handle.sqlite.prepare("SELECT COUNT(*) n FROM student_learning_history").get()).toMatchObject({ n: 2 });
   });
 
+  it("protects both admin learning history routes and reports missing detail", async () => {
+    const { app, student } = fixture();
+    const alice = student("boundary");
+    const paths = ["/api/admin/learning-history", `/api/admin/learning-history/${alice.userId}/missing`];
+    for (const path of paths) {
+      expect((await request(app).get(path).set("Cookie", alice.cookie)).status).toBe(401);
+      expect((await request(app).get(path).set("x-admin-token", "test-admin-token").set("Origin", "https://not-admin.example.test")).status).toBe(403);
+    }
+    expect((await request(app).get(paths[1])).status).toBe(401);
+    const missing = await request(app).get(paths[1]).set("x-admin-token", "test-admin-token");
+    expect(missing.status).toBe(404);
+    expect(missing.body.error).toBe("ENTRY_NOT_FOUND");
+  });
+
   it("shows redacted list rows, full detail and filtered pages only behind admin auth", async () => {
     const { app, dependencies, student } = fixture();
     const alice = student("alice");
