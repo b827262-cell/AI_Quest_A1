@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const siteDir = path.resolve(testDir, "..");
 const validator = path.join(siteDir, "scripts/verify-environment-alignment.mjs");
+const fixtureGitSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: siteDir, encoding: "utf8" }).trim();
 const { DEFAULT_MAX_AGE_HOURS, ONE_TIME_HOLIDAY_DEDUCTION_HOURS, verifyEnvironment } = await import(validator);
 
 function writeFixture(dir, name, value) {
@@ -33,7 +34,7 @@ function validManifest() {
     worker: {
       project_id: "appgprj_backend",
       version: "appgver_123",
-      deployed_git_sha: "f0085202150c67760040644f1db3d6c479dc2074",
+      deployed_git_sha: fixtureGitSha,
       health_endpoint: "https://ai-quest-a1-backend.b827262.chatgpt.site/api/health",
       health_status: 200,
       bindings: {
