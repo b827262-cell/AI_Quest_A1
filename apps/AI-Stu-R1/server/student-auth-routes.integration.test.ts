@@ -16,6 +16,7 @@ describe("Student Cloudflare Access HTTP integration", () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000, secureCookies: false });
     const response = await login(app.assertion());
     expect(response.status).toBe(302);
+    expect(response.headers["set-cookie"]?.[0]).toMatch(/HttpOnly/);
     expect(response.headers["set-cookie"]?.[0]).not.toMatch(/;\s*Secure/i);
   });
   it("creates a session from a signed assertion, gates the profile, and preserves a safe returnTo", async () => {

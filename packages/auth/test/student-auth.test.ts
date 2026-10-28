@@ -14,7 +14,6 @@ import {
 } from "../src/server";
 import { safeStudentReturnTo } from "../src/shared";
 import { startFakeAccessCerts } from "../../../scripts/student-access-fixture";
-import { assertStudentAuthConfig, resolveStudentAuthConfig } from "../src/server";
 import { AccessUnavailableError } from "../src/access";
 
 function buildFakeAuth(now: () => number, exchangeIdentity: (code: string, verifier: string) => Promise<GoogleIdentity>) {
