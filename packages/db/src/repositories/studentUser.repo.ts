@@ -12,6 +12,13 @@ export function makeStudentUserRepo(db: Db) {
     findByGoogleSubject(googleSubject: string) {
       return db.select().from(studentUsers).where(eq(studentUsers.googleSubject, googleSubject)).get();
     },
+    findByEmail(email: string) {
+      // Legacy Google rows can differ in case or surrounding whitespace. Scan
+      // and normalize here because the existing schema has no normalized index.
+      const normalized = email.trim().toLowerCase();
+      return db.select().from(studentUsers).all()
+        .filter((user) => user.email.trim().toLowerCase() === normalized);
+    },
     findById(id: string) {
       return db.select().from(studentUsers).where(eq(studentUsers.id, id)).get();
     },
