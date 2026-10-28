@@ -26,8 +26,10 @@ describe("Student Cloudflare Access HTTP integration", () => {
     expect(response.headers.location?.[0]).toBe("/profile-completion?next=%2Fbooks");
     const cookie = response.headers["set-cookie"]?.[0];
     expect(cookie).toMatch(/ai_student_session=.*HttpOnly.*Secure.*SameSite=strict/i);
+    expect(cookie).toMatch(/Max-Age=3600/i);
     const session = cookie?.split(";", 1)[0] ?? "";
     const me = await rawHttpRequest(new URL(`${app.baseUrl}/api/student/auth/me`), { headers: { cookie: session } });
+    expect(me.status).toBe(200);
     expect(JSON.parse(me.bodyText)).toMatchObject({ authenticated: true, user: { email: "student@example.test", profileCompleted: false } });
     const gated = await rawHttpRequest(new URL(`${app.baseUrl}/api/student/books`), { headers: { cookie: session } });
     expect(gated.status).toBe(403);
@@ -36,6 +38,8 @@ describe("Student Cloudflare Access HTTP integration", () => {
       body: JSON.stringify({ displayName: "Student", schoolName: "School", gradeLevel: "1" })
     });
     expect(profile.status).toBe(200);
+    expect(JSON.parse(profile.bodyText)).toMatchObject({ profile: { profileCompleted: true } });
+    expect((await rawHttpRequest(new URL(`${app.baseUrl}/api/student/books`), { headers: { cookie: session } })).status).toBe(200);
     const next = await login(app.assertion(), "/dashboard");
     expect(next.headers.location?.[0]).toBe("/dashboard");
     expect(app.certs.requestCount()).toBe(1); // JWKS reused across requests.
@@ -47,7 +51,9 @@ describe("Student Cloudflare Access HTTP integration", () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
     const now = Math.floor(Date.now() / 1000);
     const forgedHeaders = { "Cf-Access-Authenticated-User-Email": "forged@example.test", cookie: "CF_Authorization=forged", "oai-email": "forged@example.test" };
-    expect((await login(undefined, "/dashboard", forgedHeaders)).status).toBe(401);
+    const missing = await login(undefined, "/dashboard", forgedHeaders);
+    expect(missing.status).toBe(401);
+    expect(JSON.parse(missing.bodyText)).toEqual({ error: "ACCESS_ASSERTION_INVALID" });
     for (const token of [
       app.assertion({ exp: now - 61 }),
       app.assertion({ nbf: now + 61 }),
@@ -59,6 +65,18 @@ describe("Student Cloudflare Access HTTP integration", () => {
     ]) {
       const response = await login(token, "/dashboard", forgedHeaders);
       expect(response.status).toBe(401);
+      expect(JSON.parse(response.bodyText)).toEqual({ error: "ACCESS_ASSERTION_INVALID" });
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    }
+  });
+
+  it("rejects repeated expired assertions without issuing a session", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const expired = app.assertion({ exp: Math.floor(Date.now() / 1000) - 61 });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await login(expired);
+      expect(response.status).toBe(401);
+      expect(JSON.parse(response.bodyText)).toEqual({ error: "ACCESS_ASSERTION_INVALID" });
       expect(response.headers["set-cookie"]).toBeUndefined();
     }
   });
@@ -67,10 +85,26 @@ describe("Student Cloudflare Access HTTP integration", () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
     const token = app.assertion();
     app.config.accessAud = undefined;
-    expect((await login(token)).status).toBe(503);
+    const missingConfig = await login(token);
+    expect(missingConfig.status).toBe(503);
+    expect(JSON.parse(missingConfig.bodyText)).toEqual({ error: "ACCESS_UNAVAILABLE" });
     app.config.accessAud = app.certs.aud;
     app.certs.setFailure(true);
-    expect((await login(token)).status).toBe(503);
+    const unavailable = await login(token);
+    expect(unavailable.status).toBe(503);
+    expect(JSON.parse(unavailable.bodyText)).toEqual({ error: "ACCESS_UNAVAILABLE" });
+    expect(unavailable.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("accepts only same-site relative return targets", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    for (const target of ["https://evil.example/path", "//evil.example/path"]) {
+      const response = await login(app.assertion(), target);
+      expect(response.status).toBe(302);
+      expect(response.headers.location?.[0]).toBe("/profile-completion?next=%2Fbooks");
+    }
+    const response = await login(app.assertion(), "/dashboard?tab=books");
+    expect(response.headers.location?.[0]).toBe("/profile-completion?next=%2Fdashboard%3Ftab%3Dbooks");
   });
 
   it("matches an existing Google user by verified email despite legacy case and whitespace", async () => {

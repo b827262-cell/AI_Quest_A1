@@ -259,3 +259,59 @@ validator-approved entries).
 | Desktop/Tablet/Mobile browser smoke, no overflow/console errors | VERIFIED (dashboard smoke, 3 viewports) |
 | Live Cloudflare Access email one-time PIN | NOT ATTEMPTED (Access configuration was out of scope) |
 | Live Cerebras generation | NOT ATTEMPTED (no approved credentials) |
+
+## Local 4310 Access fixture (isolated test only)
+
+The following is a local, scripted HTTP demonstration for a disposable clone. It
+starts a loopback JWKS server using `student-access-fixture`, starts the student
+API on port 4310, signs an assertion for `student@example.invalid`, completes
+its profile and checks a protected endpoint. It prints status codes only, not the
+JWT or cookie. Do not use a real database, production environment, or Cloudflare
+Access settings. Ensure port 4310 is free and dependencies are installed.
+
+The harness sets `NODE_ENV=smoke`, `STU_RUNTIME_MODE=sqlite-api`, `STU_API_PORT=4310`,
+`STUDENT_ACCESS_TEAM_DOMAIN` and `STUDENT_ACCESS_AUD` from the fixture,
+`STUDENT_ACCESS_CERTS_URL` to its dynamically allocated `http://127.0.0.1:<port>/certs`,
+`STUDENT_ALLOWED_ORIGINS` to `http://127.0.0.1:4310`, a local test-only
+`STUDENT_SESSION_SECRET`, and both database paths to a new `/tmp` directory.
+The API automatically initializes its existing schema in that disposable auth
+DB; no production or existing database is used. The fixture must remain running
+while the API verifies its signatures. The fixture is not an email OTP service.
+
+From the clone root, run:
+
+```sh
+node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs --input-type=module <<'NODE'
+import { join } from 'node:path';
+import { rmSync } from 'node:fs';
+import { startFakeAccessCerts } from './scripts/student-access-fixture.ts';
+import { createThrowawayDir, seedThrowawayStudentDb, startStudentApi, rawHttpRequest } from './scripts/student-smoke-harness.ts';
+const dir = createThrowawayDir('student-local-4310-');
+let certs, api;
+try {
+  certs = await startFakeAccessCerts();
+  const studentDb = join(dir, 'student.db');
+  seedThrowawayStudentDb(studentDb);
+  api = await startStudentApi({ port: 4310, studentDbPath: studentDb, authDbPath: join(dir, 'auth.db'), sessionTtlMs: 3600000, accessCerts: certs });
+  const base = api.baseUrl;
+  const login = await rawHttpRequest(new URL(`${base}/api/student/auth/access/login?returnTo=%2Fbooks`), {
+    headers: { 'Cf-Access-Jwt-Assertion': certs.assertion({ email: 'student@example.invalid' }) }
+  });
+  if (login.status !== 302) throw new Error(`login status ${login.status}`);
+  const cookie = login.headers['set-cookie']?.[0]?.split(';', 1)[0];
+  if (!cookie) throw new Error('session cookie missing');
+  const profile = await rawHttpRequest(new URL(`${base}/api/student/auth/profile`), {
+    method: 'PATCH', headers: { cookie, origin: base, 'content-type': 'application/json' },
+    body: JSON.stringify({ displayName: 'Test Student', schoolName: 'Test School', gradeLevel: '1' })
+  });
+  if (profile.status !== 200) throw new Error(`profile status ${profile.status}`);
+  const books = await rawHttpRequest(new URL(`${base}/api/student/books`), { headers: { cookie } });
+  console.log(`login=${login.status} profile=${profile.status} protected-books=${books.status}`);
+  if (books.status !== 200) process.exitCode = 1;
+} finally {
+  await api?.close();
+  await certs?.close();
+  rmSync(dir, { recursive: true, force: true });
+}
+NODE
+```

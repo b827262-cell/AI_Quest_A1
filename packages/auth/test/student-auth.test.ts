@@ -214,6 +214,15 @@ describe("Student Auth Foundation", () => {
     } finally { warning.mockRestore(); await certs.close(); }
   });
 
+  it("ignores a fixture certs URL in production while permitting it in tests", () => {
+    const env = { STUDENT_ACCESS_CERTS_URL: "http://127.0.0.1:9999/certs", STUDENT_ACCESS_TEAM_DOMAIN: "team", STUDENT_ACCESS_AUD: "aud", STUDENT_SESSION_SECRET: "a-secret-that-is-longer-than-thirty-two-characters" };
+    const production = resolveStudentAuthConfig({ ...env, NODE_ENV: "production" });
+    expect(production.accessCertsUrl).toBeUndefined();
+    expect(() => assertStudentAuthConfig(production)).not.toThrow();
+    expect(resolveStudentAuthConfig({ ...env, NODE_ENV: "test" }).accessCertsUrl).toBe(env.STUDENT_ACCESS_CERTS_URL);
+    expect(() => assertStudentAuthConfig({ ...production, accessCertsUrl: env.STUDENT_ACCESS_CERTS_URL })).toThrow();
+  });
+
   it("requires Access config in production without Google client credentials", () => {
     const config = resolveStudentAuthConfig({ NODE_ENV: "production", STUDENT_SESSION_SECRET: "a-secret-that-is-longer-than-thirty-two-characters", STUDENT_ACCESS_TEAM_DOMAIN: "team", STUDENT_ACCESS_AUD: "aud" });
     expect(() => assertStudentAuthConfig(config)).not.toThrow();
