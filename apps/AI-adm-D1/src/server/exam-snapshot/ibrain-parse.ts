@@ -85,8 +85,8 @@ export function extractProductFields(html: string): Record<string, string> {
 export function deriveExamYear(value: string): ExamCourseYearV1 | null {
   const match = value.match(/\b(1\d{2})\b/);
   if (!match) return null;
-  const year = Number(match[1]);
-  return year === 115 || year === 116 ? year : null;
+  // 116 only: 115 is out of scope by Owner decision, so it is skipped, not failed.
+  return Number(match[1]) === 116 ? 116 : null;
 }
 
 /** Source-visible tiers are provenance only; the snapshot contract is 高普考. */
@@ -163,7 +163,7 @@ export type CourseDetailInput = Readonly<{
   fetchedAt: string;
 }>;
 
-/** Returns null when the page is not a 115/116 高普考 course (out of scope, not a failure). */
+/** Returns null when the page is not a 116 高普考 course (out of scope, not a failure). */
 export function buildCourseRecord(input: CourseDetailInput): ExamCourseRecordV1 | null {
   const courseName = extractPageTitle(input.html) || input.listingCourseName || "";
   const examYear = deriveExamYear(courseName);

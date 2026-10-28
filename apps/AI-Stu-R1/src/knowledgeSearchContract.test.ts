@@ -3,7 +3,7 @@ import { PUBLIC_EXAM_COURSE_SEARCH_PATH, PUBLIC_SEARCH_MODE_OPTIONS, PublicCours
 
 const b3Response = {
   contractVersion: 1, mode: "postgres", query: { keyword: "憲法", search_mode: "product_name", limit: 20 }, total: 1,
-  results: [{ exam_year: 115, course_code: "GA-CON-002", course_name: "憲法", course_content: "整理基本權與違憲審查重點。", teacher: "宗台大", applicable_scope: "法研所 / 115高普考", source_search_mode: "product_name", matched_field: "品名", source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18757" }]
+  results: [{ exam_year: 116, course_code: "GA-CON-002", course_name: "憲法", course_content: "整理基本權與違憲審查重點。", teacher: "宗台大", applicable_scope: "法研所 / 115高普考", source_search_mode: "product_name", matched_field: "品名", source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18757" }]
 };
 
 describe("public exam-course search contract", () => {
@@ -21,12 +21,12 @@ describe("public exam-course search contract", () => {
     ["scope", "法研所", "applicable_scope=", "search_mode=scope"]
   ] as const)("calls the real B3 boundary for %s", async (searchMode, query, expectedParam, expectedMode) => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ ...b3Response, query: { keyword: query, search_mode: searchMode, limit: 20 }, results: [{ ...b3Response.results[0], source_search_mode: searchMode }] })));
-    const results = await searchPublicExamCourses({ examYear: "115", query, searchMode }, fetcher);
+    const results = await searchPublicExamCourses({ examYear: "116", query, searchMode }, fetcher);
     const url = String(fetcher.mock.calls[0][0]);
     expect(url).toContain(`${PUBLIC_EXAM_COURSE_SEARCH_PATH}?`);
     expect(url).toContain(expectedParam);
     expect(url).toContain(expectedMode);
-    expect(url).toContain("exam_year=115");
+    expect(url).toContain("exam_year=116");
     expect(results[0].source_search_mode).toBe(searchMode);
   });
 
@@ -37,7 +37,7 @@ describe("public exam-course search contract", () => {
 
   it("normalizes legacy source mode once and keeps source URLs on the approved host", () => {
     const legacy = {
-      exam_year: "115" as const, course_code: "GA-CON-002", course_name: "憲法", course_content: "整理基本權與違憲審查重點。",
+      exam_year: "116" as const, course_code: "GA-CON-002", course_name: "憲法", course_content: "整理基本權與違憲審查重點。",
       teacher: "宗台大", applicable_scope: "法研所 / 115高普考", matched_field: "品名",
       source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18757", search_mode: "teacher" as const
     };

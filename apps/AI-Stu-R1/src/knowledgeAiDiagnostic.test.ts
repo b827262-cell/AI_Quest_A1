@@ -3,7 +3,7 @@ import rawSnapshot from "../../../data/b1-ibrain-public/raw-snapshot.json";
 import { buildKnowledgePriorities, extractGroundedSubjects } from "./knowledgeAiDiagnostic";
 import type { PublicCourseSearchResult } from "./knowledgeSearchContract";
 
-const course = (overrides: Partial<PublicCourseSearchResult>): PublicCourseSearchResult => ({ exam_year: "115", course_code: "C-1", course_name: "憲法", course_content: "基本權與違憲審查。", source_url: null, ...overrides });
+const course = (overrides: Partial<PublicCourseSearchResult>): PublicCourseSearchResult => ({ exam_year: "116", course_code: "C-1", course_name: "憲法", course_content: "基本權與違憲審查。", source_url: null, ...overrides });
 
 describe("knowledge AI diagnostic", () => {
   it("extracts only a literal, source-visible subject with its evidence", () => {
@@ -31,7 +31,7 @@ describe("knowledge AI diagnostic", () => {
     expect(rawSnapshot).toHaveLength(16);
     for (const row of rawSnapshot) {
       const subjects = extractGroundedSubjects(course({
-        exam_year: String(row.exam_year) as "115" | "116",
+        exam_year: String(row.exam_year) as PublicCourseSearchResult["exam_year"],
         course_code: row.course_code,
         course_name: row.course_name,
         course_content: row.course_content,

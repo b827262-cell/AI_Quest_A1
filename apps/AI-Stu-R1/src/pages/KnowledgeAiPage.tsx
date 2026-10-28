@@ -10,9 +10,7 @@ import {
 } from "../knowledgeSearchContract";
 import { buildKnowledgePriorities } from "../knowledgeAiDiagnostic";
 
-const YEARS: Array<{ value: PublicExamYear | "all"; label: string }> = [
-  { value: "all", label: "115、116 全部" },
-  { value: "115", label: "115 年" },
+const YEARS: Array<{ value: PublicExamYear; label: string }> = [
   { value: "116", label: "116 年" }
 ];
 
@@ -32,7 +30,7 @@ const SEARCH_PLACEHOLDERS: Record<PublicSourceSearchMode, string> = {
 
 export function KnowledgeAiPage() {
   const [query, setQuery] = useState("");
-  const [examYear, setExamYear] = useState<PublicExamYear | "all">("all");
+  const [examYear, setExamYear] = useState<PublicExamYear>("116");
   const [searchMode, setSearchMode] = useState<PublicSourceSearchMode>("product_name");
   const [results, setResults] = useState<PublicCourseSearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
@@ -70,14 +68,14 @@ export function KnowledgeAiPage() {
         <section className="knowledge-hero" aria-labelledby="knowledge-ai-heading">
           <span className="public-eyebrow">公開學習資源 · 無需登入</span>
           <h1 id="knowledge-ai-heading">知識達 AI 學習問答</h1>
-          <p>查找 115、116 年高普考公開課程資料。提供品名、品號、師資、適用範圍 4 種公開查詢方式，精確落到官方課程來源。</p>
+          <p>查找 116 年高普考公開課程資料。提供品名、品號、師資、適用範圍 4 種公開查詢方式，精確落到官方課程來源。</p>
           <form className="knowledge-search-form" onSubmit={(event) => void search(event)}>
             <label className="knowledge-year-label">
               <span className="sr-only">考試年度</span>
               <select
                 aria-label="考試年度"
                 value={examYear}
-                onChange={(event) => setExamYear(event.target.value as PublicExamYear | "all")}
+                onChange={(event) => setExamYear(event.target.value as PublicExamYear)}
               >
                 {YEARS.map((year) => <option key={year.value} value={year.value}>{year.label}</option>)}
               </select>

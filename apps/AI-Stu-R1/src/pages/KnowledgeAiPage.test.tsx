@@ -36,7 +36,7 @@ async function submitSearch() {
 function successResponse() {
   return new Response(JSON.stringify({
     contractVersion: 1, mode: "snapshot", query: { keyword: "憲法", search_mode: "product_name", limit: 20 }, total: 1,
-    results: [{ exam_year: 115, course_code: "course-1", course_name: "憲法課程", course_content: "基本權", source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18757" }]
+    results: [{ exam_year: 116, course_code: "course-1", course_name: "憲法課程", course_content: "基本權", source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=18757" }]
   }));
 }
 

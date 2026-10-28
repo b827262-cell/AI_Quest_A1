@@ -95,7 +95,7 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
       />
 
       <div className="exam-snapshot-notice" role="note">
-        資料來源為 ec.ibrain.com.tw 的 115 / 116 高普考公開課程頁面；更新一律依 content_hash 覆蓋寫入，內容未變的年度不會重複覆寫。資料庫或來源不可用時會明確顯示失敗狀態，不會顯示假的成功。
+        資料來源為 ec.ibrain.com.tw 的 116 年高普考公開課程頁面；更新一律依 content_hash 覆蓋寫入，內容未變的年度不會重複覆寫。資料庫或來源不可用時會明確顯示失敗狀態，不會顯示假的成功。
       </div>
 
       {message && <p className="admin-inline-success" role="status">{message}</p>}

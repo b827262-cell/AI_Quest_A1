@@ -51,22 +51,24 @@ describe("高普考資料快照 contract (Slot D real wiring)", () => {
   });
 
   describe("required wire fields", () => {
-    it("covers both contract years", () => expect(EXAM_SNAPSHOT_YEARS).toEqual(["115", "116"]));
+    it("covers only the 116 contract year", () => expect(EXAM_SNAPSHOT_YEARS).toEqual(["116"]));
     it("labels every status", () => {
       expect(Object.keys(EXAM_SNAPSHOT_STATUS_LABELS).sort()).toEqual(
         ["failed", "fresh", "not_started", "stale", "unavailable", "updating"].sort()
       );
     });
     it("rejects a year the snapshot contract does not cover", () => {
+      expect(isExamSnapshotYear("116")).toBe(true);
       expect(isExamSnapshotYear("117")).toBe(false);
-      expect(isExamSnapshotYear("115")).toBe(true);
+      // Owner decision 2026-10-28: 115 is out of scope, not merely hidden in the UI.
+      expect(isExamSnapshotYear("115")).toBe(false);
     });
   });
 
   describe("real client", () => {
     it("targets the two admin endpoints", () => {
       expect(EXAM_SNAPSHOT_ENDPOINTS.list).toBe("/api/admin/exam-snapshots");
-      expect(EXAM_SNAPSHOT_ENDPOINTS.refreshToday("115")).toBe("/api/admin/exam-snapshots/115/refresh-today");
+      expect(EXAM_SNAPSHOT_ENDPOINTS.refreshToday("116")).toBe("/api/admin/exam-snapshots/116/refresh-today");
     });
     it("escapes the year segment instead of interpolating raw input", () => {
       expect(EXAM_SNAPSHOT_ENDPOINTS.refreshToday("1 5/../../x")).toBe(
@@ -80,17 +82,17 @@ describe("高普考資料快照 contract (Slot D real wiring)", () => {
     });
     it("posts the refresh with an idempotency key", async () => {
       const receipt: ExamSnapshotRefreshResponse = {
-        year: "115",
+        year: "116",
         status: "fresh",
         changed_count: 12,
         error_count: 0,
         fetched_at: CLOCK.toISOString(),
         reused: false,
-        snapshot: { year: "115", last_snapshot_at: CLOCK.toISOString(), row_count: 12, status: "fresh", last_error: null }
+        snapshot: { year: "116", last_snapshot_at: CLOCK.toISOString(), row_count: 12, status: "fresh", last_error: null }
       };
-      const { client, calls } = recordingClient({ [EXAM_SNAPSHOT_ENDPOINTS.refreshToday("115")]: receipt });
-      const key = `exam-snapshot-115-${taipeiDateKey(CLOCK)}`;
-      await expect(client.refreshTodaySnapshot("115", key)).resolves.toMatchObject({ changed_count: 12, fetched_at: CLOCK.toISOString() });
+      const { client, calls } = recordingClient({ [EXAM_SNAPSHOT_ENDPOINTS.refreshToday("116")]: receipt });
+      const key = `exam-snapshot-116-${taipeiDateKey(CLOCK)}`;
+      await expect(client.refreshTodaySnapshot("116", key)).resolves.toMatchObject({ changed_count: 12, fetched_at: CLOCK.toISOString() });
       expect(calls[0]).toMatchObject({ method: "POST", headers: { "Idempotency-Key": key } });
     });
     it("reuses the shared http helper, so cookies/CSRF/401 stay in one place", () => {

@@ -20,11 +20,11 @@ const CLOCK = new Date("2026-10-04T02:00:00.000Z");
 
 function courseRecord(overrides: Partial<ExamCourseRecord> = {}): ExamCourseRecord {
   const base: ExamCourseRecord = {
-    exam_year: 115,
+    exam_year: 116,
     category: "高普考",
-    course_code: "BKA115001",
-    course_name: "115年高普考【財稅行政】經濟學",
-    course_content: "【師資】陳老师 【品號】BKA115001",
+    course_code: "BKA116001",
+    course_name: "116年高普考【財稅行政】經濟學",
+    course_content: "【師資】陳老师 【品號】BKA116001",
     source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=1001",
     fetched_at: CLOCK.toISOString(),
     content_hash: ""
@@ -130,7 +130,7 @@ function attemptFor(settings: ReturnType<typeof makeSettings>, year: string): Ex
 }
 
 describe("exam snapshot admin service (Slot D real wiring)", () => {
-  it("reads 115 and 116 straight out of exam_courses", async () => {
+  it("reads only 116 straight out of exam_courses", async () => {
     const table = makeTableDouble();
     await table.executor.query("INSERT INTO exam_courses", [116, "高普考", "BKA116001", "116年高普考", "內容", "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=2001", CLOCK.toISOString(), "x".repeat(64)]);
     const service = makeExamSnapshotService({
@@ -141,9 +141,8 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
 
     const response = await service.listSnapshots();
     expect(response.data_source).toBe("exam_courses");
-    expect(response.snapshots.map((snapshot) => snapshot.year)).toEqual(["115", "116"]);
-    expect(response.snapshots[1]).toMatchObject({ row_count: 1, status: "fresh", last_error: null });
-    expect(response.snapshots[0]).toMatchObject({ row_count: 0, status: "not_started" });
+    expect(response.snapshots.map((snapshot) => snapshot.year)).toEqual(["116"]);
+    expect(response.snapshots[0]).toMatchObject({ row_count: 1, status: "fresh", last_error: null });
     expect(EXAM_SNAPSHOT_READ_SQL).toContain("FROM exam_courses");
   });
 
@@ -151,7 +150,7 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
     const service = makeExamSnapshotService({ env: {}, resolveDatabase: resolveExamDatabase, crawl: async () => crawlResult([]) });
     const response = await service.listSnapshots();
     expect(response.data_source).toBe("unavailable");
-    expect(response.snapshots).toHaveLength(2);
+    expect(response.snapshots).toHaveLength(1);
     for (const snapshot of response.snapshots) {
       expect(snapshot).toMatchObject({ status: "unavailable", last_error: "database_not_configured" });
       expect(snapshot.row_count).toBeNull();
@@ -159,7 +158,7 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
     }
   });
 
-  it("refuses a year outside 115/116 before crawling or writing", async () => {
+  it("refuses a year outside 116 before crawling or writing", async () => {
     let crawled = 0;
     const table = makeTableDouble();
     const service = makeExamSnapshotService({
@@ -175,6 +174,11 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       httpStatus: 400,
       code: "invalid_exam_year"
     });
+    // 115 is now out of scope: it is rejected before any crawl, not merely skipped.
+    await expect(service.refreshToday("115", "exam-snapshot-115-2026-10-04")).rejects.toMatchObject({
+      httpStatus: 400,
+      code: "invalid_exam_year"
+    });
     expect(crawled).toBe(0);
     expect(table.rows.size).toBe(0);
   });
@@ -185,13 +189,13 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
     const service = makeExamSnapshotService({
       settings,
       resolveDatabase: async () => availableResolution(table),
-      crawl: async () => crawlResult([courseRecord(), courseRecord({ course_code: "BKA115002", source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=1002" })]),
+      crawl: async () => crawlResult([courseRecord(), courseRecord({ course_code: "BKA116002", source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=1002" })]),
       now: () => CLOCK
     });
 
-    const result = await service.refreshToday("115", "exam-snapshot-115-2026-10-04");
+    const result = await service.refreshToday("116", "exam-snapshot-116-2026-10-04");
     expect(result).toMatchObject({
-      year: "115",
+      year: "116",
       status: "fresh",
       changed_count: 2,
       inserted: 2,
@@ -203,7 +207,7 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
     });
     expect(result.snapshot.row_count).toBe(2);
     expect(table.rows.size).toBe(2);
-    expect(attemptFor(settings, "115")?.last_error).toBeNull();
+    expect(attemptFor(settings, "116")?.last_error).toBeNull();
     // The write went through B's statement, not an ad-hoc one.
     expect(table.executed.some((text) => text.includes("ON CONFLICT (exam_year, course_code) DO UPDATE"))).toBe(true);
     expect(table.executed.some((text) => text.includes("IS DISTINCT FROM EXCLUDED.content_hash"))).toBe(true);
@@ -218,19 +222,19 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
 
-    await service.refreshToday("115", "key-run-1");
-    const storedAfterFirst = table.rows.get("115:BKA115001");
+    await service.refreshToday("116", "key-run-1");
+    const storedAfterFirst = table.rows.get("116:BKA116001");
     const later = new Date(CLOCK.getTime() + 3_600_000);
     const second = await makeExamSnapshotService({
       resolveDatabase: async () => availableResolution(table),
-      crawl: async () => crawlResult([courseRecord({ course_content: "【師資】陳老师 【品號】BKA115001" })]),
+      crawl: async () => crawlResult([courseRecord({ course_content: "【師資】陳老师 【品號】BKA116001" })]),
       now: () => later
-    }).refreshToday("115", "key-run-2");
+    }).refreshToday("116", "key-run-2");
 
     expect(second).toMatchObject({ changed_count: 0, inserted: 0, updated: 0, unchanged: 1 });
     expect(table.rows.size).toBe(1);
     // Non-destructive: the untouched row keeps the first run's fetched_at and hash.
-    expect(table.rows.get("115:BKA115001")).toBe(storedAfterFirst);
+    expect(table.rows.get("116:BKA116001")).toBe(storedAfterFirst);
   });
 
   it("updates the same row rather than duplicating it when content changes", async () => {
@@ -240,20 +244,20 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       crawl: async () => crawlResult([courseRecord()]),
       now: () => CLOCK
     });
-    await service.refreshToday("115", "key-1");
+    await service.refreshToday("116", "key-1");
 
-    const changed = [courseRecord({ course_content: "【師資】陳老师 【品號】BKA115001 ｜ 提醒：新增章節" })];
-    expect(changed[0].content_hash).not.toBe(table.rows.get("115:BKA115001")!.content_hash);
+    const changed = [courseRecord({ course_content: "【師資】陳老师 【品號】BKA116001 ｜ 提醒：新增章節" })];
+    expect(changed[0].content_hash).not.toBe(table.rows.get("116:BKA116001")!.content_hash);
 
     const second = await makeExamSnapshotService({
       resolveDatabase: async () => availableResolution(table),
       crawl: async () => crawlResult(changed),
       now: () => new Date(CLOCK.getTime() + 3_600_000)
-    }).refreshToday("115", "key-2");
+    }).refreshToday("116", "key-2");
 
     expect(second).toMatchObject({ changed_count: 1, inserted: 0, updated: 1, status: "fresh" });
     expect(table.rows.size).toBe(1);
-    expect(table.rows.get("115:BKA115001")!.content_hash).toBe(changed[0].content_hash);
+    expect(table.rows.get("116:BKA116001")!.content_hash).toBe(changed[0].content_hash);
   });
 
   it("reports the upstream failure and writes nothing when the source answers with zero rows", async () => {
@@ -270,11 +274,11 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
 
-    const error = await service.refreshToday("115", "key-upstream").catch((thrown: unknown) => thrown);
+    const error = await service.refreshToday("116", "key-upstream").catch((thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(ExamSnapshotServiceError);
     expect(error).toMatchObject({ httpStatus: 502, code: "snapshot_source_unavailable", errorCount: 2 });
     expect(table.rows.size).toBe(0);
-    expect(attemptFor(settings, "115")?.last_error).toBe("snapshot_source_unavailable");
+    expect(attemptFor(settings, "116")?.last_error).toBe("snapshot_source_unavailable");
   });
 
   it("fails safe without writes when the crawler throws", async () => {
@@ -289,19 +293,19 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
 
-    await expect(service.refreshToday("115", "key-crawl-throw")).rejects.toMatchObject({
+    await expect(service.refreshToday("116", "key-crawl-throw")).rejects.toMatchObject({
       httpStatus: 502,
       code: "snapshot_crawl_failed"
     });
     expect(table.rows.size).toBe(0);
-    expect(attemptFor(settings, "115")?.last_error).toBe("snapshot_crawl_failed");
+    expect(attemptFor(settings, "116")?.last_error).toBe("snapshot_crawl_failed");
   });
 
   it("blocks the write when Slot B's validator rejects the snapshot", async () => {
     const table = makeTableDouble();
     const settings = makeSettings();
     // Two rows aimed at one source page: the contract treats that as an error, not a dedupe.
-    const duplicated = [courseRecord(), courseRecord({ course_code: "BKA115009" })];
+    const duplicated = [courseRecord(), courseRecord({ course_code: "BKA116009" })];
     const service = makeExamSnapshotService({
       settings,
       resolveDatabase: async () => availableResolution(table),
@@ -309,10 +313,10 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
 
-    const error = await service.refreshToday("115", "key-invalid").catch((thrown: unknown) => thrown);
+    const error = await service.refreshToday("116", "key-invalid").catch((thrown: unknown) => thrown);
     expect(error).toMatchObject({ httpStatus: 502, code: "snapshot_validation_failed" });
     expect(table.rows.size).toBe(0);
-    expect(attemptFor(settings, "115")?.last_error).toBe("snapshot_validation_failed");
+    expect(attemptFor(settings, "116")?.last_error).toBe("snapshot_validation_failed");
   });
 
   it("answers 503 with no write when the configured database cannot be reached", async () => {
@@ -326,10 +330,10 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
 
-    const error = await service.refreshToday("115", "key-db").catch((thrown: unknown) => thrown);
+    const error = await service.refreshToday("116", "key-db").catch((thrown: unknown) => thrown);
     expect(error).toMatchObject({ httpStatus: 503, code: "database_unreachable" });
     expect(table.rows.size).toBe(0);
-    expect(attemptFor(settings, "115")?.last_error).toBe("database_unreachable");
+    expect(attemptFor(settings, "116")?.last_error).toBe("database_unreachable");
   });
 
   it("fails safe without a fake success when a write is rejected mid-transaction", async () => {
@@ -348,9 +352,9 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
 
-    const error = await service.refreshToday("115", "key-denied").catch((thrown: unknown) => thrown);
+    const error = await service.refreshToday("116", "key-denied").catch((thrown: unknown) => thrown);
     expect(error).toMatchObject({ httpStatus: 503, code: "database_write_failed" });
-    expect(attemptFor(settings, "115")?.last_error).toBe("database_write_failed");
+    expect(attemptFor(settings, "116")?.last_error).toBe("database_write_failed");
   });
 
   it("replays the same idempotency key without crawling twice", async () => {
@@ -365,8 +369,8 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
 
-    const first = await service.refreshToday("115", "key-once");
-    const second = await service.refreshToday("115", "key-once");
+    const first = await service.refreshToday("116", "key-once");
+    const second = await service.refreshToday("116", "key-once");
     expect(crawls).toBe(1);
     expect(second).toMatchObject({ reused: true, changed_count: first.changed_count });
   });
@@ -382,7 +386,7 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
 
-    const result = await service.refreshToday("115", "key-partial");
+    const result = await service.refreshToday("116", "key-partial");
     expect(result).toMatchObject({ status: "fresh", changed_count: 1, error_count: 1 });
   });
 
@@ -393,14 +397,14 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       crawl: async () =>
         crawlResult([
           courseRecord(),
-          courseRecord({ exam_year: 116, course_code: "BKA116001", source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=3001" })
+          courseRecord({ exam_year: 115, course_code: "BKA115001", source_url: "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=3001" })
         ]),
       now: () => CLOCK
     });
 
-    const result = await service.refreshToday("115", "key-year-filter");
+    const result = await service.refreshToday("116", "key-year-filter");
     expect(result.total).toBe(1);
-    expect([...table.rows.keys()]).toEqual(["115:BKA115001"]);
+    expect([...table.rows.keys()]).toEqual(["116:BKA116001"]);
   });
 
   it("closes the handle it opened", async () => {
@@ -416,7 +420,7 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
       now: () => CLOCK
     });
     await service.listSnapshots();
-    await service.refreshToday("115", "key-close");
+    await service.refreshToday("116", "key-close");
     expect(closed).toBe(2);
   });
 

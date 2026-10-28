@@ -54,7 +54,7 @@ describe("GET/POST /api/admin/exam-snapshots", () => {
     expect(response.status).toBe(401);
   });
 
-  it("lists 115/116 and states plainly that the database is not configured", async () => {
+  it("lists only 116 and states plainly that the database is not configured", async () => {
     const { app, token } = buildApp();
     const response = await request(app)
       .get("/api/admin/exam-snapshots")
@@ -63,7 +63,7 @@ describe("GET/POST /api/admin/exam-snapshots", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data_source).toBe("unavailable");
-    expect(response.body.snapshots.map((row: { year: string }) => row.year)).toEqual(["115", "116"]);
+    expect(response.body.snapshots.map((row: { year: string }) => row.year)).toEqual(["116"]);
     for (const row of response.body.snapshots) {
       expect(row).toMatchObject({ status: "unavailable", last_error: "database_not_configured" });
       expect(row.row_count).toBeNull();
@@ -71,7 +71,27 @@ describe("GET/POST /api/admin/exam-snapshots", () => {
     }
   });
 
-  it("refuses a year outside 115/116 without pretending to refresh", async () => {
+  it("refuses 115 as out of scope without pretending to refresh", async () => {
+    const { app, token } = buildApp();
+    const response = await request(app)
+      .post("/api/admin/exam-snapshots/115/refresh-today")
+      .set("Origin", "http://127.0.0.1:5174")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "exam-snapshot-115-2026-10-04")
+      .send({});
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      year: "115",
+      status: "failed",
+      changed_count: 0,
+      error_count: 1,
+      fetched_at: null,
+      code: "invalid_exam_year"
+    });
+  });
+
+  it("refuses a year outside 116 without pretending to refresh", async () => {
     const { app, token } = buildApp();
     const response = await request(app)
       .post("/api/admin/exam-snapshots/117/refresh-today")
@@ -94,7 +114,7 @@ describe("GET/POST /api/admin/exam-snapshots", () => {
   it("requires an idempotency key for a write", async () => {
     const { app, token } = buildApp();
     const response = await request(app)
-      .post("/api/admin/exam-snapshots/115/refresh-today")
+      .post("/api/admin/exam-snapshots/116/refresh-today")
       .set("Origin", "http://127.0.0.1:5174")
       .set("Authorization", `Bearer ${token}`)
       .send({});
@@ -105,21 +125,21 @@ describe("GET/POST /api/admin/exam-snapshots", () => {
   it("answers 503 with zero writes when no database target is configured", async () => {
     const { app, token } = buildApp();
     const response = await request(app)
-      .post("/api/admin/exam-snapshots/115/refresh-today")
+      .post("/api/admin/exam-snapshots/116/refresh-today")
       .set("Origin", "http://127.0.0.1:5174")
       .set("Authorization", `Bearer ${token}`)
-      .set("Idempotency-Key", "exam-snapshot-115-2026-10-04")
+      .set("Idempotency-Key", "exam-snapshot-116-2026-10-04")
       .send({});
 
     expect(response.status).toBe(503);
     expect(response.body).toMatchObject({
-      year: "115",
+      year: "116",
       status: "failed",
       changed_count: 0,
       error_count: 1,
       fetched_at: null,
       code: "database_not_configured"
     });
-    expect(response.body.snapshot).toMatchObject({ year: "115", last_error: "database_not_configured" });
+    expect(response.body.snapshot).toMatchObject({ year: "116", last_error: "database_not_configured" });
   });
 });
