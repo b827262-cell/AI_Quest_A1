@@ -390,3 +390,46 @@ describe("Admin API HTTP authentication and quota behavior", () => {
     expect(auditRows.some((row) => row.action === "admin.request.mutation" && row.metadata_json.includes("admin:session:"))).toBe(true);
   });
 });
+
+describe("student questions routes", () => {
+  it("enforces the admin boundary and preserves question and deletion behavior", async () => {
+    const { app, dependencies, dbHandle, token } = buildTestApp();
+    const student = dependencies.repos.studentUsers.create({ googleSubject: "questions-student", email: "questions@example.test", displayName: "Student" });
+    const { sessionToken } = createStudentSessionSecrets();
+    dependencies.repos.studentSessions.create({ tokenDigest: digestStudentSecret(sessionToken), userId: student.id, expiresAt: "2099-01-01T00:00:00.000Z" });
+    const chat = dependencies.repos.chat.createSession({ bookId: "questions-fixture" });
+    const older = dependencies.repos.chat.addMessage({ sessionId: chat.id, role: "user", content: "older" });
+    const newer = dependencies.repos.chat.addMessage({ sessionId: chat.id, role: "user", content: "newer" });
+    const assistant = dependencies.repos.chat.addMessage({ sessionId: chat.id, role: "assistant", content: "answer" });
+    const setTime = dbHandle.sqlite.prepare("UPDATE chat_messages SET created_at = ? WHERE id = ?");
+    setTime.run("2020-01-01T00:00:00.000Z", older.id);
+    setTime.run("2021-01-01T00:00:00.000Z", newer.id);
+    const path = "/api/admin/student-questions";
+    const routes = [() => request(app).get(path), () => request(app).delete(`${path}/${older.id}`), () => request(app).post(`${path}/delete`).send({ ids: [newer.id] })];
+    for (const make of routes) {
+      expect((await make()).status).toBe(401);
+      expect((await make().set("Cookie", `ai_student_session=${sessionToken}`)).status).toBe(401);
+      expect((await make().set("x-admin-token", token).set("Origin", "https://evil.example.test")).status).toBe(403);
+    }
+    const session = await login(app);
+    for (const make of routes.slice(1)) {
+      expect((await make().set("Cookie", session.cookieHeader).set("Origin", "http://127.0.0.1:5174")).status).toBe(403);
+    }
+    const list = await request(app).get(path).set("Cookie", session.cookieHeader);
+    expect(list.status).toBe(200);
+    expect(list.body.questions.map((q: { id: string }) => q.id)).toEqual([newer.id, older.id]);
+    const del = await request(app).delete(`${path}/${older.id}`).set("Cookie", session.cookieHeader).set("Origin", "http://127.0.0.1:5174").set("x-csrf-token", session.csrf);
+    expect(del.status).toBe(200);
+    expect(del.body).toEqual({ deleted: true });
+    const missing = await request(app).delete(`${path}/missing`).set("Cookie", session.cookieHeader).set("Origin", "http://127.0.0.1:5174").set("x-csrf-token", session.csrf);
+    expect(missing.body).toEqual({ deleted: true });
+    const batch = await request(app).post(`${path}/delete`).set("Cookie", session.cookieHeader).set("Origin", "http://127.0.0.1:5174").set("x-csrf-token", session.csrf).send({ ids: [newer.id, 42, null, {}, "missing"] });
+    expect(batch.status).toBe(200);
+    expect(batch.body).toEqual({ deleted: 2 });
+    expect(dependencies.repos.chat.listAllMessages().map((m) => m.id)).toEqual([assistant.id]);
+    const audits = dbHandle.sqlite.prepare("SELECT action, metadata_json FROM ai_admin_audit_logs").all() as Array<{ action: string; metadata_json: string }>;
+    for (const auditPath of [`${path}/${older.id}`, `${path}/delete`]) {
+      expect(audits.some((row) => row.action === "admin.request.mutation" && row.metadata_json.includes(`"path":"${auditPath}"`) && row.metadata_json.includes('"statusCode":200'))).toBe(true);
+    }
+  });
+});
