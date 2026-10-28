@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { examCourseRecordV1Schema, type ExamCourseRecordV1, type ExamCourseYearV1 } from "@ai-smartbook/contracts";
+import { resolveIbrainUrl } from "./ibrain-url";
 
 /**
  * Parser for ec.ibrain.com.tw (Big5, classic ASP) public course pages.
@@ -100,18 +101,22 @@ export type ListingCourseLink = Readonly<{
   url: string;
 }>;
 
-const LISTING_ANCHOR = /<a\s+href=["']?([^"'<>]*?book\.asp\?[^"'<>]*?bkid=(\d+)[^"'<>]*?)["']?\s*>([\s\S]{1,200}?)<\/[Aa]>/gi;
+const LISTING_ANCHOR = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]{1,200}?)<\/a\s*>/gi;
 
 /** Course anchors of a category page, de-duplicated by bkid, first label wins. */
-export function parseListingCourseLinks(html: string, origin: string): ListingCourseLink[] {
+export function parseListingCourseLinks(html: string, listingPageUrl: string): ListingCourseLink[] {
   const links = new Map<string, ListingCourseLink>();
   for (const match of html.matchAll(LISTING_ANCHOR)) {
-    const href = match[1];
-    const bkid = match[2];
-    const label = stripIbrainTags(match[3]);
+    const href = decodeIbrainEntities(match[1] ?? match[2] ?? match[3] ?? "");
+    let url: URL;
+    try { url = new URL(resolveIbrainUrl(href, listingPageUrl)); } catch { continue; }
+    if (!/\/book\.asp$/i.test(url.pathname)) continue;
+    const bkid = [...url.searchParams].find(([key]) => key.toLowerCase() === "bkid")?.[1];
+    if (!bkid || !/^\d+$/.test(bkid)) continue;
+    const label = stripIbrainTags(match[4]);
     if (!label || label.length < 4) continue;
     if (links.has(bkid)) continue;
-    links.set(bkid, { bkid, courseName: label, url: `${origin}${href.startsWith("http") ? new URL(href).pathname : href}` });
+    links.set(bkid, { bkid, courseName: label, url: url.href });
   }
   return [...links.values()];
 }
