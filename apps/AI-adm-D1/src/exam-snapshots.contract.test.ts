@@ -103,6 +103,9 @@ describe("高普考資料快照 contract (Slot D real wiring)", () => {
   });
 
   describe("status derivation and formatting", () => {
+    it.each(["refresh_in_progress", "refresh_interrupted", "refresh_job_not_found", "idempotency_key_year_conflict", "snapshot_crawl_failed", "snapshot_refresh_failed", "admin_authentication_required"])("has a Chinese label for %s", (code) => {
+      expect(examSnapshotErrorLabel(code)).toMatch(/[\u4e00-\u9fff]/);
+    });
     it("treats a missing snapshot as not started", () => {
       expect(deriveExamSnapshotStatus({ last_snapshot_at: null, last_error: null }, "2026-10-03")).toBe("not_started");
     });

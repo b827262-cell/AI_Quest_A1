@@ -24,6 +24,8 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const requestSeq = useRef(0);
+  const lifecycle = useRef(0);
+  const pollWaits = useRef(new Map<ReturnType<typeof setTimeout>, () => void>());
 
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
@@ -42,7 +44,18 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
   }, [client]);
 
   useEffect(() => {
+    lifecycle.current += 1;
     void load();
+    const waits = pollWaits.current;
+    return () => {
+      lifecycle.current += 1;
+      requestSeq.current += 1;
+      for (const [timer, resolve] of waits) {
+        clearTimeout(timer);
+        resolve();
+      }
+      waits.clear();
+    };
   }, [load]);
 
   const totals = useMemo(() => ({
@@ -52,16 +65,24 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
   }), [snapshots]);
 
   async function refreshToday(year: ExamSnapshotYear) {
+    const generation = lifecycle.current;
+    const isActive = () => lifecycle.current === generation;
     setRefreshingYear(year);
     setError("");
     setMessage("");
     const idempotencyKey = `exam-snapshot-${year}-${crypto.randomUUID()}`;
     try {
       let job = await client.refreshTodaySnapshot(year, idempotencyKey);
+      if (!isActive()) return;
       setMessage(`${year} 年度快照更新中…`);
       for (let attempt = 0; job.status === "running" && attempt < REFRESH_POLL_MAX_ATTEMPTS; attempt++) {
-        await new Promise<void>((resolve) => setTimeout(resolve, REFRESH_POLL_INTERVAL_MS));
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => { pollWaits.current.delete(timer); resolve(); }, REFRESH_POLL_INTERVAL_MS);
+          pollWaits.current.set(timer, resolve);
+        });
+        if (!isActive()) return;
         job = await client.refreshStatus(year, job.job_id);
+        if (!isActive()) return;
       }
       if (job.status === "running") throw new Error("更新仍在執行，請稍後重新整理。");
       if (job.status === "failed") throw new Error(examSnapshotErrorLabel(job.error_code ?? null) ?? "快照更新失敗");
@@ -79,12 +100,14 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
           ? `${year} 年度今日快照更新失敗${examSnapshotErrorLabel(result.snapshot.last_error) ? `（${examSnapshotErrorLabel(result.snapshot.last_error)}）` : ""}，未寫入任何資料。`
           : `${year} 年度今日快照已更新，本次寫入 ${formatExamSnapshotCount(result.changed_count)} 筆，目前共 ${formatExamSnapshotCount(result.snapshot.row_count)} 筆。`);
     } catch (cause) {
+      if (!isActive()) return;
       // A rejected refresh must leave the table showing the last real database read.
       await load();
+      if (!isActive()) return;
       setMessage("");
       setError(cause instanceof Error ? cause.message : `${year} 年度快照更新失敗`);
     } finally {
-      setRefreshingYear(null);
+      if (isActive()) setRefreshingYear(null);
     }
   }
 

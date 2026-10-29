@@ -90,7 +90,14 @@ export const EXAM_SNAPSHOT_ERROR_LABELS: Readonly<Record<string, string>> = {
   database_write_failed: "資料庫寫入失敗",
   snapshot_source_unavailable: "上游來源頁面無法取得",
   snapshot_validation_failed: "快照內容未通過資料契約檢查",
-  snapshot_read_failed: "快照資料讀取失敗"
+  snapshot_read_failed: "快照資料讀取失敗",
+  snapshot_crawl_failed: "快照來源抓取失敗",
+  snapshot_refresh_failed: "快照更新失敗",
+  refresh_in_progress: "快照更新正在執行中，請稍候",
+  refresh_interrupted: "快照更新中斷，請重試",
+  refresh_job_not_found: "找不到快照更新工作",
+  idempotency_key_year_conflict: "更新識別碼已用於其他年度",
+  admin_authentication_required: "請先登入管理後台"
 };
 
 export const EXAM_SNAPSHOT_STATUS_LABELS: Record<ExamSnapshotStatus, string> = {

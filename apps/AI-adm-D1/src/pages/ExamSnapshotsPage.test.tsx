@@ -29,4 +29,45 @@ describe("exam snapshot job polling", () => {
     expect(client.refreshStatus).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
   });
+  it("stops polling when unmounted, including an already pending response", async () => {
+    vi.useFakeTimers();
+    const row = { year: "116", last_snapshot_at: null, row_count: 0, status: "not_started" as const, last_error: null };
+    const base: ExamSnapshotJob = { job_id: "job-1", year: "116", status: "running", started_at: "2026-10-29T00:00:00Z", reused: false };
+    let complete!: (job: ExamSnapshotJob) => void;
+    const pending = new Promise<ExamSnapshotJob>((resolve) => { complete = resolve; });
+    const client: ExamSnapshotClient = {
+      listSnapshots: vi.fn(async () => ({ snapshots: [row], data_source: "exam_courses" as const })),
+      refreshTodaySnapshot: vi.fn(async () => base),
+      refreshStatus: vi.fn(() => pending)
+    };
+    const container = document.createElement("div"); document.body.appendChild(container); const root = createRoot(container);
+    await act(async () => { root.render(<MemoryRouter><ExamSnapshotsPage client={client} /></MemoryRouter>); });
+    const button = [...container.querySelectorAll("button")].find((element) => element.textContent?.includes("更新今日快照"))!;
+    await act(async () => { button.click(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(client.refreshStatus).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+    await act(async () => { complete(base); await vi.advanceTimersByTimeAsync(10000); });
+    expect(client.refreshStatus).toHaveBeenCalledTimes(1);
+    expect(client.listSnapshots).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the scheduled poll when unmounted before the timer fires", async () => {
+    vi.useFakeTimers();
+    const row = { year: "116", last_snapshot_at: null, row_count: 0, status: "not_started" as const, last_error: null };
+    const base: ExamSnapshotJob = { job_id: "job-1", year: "116", status: "running", started_at: "2026-10-29T00:00:00Z", reused: false };
+    const client: ExamSnapshotClient = {
+      listSnapshots: vi.fn(async () => ({ snapshots: [row], data_source: "exam_courses" as const })),
+      refreshTodaySnapshot: vi.fn(async () => base),
+      refreshStatus: vi.fn(async () => base)
+    };
+    const container = document.createElement("div"); document.body.appendChild(container); const root = createRoot(container);
+    await act(async () => { root.render(<MemoryRouter><ExamSnapshotsPage client={client} /></MemoryRouter>); });
+    const button = [...container.querySelectorAll("button")].find((element) => element.textContent?.includes("更新今日快照"))!;
+    await act(async () => { button.click(); });
+    await act(async () => root.unmount());
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(client.refreshStatus).not.toHaveBeenCalled();
+  });
+
 });
