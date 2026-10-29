@@ -115,10 +115,12 @@ export type ExamSnapshotCrawlOptions = Readonly<{
   seeds?: readonly ExamSnapshotSeed[];
   fetcher?: PageFetcher;
   maxDetailPages?: number;
+  fetchedByUrl?: ReadonlyMap<string, number>;
   delayMs?: number;
   fetchedAt?: string;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
+  onDetailAttempt?: (url: string) => void;
 }>;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -126,7 +128,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 export async function runExamSnapshotCrawl(options: ExamSnapshotCrawlOptions = {}): Promise<ExamSnapshotCrawlResult> {
   const seeds = options.seeds ?? EXAM_SNAPSHOT_SEEDS;
   const fetcher = options.fetcher ?? defaultPageFetcher;
-  const maxDetailPages = options.maxDetailPages ?? 80;
+  const maxDetailPages = options.maxDetailPages ?? 120;
   const delayMs = options.delayMs ?? 80;
   const fetchedAt = options.fetchedAt ?? new Date().toISOString();
 
@@ -163,10 +165,16 @@ export async function runExamSnapshotCrawl(options: ExamSnapshotCrawlOptions = {
   let detailPagesFetched = 0;
   let skippedOutOfScope = 0;
 
-  for (const { link } of candidates.values()) {
+  const ordered = [...candidates.values()];
+  if (options.fetchedByUrl) {
+    // Unseen candidates first, then the least recently attempted URLs.
+    ordered.sort((a, b) => (options.fetchedByUrl!.get(a.link.url) ?? -Infinity) - (options.fetchedByUrl!.get(b.link.url) ?? -Infinity));
+  }
+  for (const { link } of ordered) {
     if (detailPagesFetched >= maxDetailPages) break;
     const url = link.url;
     detailPagesFetched += 1;
+    options.onDetailAttempt?.(url);
     try {
       const page = await fetcher(url, options.signal);
       if (page.status !== 200) {

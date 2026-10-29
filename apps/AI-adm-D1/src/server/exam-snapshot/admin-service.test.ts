@@ -67,6 +67,7 @@ function crawlResult(
 function makeTableDouble() {
   const rows = new Map<string, ExamCourseRecord>();
   const executed: string[] = [];
+  let transactionSnapshot: Map<string, ExamCourseRecord> | undefined;
   const executor: SqlExecutor = {
     async query(text: string, params?: readonly unknown[]) {
       executed.push(text);
@@ -100,6 +101,26 @@ function makeTableDouble() {
         }
         return { rows: outcomes };
       }
+      if (text === "BEGIN") { transactionSnapshot = new Map([...rows].map(([key, row]) => [key, { ...row }])); return { rows: [] }; }
+      if (text === "COMMIT") { transactionSnapshot = undefined; return { rows: [] }; }
+      if (text === "ROLLBACK") { rows.clear(); for (const [key, row] of transactionSnapshot ?? []) rows.set(key, row); transactionSnapshot = undefined; return { rows: [] }; }
+      if (text.startsWith("UPDATE exam_courses SET teacher")) {
+        const key = `${params?.[0]}:${params?.[1]}`;
+        const row = rows.get(key) as (ExamCourseRecord & { teacher?: string | null; applicable_scope?: string | null; revision?: number }) | undefined;
+        if (!row || (row.teacher ?? null) === params?.[2] && (row.applicable_scope ?? null) === params?.[3]) return { rows: [] };
+        row.teacher = params?.[2] as string | null;
+        row.applicable_scope = params?.[3] as string | null;
+        row.revision = (row.revision ?? 1) + Number(params?.[4] ?? 0);
+        return { rows: [{ exam_year: row.exam_year, course_code: row.course_code }] };
+      }
+      if (text.startsWith("SELECT source_url, fetched_at")) {
+        return { rows: [...rows.values()].filter((row) => row.exam_year === params?.[0] && row.category === params?.[1]).map((row) => ({ source_url: row.source_url, fetched_at: row.fetched_at })) };
+      }
+      if (text.startsWith("UPDATE exam_courses SET fetched_at")) {
+        const row = rows.get(`${params?.[0]}:${params?.[1]}`);
+        if (row) row.fetched_at = params?.[2] as string;
+        return { rows: [] };
+      }
       const examYear = Number(params?.[0]);
       const matching = [...rows.values()].filter((row) => row.exam_year === examYear && row.category === params?.[1]);
       const last = matching.map((row) => Date.parse(row.fetched_at)).sort((a, b) => b - a)[0];
@@ -130,6 +151,17 @@ function attemptFor(settings: ReturnType<typeof makeSettings>, year: string): Ex
 }
 
 describe("exam snapshot admin service (Slot D real wiring)", () => {
+  it("uses the 120 page default and retains the 80 ms delay", async () => {
+    const table = makeTableDouble();
+    let seen: { maxDetailPages: number; delayMs: number } | undefined;
+    const service = makeExamSnapshotService({
+      env: {}, resolveDatabase: async () => availableResolution(table),
+      crawl: async (options) => { seen = options; return crawlResult([courseRecord()]); }, now: () => CLOCK
+    });
+    await service.refreshToday("116", "default-limit-test");
+    expect(seen).toMatchObject({ maxDetailPages: 120, delayMs: 80 });
+  });
+
   it("reads only 116 straight out of exam_courses", async () => {
     const table = makeTableDouble();
     await table.executor.query("INSERT INTO exam_courses", [116, "高普考", "BKA116001", "116年高普考", "內容", "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=2001", CLOCK.toISOString(), "x".repeat(64)]);
@@ -422,6 +454,100 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
     await service.listSnapshots();
     await service.refreshToday("116", "key-close");
     expect(closed).toBe(2);
+  });
+
+  it("rolls back all rows if a later field write fails", async () => {
+    const table = makeTableDouble();
+    const failing: SqlExecutor = { async query(text, params) {
+      if (text.startsWith("UPDATE exam_courses SET teacher")) throw new Error("field write failed");
+      return table.executor.query(text, params);
+    } };
+    const service = makeExamSnapshotService({ resolveDatabase: async () => ({ available: true, handle: { executor: failing, close: async () => undefined } }),
+      crawl: async () => crawlResult([courseRecord()]), now: () => CLOCK });
+    await expect(service.refreshToday("116", "rollback-check")).rejects.toMatchObject({ code: "database_write_failed" });
+    expect(table.executed).toContain("ROLLBACK");
+    expect(table.rows.size).toBe(0);
+  });
+
+  it("counts an optional-field-only change as updated and increments revision", async () => {
+    const table = makeTableDouble();
+    const initial = { ...courseRecord(), teacher: "舊老師", applicable_scope: "舊範圍" };
+    const updated = { ...initial, teacher: "新老師", applicable_scope: "新範圍" };
+    let current = initial;
+    const service = makeExamSnapshotService({ resolveDatabase: async () => availableResolution(table),
+      crawl: async () => crawlResult([current]), now: () => CLOCK });
+    await service.refreshToday("116", "field-first");
+    current = updated;
+    const result = await service.refreshToday("116", "field-second");
+    expect(result).toMatchObject({ updated: 1, unchanged: 0, changed_count: 1 });
+    expect(table.rows.get("116:BKA116001")).toMatchObject({ teacher: "新老師", applicable_scope: "新範圍", revision: 2 });
+  });
+
+  it("persists failed and out-of-scope attempts across service instances even with zero records", async () => {
+    const table = makeTableDouble();
+    const settings = makeSettings();
+    const attemptedUrl = "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=42";
+    const first = makeExamSnapshotService({ settings, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { options.onDetailAttempt(attemptedUrl); return crawlResult([]); } });
+    await expect(first.refreshToday("116", "attempt-failed")).rejects.toMatchObject({ code: "snapshot_source_unavailable" });
+    let previous: number | undefined;
+    const second = makeExamSnapshotService({ settings, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { previous = options.fetchedByUrl.get(attemptedUrl); return crawlResult([courseRecord()]); } });
+    await second.refreshToday("116", "attempt-next");
+    expect(previous).toBeGreaterThan(0);
+  });
+
+  it("keeps a successful refresh and database write when the ledger write throws", async () => {
+    const table = makeTableDouble();
+    let writes = 0;
+    const settings = { get: () => null, set: () => { writes += 1; throw new Error("settings unavailable"); } };
+    const service = makeExamSnapshotService({ settings, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { options.onDetailAttempt("https://ec.ibrain.com.tw/book.asp?bkid=1"); return crawlResult([courseRecord()]); } });
+    const result = await service.refreshToday("116", "settings-failure-test");
+    expect(result).toMatchObject({ status: "fresh", inserted: 1 });
+    expect(table.rows.size).toBe(1);
+    expect(writes).toBe(1);
+  });
+
+  it("writes the ledger once after a refresh and keeps the newest attempt per URL", async () => {
+    const table = makeTableDouble();
+    const settings = makeSettings();
+    let writes = 0;
+    const counted = { get: settings.get, set(key: string, value: string) { writes += 1; settings.set(key, value); } };
+    const url = "https://ec.ibrain.com.tw/book.asp?bkid=1";
+    const service = makeExamSnapshotService({ settings: counted, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { options.onDetailAttempt(url); options.onDetailAttempt(url); options.onDetailAttempt("https://ec.ibrain.com.tw/book.asp?bkid=2"); expect(writes).toBe(0); return crawlResult([courseRecord()]); } });
+    await service.refreshToday("116", "settings-once-test");
+    expect(writes).toBe(1);
+    const attempts = attemptFor(settings, "116")?.detail_attempts;
+    expect(Object.keys(attempts ?? {})).toHaveLength(2);
+    expect(attempts?.[url]).toBe(CLOCK.getTime() + 2);
+  });
+
+  it("persists attempts once even when crawl throws", async () => {
+    const table = makeTableDouble();
+    const settings = makeSettings();
+    let writes = 0;
+    const counted = { get: settings.get, set(key: string, value: string) { writes += 1; settings.set(key, value); } };
+    const url = "https://ec.ibrain.com.tw/book.asp?bkid=9";
+    const service = makeExamSnapshotService({ settings: counted, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { options.onDetailAttempt(url); throw new Error("transport"); } });
+    await expect(service.refreshToday("116", "settings-throw-test")).rejects.toMatchObject({ code: "snapshot_crawl_failed" });
+    expect(writes).toBe(1);
+    expect(attemptFor(settings, "116")).toMatchObject({ last_error: "snapshot_crawl_failed", detail_attempts: { [url]: CLOCK.getTime() + 1 } });
+    expect(table.rows.size).toBe(0);
+  });
+
+  it("evicts the oldest attempted URLs when the ledger exceeds 4096 entries", async () => {
+    const table = makeTableDouble();
+    const settings = makeSettings();
+    const service = makeExamSnapshotService({ settings, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { for (let id = 0; id < 4100; id++) options.onDetailAttempt(`https://ec.ibrain.com.tw/book.asp?bkid=${id}`); return crawlResult([courseRecord()]); } });
+    await service.refreshToday("116", "settings-cap-test");
+    const attempts = attemptFor(settings, "116")?.detail_attempts ?? {};
+    expect(Object.keys(attempts)).toHaveLength(4096);
+    expect(attempts["https://ec.ibrain.com.tw/book.asp?bkid=0"]).toBeUndefined();
+    expect(attempts["https://ec.ibrain.com.tw/book.asp?bkid=4099"]).toBe(CLOCK.getTime() + 4100);
   });
 
 });

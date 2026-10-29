@@ -51,9 +51,10 @@ export const EXAM_SNAPSHOT_READ_SQL = [
 
 export const EXAM_SNAPSHOT_CATEGORY = EXAM_COURSE_ALLOWED_CATEGORIES[0];
 
-const DEFAULT_MAX_DETAIL_PAGES = 80;
+const DEFAULT_MAX_DETAIL_PAGES = 120;
 const DEFAULT_DELAY_MS = 80;
 const MAX_RECEIPTS = 64;
+const MAX_DETAIL_ATTEMPTS = 4096;
 
 export interface ExamSnapshotSettings {
   get(key: string): string | null;
@@ -63,6 +64,7 @@ export interface ExamSnapshotSettings {
 export interface ExamSnapshotAttempt {
   last_error: string | null;
   last_attempt_at: string;
+  detail_attempts?: Record<string, number>;
 }
 
 type ExamSnapshotLedger = Partial<Record<ExamSnapshotYear, ExamSnapshotAttempt>>;
@@ -83,7 +85,7 @@ export interface ExamSnapshotServiceOptions {
   env?: NodeJS.ProcessEnv;
   settings?: ExamSnapshotSettings;
   resolveDatabase?: (env: NodeJS.ProcessEnv) => Promise<ExamDatabaseResolution>;
-  crawl?: (options: { maxDetailPages: number; delayMs: number; fetchedAt: string }) => Promise<ExamSnapshotCrawlResult>;
+  crawl?: (options: { maxDetailPages: number; delayMs: number; fetchedAt: string; fetchedByUrl: ReadonlyMap<string, number>; onDetailAttempt: (url: string) => void }) => Promise<ExamSnapshotCrawlResult>;
   now?: () => Date;
 }
 
@@ -168,11 +170,13 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as ExamSnapshotLedger) : {};
   }
 
-  function recordAttempt(year: ExamSnapshotYear, lastError: string | null): void {
+  function recordAttempt(year: ExamSnapshotYear, lastError: string | null, detailAttempts: ReadonlyMap<string, number> = new Map()): void {
     if (!settings) return;
-    const ledger = readLedger();
-    ledger[year] = { last_error: lastError, last_attempt_at: now().toISOString() };
     try {
+      const ledger = readLedger();
+      const attempts = { ...ledger[year]?.detail_attempts, ...Object.fromEntries(detailAttempts) };
+      const entries = Object.entries(attempts).sort((a, b) => b[1] - a[1]).slice(0, MAX_DETAIL_ATTEMPTS);
+      ledger[year] = { ...ledger[year], last_error: lastError, last_attempt_at: now().toISOString(), detail_attempts: Object.fromEntries(entries) };
       settings.set(EXAM_SNAPSHOT_LEDGER_KEY, JSON.stringify(ledger));
     } catch {
       // A ledger that cannot be persisted only costs next load's tooltip; the
@@ -216,30 +220,51 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
       throw new ExamSnapshotServiceError(503, resolution.code, 1);
     }
     const executor = resolution.handle.executor;
+    const detailAttempts = new Map<string, number>();
+    let attemptError: string | null = null;
     try {
       const fetchedAt = now().toISOString();
+      const previous = await executor.query("SELECT source_url, fetched_at FROM exam_courses WHERE exam_year = $1 AND category = $2", [numericYear, EXAM_SNAPSHOT_CATEGORY]);
+      const fetchedByUrl = new Map<string, number>();
+      for (const row of previous.rows) {
+        const timestamp = new Date(String(row.fetched_at)).getTime();
+        if (typeof row.source_url === "string" && Number.isFinite(timestamp)) fetchedByUrl.set(row.source_url, timestamp);
+      }
+      const attemptLedger = readLedger()[year]?.detail_attempts ?? {};
+      for (const [url, timestamp] of Object.entries(attemptLedger)) {
+        if (Number.isFinite(timestamp)) fetchedByUrl.set(url, timestamp);
+      }
+      let latestAttempt = Math.max(now().getTime(), ...Object.values(attemptLedger).filter(Number.isFinite));
+      const onDetailAttempt = (url: string) => {
+        detailAttempts.delete(url);
+        detailAttempts.set(url, ++latestAttempt);
+        if (detailAttempts.size > MAX_DETAIL_ATTEMPTS) {
+          const oldest = detailAttempts.keys().next().value;
+          if (oldest !== undefined) detailAttempts.delete(oldest);
+        }
+      };
       let crawlResult: ExamSnapshotCrawlResult;
       try {
         crawlResult = await crawl({
           maxDetailPages: positiveNumber(env.EXAM_SNAPSHOT_MAX_DETAIL_PAGES, DEFAULT_MAX_DETAIL_PAGES),
           delayMs: nonNegativeNumber(env.EXAM_SNAPSHOT_DELAY_MS, DEFAULT_DELAY_MS),
-          fetchedAt
+          fetchedAt,
+          fetchedByUrl,
+          onDetailAttempt
         });
       } catch {
         // A transport/parser exception must be just as visible as a crawl that
         // returns no rows: nothing was written, so it cannot be a success.
-        recordAttempt(year, "snapshot_crawl_failed");
         throw new ExamSnapshotServiceError(502, "snapshot_crawl_failed", 1);
       }
       // The year/category gate is Slot B's own constant, applied before anything is written.
-      const records: ExamCourseRecord[] = crawlResult.records.filter(
+      const records = crawlResult.records.filter(
         (record) => record.exam_year === numericYear && record.category === EXAM_SNAPSHOT_CATEGORY
       );
 
       if (records.length === 0) {
         // A bounded 高普考 crawl that yields nothing for a supported year means the
         // source did not answer. Writing nothing and reporting success is forbidden.
-        recordAttempt(year, "snapshot_source_unavailable");
         throw new ExamSnapshotServiceError(502, "snapshot_source_unavailable", Math.max(crawlResult.failures.length, 1));
       }
 
@@ -250,19 +275,42 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
         liveFetchEvidence: `admin refresh ${idempotencyKey}: ${crawlResult.detailPagesFetched} detail pages fetched live from ${IBRAIN_ORIGIN}`
       });
       if (!report.ok) {
-        recordAttempt(year, "snapshot_validation_failed");
         throw new ExamSnapshotServiceError(502, "snapshot_validation_failed", report.errors);
       }
 
       let upsert: ExamCourseUpsertResult;
       try {
-        upsert = await upsertExamCourses(executor, records);
+        await executor.query("BEGIN");
+        try {
+          upsert = await upsertExamCourses(executor, records);
+          // Slot B's eight-column upsert predates these optional search fields.
+          // Backfill even unchanged hashes, and keep both writes atomic.
+          for (const record of records) {
+            const key = `${record.exam_year}:${record.course_code}`;
+            const unchangedIndex = upsert.unchanged_keys.indexOf(key);
+            const fieldUpdate = await executor.query(
+              "UPDATE exam_courses SET teacher = $3, applicable_scope = $4, revision = revision + $5, updated_at = CASE WHEN $5 = 1 THEN now() ELSE updated_at END WHERE exam_year = $1 AND course_code = $2 AND (teacher IS DISTINCT FROM $3 OR applicable_scope IS DISTINCT FROM $4) RETURNING exam_year, course_code",
+              [record.exam_year, record.course_code, record.teacher ?? null, record.applicable_scope ?? null, unchangedIndex >= 0 ? 1 : 0]
+            );
+            if (fieldUpdate.rows.length > 0 && unchangedIndex >= 0) {
+              upsert.unchanged_keys.splice(unchangedIndex, 1);
+              upsert.unchanged -= 1;
+              upsert.updated_keys.push(key);
+              upsert.updated += 1;
+            }
+          }
+          for (const record of records) {
+            await executor.query("UPDATE exam_courses SET fetched_at = $3::timestamptz WHERE exam_year = $1 AND course_code = $2", [record.exam_year, record.course_code, record.fetched_at]);
+          }
+          await executor.query("COMMIT");
+        } catch (error) {
+          await executor.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        }
       } catch {
-        recordAttempt(year, "database_write_failed");
         throw new ExamSnapshotServiceError(503, "database_write_failed", 1);
       }
 
-      recordAttempt(year, null);
       // The rows were just written with `fetchedAt`, so the year is by definition
       // current; the read-back only supplies the authoritative count.
       const stored = await readYear(executor, year, numericYear);
@@ -281,7 +329,11 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
       };
       storeReceipt(idempotencyKey, response);
       return response;
+    } catch (error) {
+      attemptError = error instanceof ExamSnapshotServiceError ? error.code : "snapshot_refresh_failed";
+      throw error;
     } finally {
+      recordAttempt(year, attemptError, detailAttempts);
       await resolution.handle.close().catch(() => undefined);
     }
   }

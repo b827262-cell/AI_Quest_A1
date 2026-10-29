@@ -75,9 +75,10 @@ export function extractMetaDescription(html: string): string {
 export function extractProductFields(html: string): Record<string, string> {
   const region = stripIbrainTags(html);
   const fields: Record<string, string> = {};
-  for (const match of region.matchAll(/【([^】]{1,8})】\s*([^\u3010]{1,240}?)(?=\s*【|$)/g)) {
+  for (const match of region.matchAll(/【([^】]{1,8})】\s*([^\u3010]+?)(?=\s*【|$)/g)) {
     const label = match[1].trim();
-    const value = match[2].trim();
+    const limit = label === "師資" ? 128 : label === "適用" ? 256 : 20_000;
+    const value = match[2].trim().slice(0, limit);
     if (label && value && !(label in fields)) fields[label] = value;
   }
   return fields;
@@ -181,6 +182,8 @@ export function buildCourseRecord(input: CourseDetailInput): ExamCourseRecordV1 
     category: deriveCategory(courseName, deriveCategory(input.listingCourseName ?? "")),
     course_code: courseCode.slice(0, 128),
     course_name: courseName.slice(0, 512),
+    teacher: fields["師資"]?.slice(0, 128) || null,
+    applicable_scope: fields["適用"]?.slice(0, 256) || null,
     course_content: extractCourseContent(input.html),
     source_url: input.url.slice(0, 2_048),
     fetched_at: input.fetchedAt,
