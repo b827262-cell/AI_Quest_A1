@@ -100,6 +100,23 @@ function makeTableDouble() {
         }
         return { rows: outcomes };
       }
+      if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") return { rows: [] };
+      if (text.startsWith("UPDATE exam_courses SET teacher")) {
+        const key = `${params?.[0]}:${params?.[1]}`;
+        const row = rows.get(key) as (ExamCourseRecord & { teacher?: string | null; applicable_scope?: string | null }) | undefined;
+        if (!row || (row.teacher ?? null) === params?.[2] && (row.applicable_scope ?? null) === params?.[3]) return { rows: [] };
+        row.teacher = params?.[2] as string | null;
+        row.applicable_scope = params?.[3] as string | null;
+        return { rows: [{ exam_year: row.exam_year, course_code: row.course_code }] };
+      }
+      if (text.startsWith("SELECT source_url, fetched_at")) {
+        return { rows: [...rows.values()].filter((row) => row.exam_year === params?.[0] && row.category === params?.[1]).map((row) => ({ source_url: row.source_url, fetched_at: row.fetched_at })) };
+      }
+      if (text.startsWith("UPDATE exam_courses SET fetched_at")) {
+        const row = rows.get(`${params?.[0]}:${params?.[1]}`);
+        if (row) row.fetched_at = params?.[2] as string;
+        return { rows: [] };
+      }
       const examYear = Number(params?.[0]);
       const matching = [...rows.values()].filter((row) => row.exam_year === examYear && row.category === params?.[1]);
       const last = matching.map((row) => Date.parse(row.fetched_at)).sort((a, b) => b - a)[0];
@@ -130,6 +147,17 @@ function attemptFor(settings: ReturnType<typeof makeSettings>, year: string): Ex
 }
 
 describe("exam snapshot admin service (Slot D real wiring)", () => {
+  it("uses the 120 page default and retains the 80 ms delay", async () => {
+    const table = makeTableDouble();
+    let seen: { maxDetailPages: number; delayMs: number } | undefined;
+    const service = makeExamSnapshotService({
+      env: {}, resolveDatabase: async () => availableResolution(table),
+      crawl: async (options) => { seen = options; return crawlResult([courseRecord()]); }, now: () => CLOCK
+    });
+    await service.refreshToday("116", "default-limit-test");
+    expect(seen).toMatchObject({ maxDetailPages: 120, delayMs: 80 });
+  });
+
   it("reads only 116 straight out of exam_courses", async () => {
     const table = makeTableDouble();
     await table.executor.query("INSERT INTO exam_courses", [116, "高普考", "BKA116001", "116年高普考", "內容", "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=2001", CLOCK.toISOString(), "x".repeat(64)]);

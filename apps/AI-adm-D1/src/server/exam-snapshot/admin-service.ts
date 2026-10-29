@@ -51,7 +51,7 @@ export const EXAM_SNAPSHOT_READ_SQL = [
 
 export const EXAM_SNAPSHOT_CATEGORY = EXAM_COURSE_ALLOWED_CATEGORIES[0];
 
-const DEFAULT_MAX_DETAIL_PAGES = 80;
+const DEFAULT_MAX_DETAIL_PAGES = 120;
 const DEFAULT_DELAY_MS = 80;
 const MAX_RECEIPTS = 64;
 
@@ -83,7 +83,7 @@ export interface ExamSnapshotServiceOptions {
   env?: NodeJS.ProcessEnv;
   settings?: ExamSnapshotSettings;
   resolveDatabase?: (env: NodeJS.ProcessEnv) => Promise<ExamDatabaseResolution>;
-  crawl?: (options: { maxDetailPages: number; delayMs: number; fetchedAt: string }) => Promise<ExamSnapshotCrawlResult>;
+  crawl?: (options: { maxDetailPages: number; delayMs: number; fetchedAt: string; fetchedByUrl: ReadonlyMap<string, number> }) => Promise<ExamSnapshotCrawlResult>;
   now?: () => Date;
 }
 
@@ -218,12 +218,19 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
     const executor = resolution.handle.executor;
     try {
       const fetchedAt = now().toISOString();
+      const previous = await executor.query("SELECT source_url, fetched_at FROM exam_courses WHERE exam_year = $1 AND category = $2", [numericYear, EXAM_SNAPSHOT_CATEGORY]);
+      const fetchedByUrl = new Map<string, number>();
+      for (const row of previous.rows) {
+        const timestamp = new Date(String(row.fetched_at)).getTime();
+        if (typeof row.source_url === "string" && Number.isFinite(timestamp)) fetchedByUrl.set(row.source_url, timestamp);
+      }
       let crawlResult: ExamSnapshotCrawlResult;
       try {
         crawlResult = await crawl({
           maxDetailPages: positiveNumber(env.EXAM_SNAPSHOT_MAX_DETAIL_PAGES, DEFAULT_MAX_DETAIL_PAGES),
           delayMs: nonNegativeNumber(env.EXAM_SNAPSHOT_DELAY_MS, DEFAULT_DELAY_MS),
-          fetchedAt
+          fetchedAt,
+          fetchedByUrl
         });
       } catch {
         // A transport/parser exception must be just as visible as a crawl that
@@ -232,7 +239,7 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
         throw new ExamSnapshotServiceError(502, "snapshot_crawl_failed", 1);
       }
       // The year/category gate is Slot B's own constant, applied before anything is written.
-      const records: ExamCourseRecord[] = crawlResult.records.filter(
+      const records = crawlResult.records.filter(
         (record) => record.exam_year === numericYear && record.category === EXAM_SNAPSHOT_CATEGORY
       );
 
@@ -256,7 +263,33 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
 
       let upsert: ExamCourseUpsertResult;
       try {
-        upsert = await upsertExamCourses(executor, records);
+        await executor.query("BEGIN");
+        try {
+          upsert = await upsertExamCourses(executor, records);
+          // Slot B's eight-column upsert predates these optional search fields.
+          // Backfill even unchanged hashes, and keep both writes atomic.
+          for (const record of records) {
+            const fieldUpdate = await executor.query(
+              "UPDATE exam_courses SET teacher = $3, applicable_scope = $4 WHERE exam_year = $1 AND course_code = $2 AND (teacher IS DISTINCT FROM $3 OR applicable_scope IS DISTINCT FROM $4) RETURNING exam_year, course_code",
+              [record.exam_year, record.course_code, record.teacher ?? null, record.applicable_scope ?? null]
+            );
+            const key = `${record.exam_year}:${record.course_code}`;
+            const unchangedIndex = upsert.unchanged_keys.indexOf(key);
+            if (fieldUpdate.rows.length > 0 && unchangedIndex >= 0) {
+              upsert.unchanged_keys.splice(unchangedIndex, 1);
+              upsert.unchanged -= 1;
+              upsert.updated_keys.push(key);
+              upsert.updated += 1;
+            }
+          }
+          for (const record of records) {
+            await executor.query("UPDATE exam_courses SET fetched_at = $3::timestamptz WHERE exam_year = $1 AND course_code = $2", [record.exam_year, record.course_code, record.fetched_at]);
+          }
+          await executor.query("COMMIT");
+        } catch (error) {
+          await executor.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        }
       } catch {
         recordAttempt(year, "database_write_failed");
         throw new ExamSnapshotServiceError(503, "database_write_failed", 1);
