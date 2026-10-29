@@ -12,7 +12,6 @@ import {
   formatExamSnapshotTime,
   isExamSnapshotYear,
   taipeiDateKey,
-  type ExamSnapshotRefreshResponse,
   type ExamSnapshotRequest
 } from "./exam-snapshots-contract";
 
@@ -81,18 +80,10 @@ describe("高普考資料快照 contract (Slot D real wiring)", () => {
       expect(calls).toEqual([{ path: "/api/admin/exam-snapshots", method: "GET", headers: {} }]);
     });
     it("posts the refresh with an idempotency key", async () => {
-      const receipt: ExamSnapshotRefreshResponse = {
-        year: "116",
-        status: "fresh",
-        changed_count: 12,
-        error_count: 0,
-        fetched_at: CLOCK.toISOString(),
-        reused: false,
-        snapshot: { year: "116", last_snapshot_at: CLOCK.toISOString(), row_count: 12, status: "fresh", last_error: null }
-      };
+      const receipt = { job_id: "job-1", year: "116", status: "running", started_at: CLOCK.toISOString(), reused: false };
       const { client, calls } = recordingClient({ [EXAM_SNAPSHOT_ENDPOINTS.refreshToday("116")]: receipt });
       const key = `exam-snapshot-116-${taipeiDateKey(CLOCK)}`;
-      await expect(client.refreshTodaySnapshot("116", key)).resolves.toMatchObject({ changed_count: 12, fetched_at: CLOCK.toISOString() });
+      await expect(client.refreshTodaySnapshot("116", key)).resolves.toMatchObject({ job_id: "job-1", status: "running", started_at: CLOCK.toISOString() });
       expect(calls[0]).toMatchObject({ method: "POST", headers: { "Idempotency-Key": key } });
     });
     it("reuses the shared http helper, so cookies/CSRF/401 stay in one place", () => {

@@ -12,6 +12,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
+import { makeBackgroundExamSnapshotService, RefreshInProgressError } from "./background-service";
 import {
   EXAM_SNAPSHOT_ERROR_LABELS,
   type ExamSnapshotRefreshResponse,
@@ -26,6 +27,7 @@ export interface ExamSnapshotRouterOptions {
   env?: NodeJS.ProcessEnv;
   settings?: ExamSnapshotSettings;
   service?: ExamSnapshotService;
+  background?: ReturnType<typeof makeBackgroundExamSnapshotService>;
 }
 
 function examSnapshotErrorLabel(code: string): string {
@@ -52,6 +54,7 @@ function refreshFailureBody(year: string, code: string, changedCount: number, er
 }
 
 function sendServiceError(res: Response, year: string, error: unknown) {
+  if (error instanceof RefreshInProgressError) return res.status(409).json({ ...refreshFailureBody(year, error.code, 0, 0), job_id: error.jobId });
   if (error instanceof ExamSnapshotServiceError) {
     return res.status(error.httpStatus).json(refreshFailureBody(year, error.code, error.changedCount, error.errorCount));
   }
@@ -62,6 +65,7 @@ function sendServiceError(res: Response, year: string, error: unknown) {
 export function createExamSnapshotRouter(options: ExamSnapshotRouterOptions = {}): Router {
   const router = Router();
   const service = options.service ?? makeExamSnapshotService({ env: options.env, settings: options.settings });
+  const background = options.background ?? makeBackgroundExamSnapshotService({ worker: service, env: options.env });
 
   function requireAdmin(req: Request, res: Response): boolean {
     if (!req.adminAuth) {
@@ -88,10 +92,18 @@ export function createExamSnapshotRouter(options: ExamSnapshotRouterOptions = {}
     if (!EXAM_SNAPSHOT_IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
       return res.status(400).json(refreshFailureBody(year, "missing_idempotency_key", 0, 1));
     }
-    service
-      .refreshToday(year, idempotencyKey)
-      .then((payload) => res.json(payload))
+    background
+      .start(year, idempotencyKey)
+      .then((payload) => res.status(202).json(payload))
       .catch((error) => sendServiceError(res, year, error));
+  });
+
+  router.get("/:year/jobs/:jobId", (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    res.setHeader("Cache-Control", "no-store");
+    background.status(req.params.year ?? "", req.params.jobId ?? "")
+      .then((payload) => res.json(payload))
+      .catch((error) => sendServiceError(res, req.params.year ?? "", error));
   });
 
   return router;

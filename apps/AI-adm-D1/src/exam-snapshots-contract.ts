@@ -58,14 +58,26 @@ export interface ExamSnapshotRefreshResponse {
   snapshot: ExamSnapshotRow;
 }
 
+export interface ExamSnapshotJob {
+  job_id: string;
+  year: string;
+  status: "running" | "succeeded" | "failed";
+  started_at: string;
+  reused: boolean;
+  response?: ExamSnapshotRefreshResponse;
+  error_code?: string;
+}
+
 export interface ExamSnapshotClient {
   listSnapshots(): Promise<ExamSnapshotListResponse>;
-  refreshTodaySnapshot(year: ExamSnapshotYear, idempotencyKey: string): Promise<ExamSnapshotRefreshResponse>;
+  refreshTodaySnapshot(year: ExamSnapshotYear, idempotencyKey: string): Promise<ExamSnapshotJob>;
+  refreshStatus(year: ExamSnapshotYear, jobId: string): Promise<ExamSnapshotJob>;
 }
 
 export const EXAM_SNAPSHOT_ENDPOINTS = {
   list: "/api/admin/exam-snapshots",
-  refreshToday: (year: ExamSnapshotYear) => `/api/admin/exam-snapshots/${encodeURIComponent(year)}/refresh-today`
+  refreshToday: (year: ExamSnapshotYear) => `/api/admin/exam-snapshots/${encodeURIComponent(year)}/refresh-today`,
+  job: (year: ExamSnapshotYear, jobId: string) => `/api/admin/exam-snapshots/${encodeURIComponent(year)}/jobs/${encodeURIComponent(jobId)}`
 } as const;
 
 /** Machine codes the admin API may return, mapped to the text the page shows. */
@@ -153,10 +165,13 @@ export function createExamSnapshotHttpClient(request: ExamSnapshotRequest): Exam
       return request<ExamSnapshotListResponse>(EXAM_SNAPSHOT_ENDPOINTS.list);
     },
     refreshTodaySnapshot(year, idempotencyKey) {
-      return request<ExamSnapshotRefreshResponse>(EXAM_SNAPSHOT_ENDPOINTS.refreshToday(year), {
+      return request<ExamSnapshotJob>(EXAM_SNAPSHOT_ENDPOINTS.refreshToday(year), {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey }
       });
+    },
+    refreshStatus(year, jobId) {
+      return request<ExamSnapshotJob>(EXAM_SNAPSHOT_ENDPOINTS.job(year, jobId));
     }
   };
 }
