@@ -497,4 +497,57 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
     expect(previous).toBeGreaterThan(0);
   });
 
+  it("keeps a successful refresh and database write when the ledger write throws", async () => {
+    const table = makeTableDouble();
+    let writes = 0;
+    const settings = { get: () => null, set: () => { writes += 1; throw new Error("settings unavailable"); } };
+    const service = makeExamSnapshotService({ settings, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { options.onDetailAttempt("https://ec.ibrain.com.tw/book.asp?bkid=1"); return crawlResult([courseRecord()]); } });
+    const result = await service.refreshToday("116", "settings-failure-test");
+    expect(result).toMatchObject({ status: "fresh", inserted: 1 });
+    expect(table.rows.size).toBe(1);
+    expect(writes).toBe(1);
+  });
+
+  it("writes the ledger once after a refresh and keeps the newest attempt per URL", async () => {
+    const table = makeTableDouble();
+    const settings = makeSettings();
+    let writes = 0;
+    const counted = { get: settings.get, set(key: string, value: string) { writes += 1; settings.set(key, value); } };
+    const url = "https://ec.ibrain.com.tw/book.asp?bkid=1";
+    const service = makeExamSnapshotService({ settings: counted, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { options.onDetailAttempt(url); options.onDetailAttempt(url); options.onDetailAttempt("https://ec.ibrain.com.tw/book.asp?bkid=2"); expect(writes).toBe(0); return crawlResult([courseRecord()]); } });
+    await service.refreshToday("116", "settings-once-test");
+    expect(writes).toBe(1);
+    const attempts = attemptFor(settings, "116")?.detail_attempts;
+    expect(Object.keys(attempts ?? {})).toHaveLength(2);
+    expect(attempts?.[url]).toBe(CLOCK.getTime() + 2);
+  });
+
+  it("persists attempts once even when crawl throws", async () => {
+    const table = makeTableDouble();
+    const settings = makeSettings();
+    let writes = 0;
+    const counted = { get: settings.get, set(key: string, value: string) { writes += 1; settings.set(key, value); } };
+    const url = "https://ec.ibrain.com.tw/book.asp?bkid=9";
+    const service = makeExamSnapshotService({ settings: counted, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { options.onDetailAttempt(url); throw new Error("transport"); } });
+    await expect(service.refreshToday("116", "settings-throw-test")).rejects.toMatchObject({ code: "snapshot_crawl_failed" });
+    expect(writes).toBe(1);
+    expect(attemptFor(settings, "116")).toMatchObject({ last_error: "snapshot_crawl_failed", detail_attempts: { [url]: CLOCK.getTime() + 1 } });
+    expect(table.rows.size).toBe(0);
+  });
+
+  it("evicts the oldest attempted URLs when the ledger exceeds 4096 entries", async () => {
+    const table = makeTableDouble();
+    const settings = makeSettings();
+    const service = makeExamSnapshotService({ settings, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { for (let id = 0; id < 4100; id++) options.onDetailAttempt(`https://ec.ibrain.com.tw/book.asp?bkid=${id}`); return crawlResult([courseRecord()]); } });
+    await service.refreshToday("116", "settings-cap-test");
+    const attempts = attemptFor(settings, "116")?.detail_attempts ?? {};
+    expect(Object.keys(attempts)).toHaveLength(4096);
+    expect(attempts["https://ec.ibrain.com.tw/book.asp?bkid=0"]).toBeUndefined();
+    expect(attempts["https://ec.ibrain.com.tw/book.asp?bkid=4099"]).toBe(CLOCK.getTime() + 4100);
+  });
+
 });

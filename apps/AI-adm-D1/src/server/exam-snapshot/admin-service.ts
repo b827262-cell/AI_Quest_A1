@@ -170,11 +170,13 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as ExamSnapshotLedger) : {};
   }
 
-  function recordAttempt(year: ExamSnapshotYear, lastError: string | null): void {
+  function recordAttempt(year: ExamSnapshotYear, lastError: string | null, detailAttempts: ReadonlyMap<string, number> = new Map()): void {
     if (!settings) return;
-    const ledger = readLedger();
-    ledger[year] = { ...ledger[year], last_error: lastError, last_attempt_at: now().toISOString() };
     try {
+      const ledger = readLedger();
+      const attempts = { ...ledger[year]?.detail_attempts, ...Object.fromEntries(detailAttempts) };
+      const entries = Object.entries(attempts).sort((a, b) => b[1] - a[1]).slice(0, MAX_DETAIL_ATTEMPTS);
+      ledger[year] = { ...ledger[year], last_error: lastError, last_attempt_at: now().toISOString(), detail_attempts: Object.fromEntries(entries) };
       settings.set(EXAM_SNAPSHOT_LEDGER_KEY, JSON.stringify(ledger));
     } catch {
       // A ledger that cannot be persisted only costs next load's tooltip; the
@@ -218,6 +220,8 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
       throw new ExamSnapshotServiceError(503, resolution.code, 1);
     }
     const executor = resolution.handle.executor;
+    const detailAttempts = new Map<string, number>();
+    let attemptError: string | null = null;
     try {
       const fetchedAt = now().toISOString();
       const previous = await executor.query("SELECT source_url, fetched_at FROM exam_courses WHERE exam_year = $1 AND category = $2", [numericYear, EXAM_SNAPSHOT_CATEGORY]);
@@ -232,13 +236,12 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
       }
       let latestAttempt = Math.max(now().getTime(), ...Object.values(attemptLedger).filter(Number.isFinite));
       const onDetailAttempt = (url: string) => {
-        if (!settings) return;
-        const ledger = readLedger();
-        const current = ledger[year] ?? { last_error: null, last_attempt_at: now().toISOString() };
-        const attempts = { ...current.detail_attempts, [url]: ++latestAttempt };
-        const entries = Object.entries(attempts).sort((a, b) => b[1] - a[1]).slice(0, MAX_DETAIL_ATTEMPTS);
-        ledger[year] = { ...current, detail_attempts: Object.fromEntries(entries) };
-        settings.set(EXAM_SNAPSHOT_LEDGER_KEY, JSON.stringify(ledger));
+        detailAttempts.delete(url);
+        detailAttempts.set(url, ++latestAttempt);
+        if (detailAttempts.size > MAX_DETAIL_ATTEMPTS) {
+          const oldest = detailAttempts.keys().next().value;
+          if (oldest !== undefined) detailAttempts.delete(oldest);
+        }
       };
       let crawlResult: ExamSnapshotCrawlResult;
       try {
@@ -252,7 +255,6 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
       } catch {
         // A transport/parser exception must be just as visible as a crawl that
         // returns no rows: nothing was written, so it cannot be a success.
-        recordAttempt(year, "snapshot_crawl_failed");
         throw new ExamSnapshotServiceError(502, "snapshot_crawl_failed", 1);
       }
       // The year/category gate is Slot B's own constant, applied before anything is written.
@@ -263,7 +265,6 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
       if (records.length === 0) {
         // A bounded 高普考 crawl that yields nothing for a supported year means the
         // source did not answer. Writing nothing and reporting success is forbidden.
-        recordAttempt(year, "snapshot_source_unavailable");
         throw new ExamSnapshotServiceError(502, "snapshot_source_unavailable", Math.max(crawlResult.failures.length, 1));
       }
 
@@ -274,7 +275,6 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
         liveFetchEvidence: `admin refresh ${idempotencyKey}: ${crawlResult.detailPagesFetched} detail pages fetched live from ${IBRAIN_ORIGIN}`
       });
       if (!report.ok) {
-        recordAttempt(year, "snapshot_validation_failed");
         throw new ExamSnapshotServiceError(502, "snapshot_validation_failed", report.errors);
       }
 
@@ -308,11 +308,9 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
           throw error;
         }
       } catch {
-        recordAttempt(year, "database_write_failed");
         throw new ExamSnapshotServiceError(503, "database_write_failed", 1);
       }
 
-      recordAttempt(year, null);
       // The rows were just written with `fetchedAt`, so the year is by definition
       // current; the read-back only supplies the authoritative count.
       const stored = await readYear(executor, year, numericYear);
@@ -331,7 +329,11 @@ export function makeExamSnapshotService(options: ExamSnapshotServiceOptions = {}
       };
       storeReceipt(idempotencyKey, response);
       return response;
+    } catch (error) {
+      attemptError = error instanceof ExamSnapshotServiceError ? error.code : "snapshot_refresh_failed";
+      throw error;
     } finally {
+      recordAttempt(year, attemptError, detailAttempts);
       await resolution.handle.close().catch(() => undefined);
     }
   }
