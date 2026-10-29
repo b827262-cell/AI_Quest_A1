@@ -95,9 +95,9 @@ describe("persistent detail rotation", () => {
       for (const record of result.records) fetchedByUrl.set(record.source_url, Date.parse(record.fetched_at));
       batches.push(urls);
     }
-    expect(batches.map((batch) => batch.length)).toEqual([120, 57, 120]);
+    expect(batches.map((batch) => batch.length)).toEqual([120, 120, 120]);
     expect(new Set([...batches[0], ...batches[1]]).size).toBe(177);
-    expect(batches[2]).toEqual(batches[0]);
+    expect(new Set(batches[2]).size).toBe(120);
   });
 
   it("prioritizes new and failed candidates and ignores removed ones", async () => {
@@ -123,7 +123,38 @@ describe("persistent detail rotation", () => {
       for (const record of result.records) fetchedByUrl.set(record.source_url, 200);
       batches.push(urls);
     }
-    expect(batches[0].map((url) => new URL(url).searchParams.get("bkid"))).toEqual(["2", "4"]);
-    expect(batches[1].map((url) => new URL(url).searchParams.get("bkid"))).toEqual(["2"]);
+    expect(batches[0].map((url) => new URL(url).searchParams.get("bkid"))).toEqual(["2", "4", "3"]);
+    expect(batches[1].map((url) => new URL(url).searchParams.get("bkid"))).toEqual(["2", "3", "4"]);
+  });
+});
+
+
+describe("rotation keeps moving past rejected pages", () => {
+  it.each(["failed", "out-of-scope"])("covers 177 candidates despite a persistently %s page", async (kind) => {
+    const seen = new Map<string, number>();
+    const listing = Buffer.concat(Array.from({ length: 177 }, (_, i) => Buffer.concat([
+      Buffer.from(`<a href="book.asp?bkid=${i + 1}">116 `), Buffer.from("b0aaa6d2", "hex"), Buffer.from(` ${i + 1}</a>`)
+    ])));
+    const all = new Set<string>();
+    const batches: string[][] = [];
+    let clock = 1;
+    for (let round = 0; round < 4; round++) {
+      const urls: string[] = [];
+      await runExamSnapshotCrawl({ seeds: [{ group: "test", tier: "高考", kindId3: "1" }], delayMs: 0, fetchedByUrl: new Map(seen),
+        onDetailAttempt: (url) => { seen.set(url, clock++); },
+        fetcher: async (url) => {
+          if (url.includes("layer.asp")) return { status: 200, body: listing };
+          const id = new URL(url).searchParams.get("bkid")!;
+          urls.push(id); all.add(id);
+          if (id === "1") return kind === "failed" ? { status: 500, body: new Uint8Array() } : { status: 200, body: Buffer.from("<title>115 out of scope</title>") };
+          return { status: 200, body: Buffer.concat([Buffer.from("<title>116 test</title>"), Buffer.from("a169ab7eb8b9a16a", "hex"), Buffer.from(`C${id}`)]) };
+        }
+      });
+      batches.push(urls);
+    }
+    expect(batches.map((batch) => batch.length)).toEqual([120, 120, 120, 120]);
+    expect(all.size).toBe(177);
+    expect(batches.filter((batch) => batch.includes("1")).length).toBeGreaterThanOrEqual(3);
+    expect(batches.every((batch) => batch.some((id) => id !== "1"))).toBe(true);
   });
 });

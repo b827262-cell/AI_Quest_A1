@@ -67,6 +67,7 @@ function crawlResult(
 function makeTableDouble() {
   const rows = new Map<string, ExamCourseRecord>();
   const executed: string[] = [];
+  let transactionSnapshot: Map<string, ExamCourseRecord> | undefined;
   const executor: SqlExecutor = {
     async query(text: string, params?: readonly unknown[]) {
       executed.push(text);
@@ -100,13 +101,16 @@ function makeTableDouble() {
         }
         return { rows: outcomes };
       }
-      if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") return { rows: [] };
+      if (text === "BEGIN") { transactionSnapshot = new Map([...rows].map(([key, row]) => [key, { ...row }])); return { rows: [] }; }
+      if (text === "COMMIT") { transactionSnapshot = undefined; return { rows: [] }; }
+      if (text === "ROLLBACK") { rows.clear(); for (const [key, row] of transactionSnapshot ?? []) rows.set(key, row); transactionSnapshot = undefined; return { rows: [] }; }
       if (text.startsWith("UPDATE exam_courses SET teacher")) {
         const key = `${params?.[0]}:${params?.[1]}`;
-        const row = rows.get(key) as (ExamCourseRecord & { teacher?: string | null; applicable_scope?: string | null }) | undefined;
+        const row = rows.get(key) as (ExamCourseRecord & { teacher?: string | null; applicable_scope?: string | null; revision?: number }) | undefined;
         if (!row || (row.teacher ?? null) === params?.[2] && (row.applicable_scope ?? null) === params?.[3]) return { rows: [] };
         row.teacher = params?.[2] as string | null;
         row.applicable_scope = params?.[3] as string | null;
+        row.revision = (row.revision ?? 1) + Number(params?.[4] ?? 0);
         return { rows: [{ exam_year: row.exam_year, course_code: row.course_code }] };
       }
       if (text.startsWith("SELECT source_url, fetched_at")) {
@@ -450,6 +454,47 @@ describe("exam snapshot admin service (Slot D real wiring)", () => {
     await service.listSnapshots();
     await service.refreshToday("116", "key-close");
     expect(closed).toBe(2);
+  });
+
+  it("rolls back all rows if a later field write fails", async () => {
+    const table = makeTableDouble();
+    const failing: SqlExecutor = { async query(text, params) {
+      if (text.startsWith("UPDATE exam_courses SET teacher")) throw new Error("field write failed");
+      return table.executor.query(text, params);
+    } };
+    const service = makeExamSnapshotService({ resolveDatabase: async () => ({ available: true, handle: { executor: failing, close: async () => undefined } }),
+      crawl: async () => crawlResult([courseRecord()]), now: () => CLOCK });
+    await expect(service.refreshToday("116", "rollback-check")).rejects.toMatchObject({ code: "database_write_failed" });
+    expect(table.executed).toContain("ROLLBACK");
+    expect(table.rows.size).toBe(0);
+  });
+
+  it("counts an optional-field-only change as updated and increments revision", async () => {
+    const table = makeTableDouble();
+    const initial = { ...courseRecord(), teacher: "舊老師", applicable_scope: "舊範圍" };
+    const updated = { ...initial, teacher: "新老師", applicable_scope: "新範圍" };
+    let current = initial;
+    const service = makeExamSnapshotService({ resolveDatabase: async () => availableResolution(table),
+      crawl: async () => crawlResult([current]), now: () => CLOCK });
+    await service.refreshToday("116", "field-first");
+    current = updated;
+    const result = await service.refreshToday("116", "field-second");
+    expect(result).toMatchObject({ updated: 1, unchanged: 0, changed_count: 1 });
+    expect(table.rows.get("116:BKA116001")).toMatchObject({ teacher: "新老師", applicable_scope: "新範圍", revision: 2 });
+  });
+
+  it("persists failed and out-of-scope attempts across service instances even with zero records", async () => {
+    const table = makeTableDouble();
+    const settings = makeSettings();
+    const attemptedUrl = "https://ec.ibrain.com.tw/Publish/www/book.asp?bkid=42";
+    const first = makeExamSnapshotService({ settings, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { options.onDetailAttempt(attemptedUrl); return crawlResult([]); } });
+    await expect(first.refreshToday("116", "attempt-failed")).rejects.toMatchObject({ code: "snapshot_source_unavailable" });
+    let previous: number | undefined;
+    const second = makeExamSnapshotService({ settings, resolveDatabase: async () => availableResolution(table), now: () => CLOCK,
+      crawl: async (options) => { previous = options.fetchedByUrl.get(attemptedUrl); return crawlResult([courseRecord()]); } });
+    await second.refreshToday("116", "attempt-next");
+    expect(previous).toBeGreaterThan(0);
   });
 
 });

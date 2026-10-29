@@ -120,6 +120,7 @@ export type ExamSnapshotCrawlOptions = Readonly<{
   fetchedAt?: string;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
+  onDetailAttempt?: (url: string) => void;
 }>;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -166,16 +167,14 @@ export async function runExamSnapshotCrawl(options: ExamSnapshotCrawlOptions = {
 
   const ordered = [...candidates.values()];
   if (options.fetchedByUrl) {
-    // Unseen candidates first, then the oldest successful cohort. A cohort ends
-    // before wrapping so a subsequent refresh starts the next pass at the start.
+    // Unseen candidates first, then the least recently attempted URLs.
     ordered.sort((a, b) => (options.fetchedByUrl!.get(a.link.url) ?? -Infinity) - (options.fetchedByUrl!.get(b.link.url) ?? -Infinity));
   }
-  const cohortTime = ordered.length ? options.fetchedByUrl?.get(ordered[0].link.url) : undefined;
   for (const { link } of ordered) {
-    if (options.fetchedByUrl && options.fetchedByUrl.get(link.url) !== cohortTime) break;
     if (detailPagesFetched >= maxDetailPages) break;
     const url = link.url;
     detailPagesFetched += 1;
+    options.onDetailAttempt?.(url);
     try {
       const page = await fetcher(url, options.signal);
       if (page.status !== 200) {

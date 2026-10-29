@@ -77,7 +77,8 @@ export function extractProductFields(html: string): Record<string, string> {
   const fields: Record<string, string> = {};
   for (const match of region.matchAll(/【([^】]{1,8})】\s*([^\u3010]+?)(?=\s*【|$)/g)) {
     const label = match[1].trim();
-    const value = match[2].trim();
+    const limit = label === "師資" ? 128 : label === "適用" ? 256 : 20_000;
+    const value = match[2].trim().slice(0, limit);
     if (label && value && !(label in fields)) fields[label] = value;
   }
   return fields;
