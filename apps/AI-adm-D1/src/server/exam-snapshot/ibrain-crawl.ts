@@ -4,7 +4,8 @@ import {
   parseListingCourseLinks,
   type ListingCourseLink
 } from "./ibrain-parse";
-import { EXAM_COURSE_SOURCE_HOSTS_V1, type ExamCourseRecordV1 } from "@ai-smartbook/contracts";
+import { type ExamCourseRecordV1 } from "@ai-smartbook/contracts";
+import { resolveIbrainUrl } from "./ibrain-url";
 
 /**
  * Bounded 116 高普考 snapshot crawl.
@@ -73,20 +74,25 @@ export type FetchedPage = Readonly<{ status: number; body: Uint8Array }>;
 export type PageFetcher = (url: string, signal?: AbortSignal) => Promise<FetchedPage>;
 
 export const defaultPageFetcher: PageFetcher = async (url, signal) => {
-  const parsed = new URL(url);
-  if (!EXAM_COURSE_SOURCE_HOSTS_V1.includes(parsed.hostname as (typeof EXAM_COURSE_SOURCE_HOSTS_V1)[number])) {
-    throw new Error(`off-whitelist host: ${parsed.hostname}`);
+  let current = resolveIbrainUrl(url);
+  for (let redirects = 0; redirects <= 5; redirects += 1) {
+    const response = await fetch(current, {
+      signal,
+      redirect: "manual",
+      headers: { "User-Agent": "A01-ExamSnapshotBot/1.0 (learning catalog snapshot; public pages only)" }
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      return { status: response.status, body: new Uint8Array(await response.arrayBuffer()) };
+    }
+    const location = response.headers.get("location");
+    if (!location || redirects === 5) throw new Error("invalid or excessive redirect");
+    const next = resolveIbrainUrl(location, current);
+    if (new URL(current).protocol === "https:" && new URL(next).protocol !== "https:") {
+      throw new Error("unsafe redirect downgrade");
+    }
+    current = next;
   }
-  const response = await fetch(url, {
-    signal,
-    redirect: "follow",
-    headers: { "User-Agent": "A01-ExamSnapshotBot/1.0 (learning catalog snapshot; public pages only)" }
-  });
-  const finalHost = new URL(response.url || url).hostname;
-  if (!EXAM_COURSE_SOURCE_HOSTS_V1.includes(finalHost as (typeof EXAM_COURSE_SOURCE_HOSTS_V1)[number])) {
-    throw new Error(`off-whitelist redirect host: ${finalHost}`);
-  }
-  return { status: response.status, body: new Uint8Array(await response.arrayBuffer()) };
+  throw new Error("excessive redirects");
 };
 
 export type ExamSnapshotFailure = Readonly<{
@@ -117,10 +123,6 @@ export type ExamSnapshotCrawlOptions = Readonly<{
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function detailUrl(link: ListingCourseLink): string {
-  return `${IBRAIN_ORIGIN}${link.url}`;
-}
-
 export async function runExamSnapshotCrawl(options: ExamSnapshotCrawlOptions = {}): Promise<ExamSnapshotCrawlResult> {
   const seeds = options.seeds ?? EXAM_SNAPSHOT_SEEDS;
   const fetcher = options.fetcher ?? defaultPageFetcher;
@@ -142,7 +144,7 @@ export async function runExamSnapshotCrawl(options: ExamSnapshotCrawlOptions = {
       }
       const html = decodeIbrainHtml(page.body);
       // Owner decision 2026-10-28: only 116 is in crawl scope; 115 links are ignored here.
-      const links = parseListingCourseLinks(html, IBRAIN_ORIGIN).filter(
+      const links = parseListingCourseLinks(html, url).filter(
         (link) => /\b116\b/.test(link.courseName) && /高考|普考/.test(link.courseName)
       );
       listingPagesFetched += 1;
@@ -163,7 +165,7 @@ export async function runExamSnapshotCrawl(options: ExamSnapshotCrawlOptions = {
 
   for (const { link } of candidates.values()) {
     if (detailPagesFetched >= maxDetailPages) break;
-    const url = detailUrl(link);
+    const url = link.url;
     detailPagesFetched += 1;
     try {
       const page = await fetcher(url, options.signal);
