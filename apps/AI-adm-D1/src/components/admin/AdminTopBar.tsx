@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppearance } from "../../appearance";
+import { DEFAULT_APPEARANCE } from "@ai-smartbook/schema";
 import { useAdminAuth } from "../../admin-auth";
 
 /** Sticky white top bar: hamburger, configurable brand (name + logo), home. */
 export function AdminTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { settings } = useAppearance();
+  const brandName = settings.systemName === DEFAULT_APPEARANCE.systemName ? "iBrain AI" : settings.systemName;
   const { user, logout } = useAdminAuth();
   const [logoFailed, setLogoFailed] = useState(false);
 
@@ -30,7 +32,7 @@ export function AdminTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }
             <img
               className="admin-brand-logo"
               src={settings.headerLogoUrl}
-              alt={settings.systemName}
+              alt={brandName}
               style={{ width: settings.headerLogoSize, height: settings.headerLogoSize }}
               onError={() => setLogoFailed(true)}
             />
@@ -42,7 +44,7 @@ export function AdminTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }
               iB
             </span>
           )}
-          <span>{settings.systemName}</span>
+          <span>{brandName}</span>
         </Link>
       </div>
 

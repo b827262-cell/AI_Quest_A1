@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { DEFAULT_SITE_CONFIG } from "@ai-smartbook/schema";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { HomeAIComposer } from "../components/HomeAIComposer";
 import { StudentAnswerRenderer } from "../components/GuestAnswerRenderer";
@@ -47,7 +48,7 @@ import {
 import { useStudentAuth } from "../student-auth";
 
 const DEFAULT_CONFIG: PublicSiteConfig = {
-  siteTitle: "AI-SmartBook",
+  siteTitle: "iBrain AI",
   siteSubtitle: "多模型領域智慧解題平台",
   homeGreeting: "今天想學習什麼？",
   homeInputPlaceholder: "輸入你的問題……",
@@ -77,11 +78,12 @@ function BrandMark() {
 }
 
 function PublicHomeHeader({ config, studentName }: { config: PublicSiteConfig; studentName: string }) {
+  const siteTitle = config.siteTitle === DEFAULT_SITE_CONFIG.siteTitle ? "iBrain AI" : config.siteTitle;
   return (
     <header className="public-home-header">
-      <Link to="/" className="public-brand-link" aria-label={`${config.siteTitle} 首頁`}>
+      <Link to="/" className="public-brand-link" aria-label={`${siteTitle} 首頁`}>
         <BrandMark />
-        <span>{config.siteTitle}</span>
+        <span>{siteTitle}</span>
       </Link>
       <nav className="public-home-nav" aria-label="公開首頁導覽">
         <a href="#features">功能介紹</a>
@@ -132,7 +134,7 @@ function GuestAnswer({
       <div className="guest-answer-body">
         <div className="guest-answer-role">
           <span className="assistant-avatar">✦</span>
-          <strong>AI-SmartBook 學習助教</strong>
+          <strong>iBrain AI 學習助教</strong>
         </div>
         {response.answer || response.structuredAnswer ? (
           <StudentAnswerRenderer content={response.structuredAnswer} fallback={response.answer} />
@@ -716,7 +718,7 @@ export function PublicHomePage() {
         <section className="public-hero" aria-labelledby="public-home-heading">
           <div className="public-hero-orbit public-hero-orbit-one" />
           <div className="public-hero-orbit public-hero-orbit-two" />
-          <span className="public-eyebrow">智慧學習入口 · AI-SmartBook</span>
+          <span className="public-eyebrow">智慧學習入口 · iBrain AI</span>
           <h1 id="public-home-heading">
             {studentName ? `${studentName}，${config.homeGreeting}` : config.homeGreeting}
           </h1>
@@ -814,13 +816,13 @@ export function PublicHomePage() {
           ) : null}
         </section>
 
-        <section id="features" className="public-feature-strip" aria-label="AI-SmartBook 功能">
+        <section id="features" className="public-feature-strip" aria-label="iBrain AI 功能">
           <div><span>01</span><strong>快速理解</strong><p>把問題整理成清楚、可行動的學習步驟。</p></div>
           <div><span>02</span><strong>教材連結</strong><p>登入後從個人書庫延伸追問與複習。</p></div>
           <div><span>03</span><strong>學習留存</strong><p>保存回答、進度與最近提問，隨時接續。</p></div>
         </section>
       </main>
-      <footer className="public-home-footer">AI-SmartBook · 公開體驗回答僅供學習參考</footer>
+      <footer className="public-home-footer">iBrain AI · 公開體驗回答僅供學習參考</footer>
     </div>
   );
 }
