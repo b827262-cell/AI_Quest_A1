@@ -1,3 +1,4 @@
+import { failValidation } from "./validation-error";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import type { Repositories } from "@ai-smartbook/db";
 import type { BookCoreContext } from "@ai-smartbook/book-core";
@@ -703,13 +704,13 @@ router.post("/api/admin/books/:bookId/chapters", (req, res) => {
     ...req.body,
     bookId: req.params.bookId
   });
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   res.status(201).json({ chapter: repos.chapters.create(parsed.data) });
 });
 
 router.patch("/api/admin/books/:bookId/chapters/:chapterId", (req, res) => {
   const parsed = updateChapterInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const chapter = repos.chapters.update(req.params.chapterId, parsed.data);
   if (!chapter) return fail(res, 404, "chapter not found");
   res.json({ chapter });
@@ -808,7 +809,7 @@ router.post("/api/admin/books/:bookId/qa", async (req, res) => {
   const book = repos.books.findById(req.params.bookId);
   if (!book) return fail(res, 404, "book not found");
   const parsed = chatRequestSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   try {
     const { result } = await runJob(book.id, "book_qa", { question: parsed.data.question }, () =>
       askBookQuestion(ctx, book.id, parsed.data.question)

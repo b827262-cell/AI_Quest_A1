@@ -84,6 +84,28 @@ async function login(app: ReturnType<typeof createAdminApp>) {
 }
 
 describe("Admin API HTTP authentication and quota behavior", () => {
+  it("returns safe validation fields for an empty public guest question", async () => {
+    const { app, dbHandle } = buildTestApp();
+    const response = await request(app).post("/api/public/guest-ask").send({});
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: "請求內容格式不正確", code: "invalid_request", fields: ["question"] });
+    expect(response.body.error).not.toMatch(/\[|"code"|invalid_type/);
+    dbHandle.sqlite.close();
+  });
+
+  it("returns safe validation fields for an authenticated admin request", async () => {
+    const { app, dbHandle } = buildTestApp();
+    const session = await login(app);
+    const response = await request(app).post("/api/admin/ai-budget-policies")
+      .set("Cookie", session.cookieHeader).set("Origin", "http://127.0.0.1:5174")
+      .set("x-csrf-token", session.csrf).send({});
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: "請求內容格式不正確", code: "invalid_request" });
+    expect(response.body.fields).toEqual(expect.arrayContaining(["scopeType", "scopeKey"]));
+    expect(response.body.error).not.toMatch(/\[|"code"|invalid_type/);
+    dbHandle.sqlite.close();
+  });
+
   it("keeps book routes behind Origin, administrator authentication, CSRF and mutation audit", async () => {
     const { app, dependencies, dbHandle, token } = buildTestApp();
     const student = dependencies.repos.studentUsers.create({

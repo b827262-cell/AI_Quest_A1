@@ -1,3 +1,4 @@
+import { failValidation } from "./validation-error";
 import { bookPromptBuilders } from "./book-core-ai";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -1966,7 +1967,7 @@ app.post("/api/student/books/:bookId/notes", (req, res) => {
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
   const parsed = createSmartBookNoteInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   if (parsed.data.type === "canvas" && !parsed.data.canvasData) {
     return fail(res, 400, "canvas notes require canvasData");
   }
@@ -1982,7 +1983,7 @@ app.patch("/api/student/books/:bookId/notes/:noteId", (req, res) => {
   const note = repos.notes.findById(String(req.params.noteId));
   if (!note || note.bookId !== book.id) return fail(res, 404, "note not found");
   const parsed = updateSmartBookNoteInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   res.json({ note: repos.notes.update(note.id, parsed.data) });
 });
 
@@ -2073,7 +2074,7 @@ app.post("/api/student/books/:bookId/chat", (req, res) => {
   if (!book) return fail(res, 404, "book not found");
   // Accept both { message } (student UX) and { question } (legacy) bodies.
   const parsed = studentChatRequestSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const question = parsed.data.message ?? parsed.data.question ?? "";
   if (!question.trim()) return fail(res, 400, "message is required");
 
@@ -2189,7 +2190,7 @@ app.post("/api/student/books/:bookId/progress", (req, res) => {
   if (!resolved) return;
 
   const parsed = readerProgressRequestSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
 
   if (
     (parsed.data.eventType === "page_complete" ||
@@ -2227,7 +2228,7 @@ app.post("/api/student/books/:bookId/reader-actions/complete", (req, res) => {
   if (!resolved) return;
 
   const parsed = readerActionCompleteRequestSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
 
   if (parsed.data.actionType === "current_chapter" && !parsed.data.chapterId) {
     return fail(res, 400, "chapterId is required for current_chapter");
@@ -2448,7 +2449,7 @@ app.get("/api/public/site-config", (_req, res) => {
 
 app.post("/api/public/guest-ask", async (req, res) => {
   const parsed = guestAskRequestSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
 
   const config = loadSiteConfig();
   if (!config.guestAiEnabled) {
@@ -2680,7 +2681,7 @@ app.get("/api/public/guest-ask/:requestId", (req, res) => {
 
 app.post("/api/public/guest-feedback", (req, res) => {
   const parsed = guestFeedbackRequestSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   // Feedback is deliberately acknowledgement-only in mock mode. It can be
   // connected to an analytics repository later without changing the client.
   res.status(202).json({ accepted: true });
@@ -2693,7 +2694,7 @@ app.get("/api/admin/site-config", (_req, res) => {
 app.put("/api/admin/site-config", (req, res) => {
   if (!requireAdminAccess(req, res)) return;
   const parsed = siteConfigUpdateSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const merged = siteConfigSchema.parse({ ...loadSiteConfig(), ...parsed.data });
   repos.settings.set(SITE_CONFIG_KEY, JSON.stringify(merged));
   res.json({ config: merged, updatedAt: new Date().toISOString() });
@@ -3579,7 +3580,7 @@ app.get("/api/admin/ai-budget-policies", (req, res) => {
 app.put("/api/admin/ai-budget-policies/:id", (req, res) => {
   if (!requireAdminAccess(req, res)) return;
   const parsed = updateAiBudgetPolicyInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const updated = repos.aiBudgetPolicies.update(req.params.id, parsed.data);
   if (!updated) return fail(res, 404, "budget policy not found");
   res.json({ policy: updated });
@@ -3588,7 +3589,7 @@ app.put("/api/admin/ai-budget-policies/:id", (req, res) => {
 app.post("/api/admin/ai-budget-policies", (req, res) => {
   if (!requireAdminAccess(req, res)) return;
   const parsed = createAiBudgetPolicyInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const policy = repos.aiBudgetPolicies.upsertByScope(parsed.data);
   res.status(201).json({ policy });
 });
@@ -3607,7 +3608,7 @@ app.get("/api/admin/ai-token-pools", (req, res) => {
 app.post("/api/admin/ai-token-pools", (req, res) => {
   if (!requireAdminAccess(req, res)) return;
   const parsed = createAiTokenPoolInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const existing = repos.aiTokenPools.findByType(parsed.data.poolType);
   if (existing) return fail(res, 409, "token pool type already exists");
   const created = repos.aiTokenPools.create({
@@ -3630,7 +3631,7 @@ app.patch("/api/admin/ai-token-pools/:id", (req, res) => {
   const current = repos.aiTokenPools.findById(req.params.id);
   if (!current) return fail(res, 404, "token pool not found");
   const parsed = updateAiTokenPoolInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   // Validate: newDailyLimit must cover current committed usage.
   if (parsed.data.dailyLimit !== undefined) {
     const committed = current.usedTokens + current.reservedTokens;
@@ -3663,7 +3664,7 @@ app.get("/api/admin/ai-logical-models", (req, res) => {
 app.post("/api/admin/ai-logical-models", (req, res) => {
   if (!requireAdminAccess(req, res)) return;
   const parsed = upsertAiLogicalModelInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   if (parsed.data.providerConfigId) {
     const provider = repos.aiProviders.findConfig(parsed.data.providerConfigId);
     if (!provider || provider.provider !== parsed.data.providerId) return fail(res, 422, "logical model provider instance does not match adapter type");
@@ -3676,7 +3677,7 @@ app.post("/api/admin/ai-logical-models", (req, res) => {
 app.patch("/api/admin/ai-logical-models/:logicalModelId", (req, res) => {
   if (!requireAdminAccess(req, res)) return;
   const parsed = updateAiLogicalModelInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   if (parsed.data.providerConfigId) {
     const currentProvider = repos.aiLogicalModels.findByLogicalId(req.params.logicalModelId);
     const provider = repos.aiProviders.findConfig(parsed.data.providerConfigId);
@@ -3699,7 +3700,7 @@ app.get("/api/admin/ai-model-limits", (req, res) => {
 app.patch("/api/admin/ai-model-limits/:logicalModelId", (req, res) => {
   if (!requireAdminAccess(req, res)) return;
   const parsed = updateAiModelDailyLimitInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const current = repos.aiModelDailyLimits.findByLogicalModel(req.params.logicalModelId);
   if (!current) return fail(res, 404, "model daily limit not found");
   // Validate: newDailyLimit must cover current committed usage.
@@ -3932,7 +3933,7 @@ app.get("/api/appearance-settings", (_req, res) => {
 
 app.put("/api/admin/appearance-settings", (req, res) => {
   const parsed = appearanceSettingsUpdateSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const merged = appearanceSettingsSchema.parse({ ...loadAppearance(), ...parsed.data });
   repos.settings.set(APPEARANCE_KEY, JSON.stringify(merged));
   res.json({ settings: merged });

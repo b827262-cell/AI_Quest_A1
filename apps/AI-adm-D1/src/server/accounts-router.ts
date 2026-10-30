@@ -1,3 +1,4 @@
+import { failValidation } from "./validation-error";
 import { Router, type Response } from "express";
 import type { Repositories } from "@ai-smartbook/db";
 import { blockAccountInputSchema, setRiskLevelInputSchema, type ChatSession } from "@ai-smartbook/schema";
@@ -51,7 +52,7 @@ router.get("/api/admin/accounts", (_req, res) => {
 // Admin-only: set the risk marking (safe / risk / dangerous) for a session.
 router.patch("/api/admin/accounts/:sessionId/risk", (req, res) => {
   const parsed = setRiskLevelInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const session = repos.chat.findSessionById(String(req.params.sessionId));
   if (!session) return fail(res, 404, "account not found");
   const updated = repos.chat.setRiskLevel(session.id, parsed.data.riskLevel, parsed.data.note ?? null);
@@ -62,7 +63,7 @@ router.patch("/api/admin/accounts/:sessionId/risk", (req, res) => {
 // session sharing its public IP) is rejected by the student-facing endpoints.
 router.patch("/api/admin/accounts/:sessionId/block", (req, res) => {
   const parsed = blockAccountInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const session = repos.chat.findSessionById(String(req.params.sessionId));
   if (!session) return fail(res, 404, "account not found");
   const updated = repos.chat.setBlocked(session.id, parsed.data.blocked, parsed.data.reason ?? null);
