@@ -58,14 +58,26 @@ export interface ExamSnapshotRefreshResponse {
   snapshot: ExamSnapshotRow;
 }
 
+export interface ExamSnapshotJob {
+  job_id: string;
+  year: string;
+  status: "running" | "succeeded" | "failed";
+  started_at: string;
+  reused: boolean;
+  response?: ExamSnapshotRefreshResponse;
+  error_code?: string;
+}
+
 export interface ExamSnapshotClient {
   listSnapshots(): Promise<ExamSnapshotListResponse>;
-  refreshTodaySnapshot(year: ExamSnapshotYear, idempotencyKey: string): Promise<ExamSnapshotRefreshResponse>;
+  refreshTodaySnapshot(year: ExamSnapshotYear, idempotencyKey: string): Promise<ExamSnapshotJob>;
+  refreshStatus(year: ExamSnapshotYear, jobId: string): Promise<ExamSnapshotJob>;
 }
 
 export const EXAM_SNAPSHOT_ENDPOINTS = {
   list: "/api/admin/exam-snapshots",
-  refreshToday: (year: ExamSnapshotYear) => `/api/admin/exam-snapshots/${encodeURIComponent(year)}/refresh-today`
+  refreshToday: (year: ExamSnapshotYear) => `/api/admin/exam-snapshots/${encodeURIComponent(year)}/refresh-today`,
+  job: (year: ExamSnapshotYear, jobId: string) => `/api/admin/exam-snapshots/${encodeURIComponent(year)}/jobs/${encodeURIComponent(jobId)}`
 } as const;
 
 /** Machine codes the admin API may return, mapped to the text the page shows. */
@@ -78,7 +90,14 @@ export const EXAM_SNAPSHOT_ERROR_LABELS: Readonly<Record<string, string>> = {
   database_write_failed: "資料庫寫入失敗",
   snapshot_source_unavailable: "上游來源頁面無法取得",
   snapshot_validation_failed: "快照內容未通過資料契約檢查",
-  snapshot_read_failed: "快照資料讀取失敗"
+  snapshot_read_failed: "快照資料讀取失敗",
+  snapshot_crawl_failed: "快照來源抓取失敗",
+  snapshot_refresh_failed: "快照更新失敗",
+  refresh_in_progress: "快照更新正在執行中，請稍候",
+  refresh_interrupted: "快照更新中斷，請重試",
+  refresh_job_not_found: "找不到快照更新工作",
+  idempotency_key_year_conflict: "更新識別碼已用於其他年度",
+  admin_authentication_required: "請先登入管理後台"
 };
 
 export const EXAM_SNAPSHOT_STATUS_LABELS: Record<ExamSnapshotStatus, string> = {
@@ -153,10 +172,13 @@ export function createExamSnapshotHttpClient(request: ExamSnapshotRequest): Exam
       return request<ExamSnapshotListResponse>(EXAM_SNAPSHOT_ENDPOINTS.list);
     },
     refreshTodaySnapshot(year, idempotencyKey) {
-      return request<ExamSnapshotRefreshResponse>(EXAM_SNAPSHOT_ENDPOINTS.refreshToday(year), {
+      return request<ExamSnapshotJob>(EXAM_SNAPSHOT_ENDPOINTS.refreshToday(year), {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey }
       });
+    },
+    refreshStatus(year, jobId) {
+      return request<ExamSnapshotJob>(EXAM_SNAPSHOT_ENDPOINTS.job(year, jobId));
     }
   };
 }
