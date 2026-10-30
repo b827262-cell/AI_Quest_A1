@@ -15,6 +15,8 @@ describe("admin brand and page title", () => {
     await act(async () => root.render(<MemoryRouter initialEntries={[path]}><AdminPageTitle />{path === "/login" && <AdminLoginPage />}</MemoryRouter>));
     expect(document.title).toBe(`${name} · iBrain AI`);
     if (path === "/login") expect(container.textContent).toContain("登入 iBrain AI");
-    await act(async () => root.unmount()); container.remove();
+    await act(async () => root.unmount());
+    expect(document.title).toBe("iBrain AI 管理後台");
+    container.remove();
   });
 });

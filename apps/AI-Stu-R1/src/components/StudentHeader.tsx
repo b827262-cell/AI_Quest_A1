@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppearance } from "../appearance";
-import { DEFAULT_APPEARANCE } from "@ai-smartbook/schema";
+import { displayBrand } from "../display-brand";
 import { UserMenuDropdown } from "./UserMenuDropdown";
 import { useStudentAuth } from "../student-auth";
 
@@ -103,7 +103,7 @@ export function StudentHeader() {
         <Link className="brand-link" to="/dashboard" style={{ gap: a.studentHeaderBrandGap }}>
           <BrandLogo url={a.studentHeaderBrandLogoUrl} size={a.studentHeaderBrandLogoSize} />
           <span style={{ color: a.studentHeaderBrandTextColor, fontSize: a.studentHeaderBrandFontSize }}>
-            {a.studentHeaderBrandText === DEFAULT_APPEARANCE.studentHeaderBrandText ? "iBrain AI" : a.studentHeaderBrandText}
+            {displayBrand(a.studentHeaderBrandText)}
           </span>
         </Link>
 

@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppearance } from "../../appearance";
-import { DEFAULT_APPEARANCE } from "@ai-smartbook/schema";
+import { displayBrand } from "../../display-brand";
 import { useAdminAuth } from "../../admin-auth";
 
 /** Sticky white top bar: hamburger, configurable brand (name + logo), home. */
 export function AdminTopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { settings } = useAppearance();
-  const brandName = settings.systemName === DEFAULT_APPEARANCE.systemName ? "iBrain AI" : settings.systemName;
+  const brandName = displayBrand(settings.systemName);
   const { user, logout } = useAdminAuth();
   const [logoFailed, setLogoFailed] = useState(false);
 

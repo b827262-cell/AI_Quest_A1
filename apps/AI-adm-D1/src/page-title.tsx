@@ -13,6 +13,9 @@ const PAGE_NAMES: Record<string, string> = {
 export function AdminPageTitle() {
   const { pathname } = useLocation();
   const name = PAGE_NAMES[pathname] ?? (pathname.endsWith("/chapters") ? "書本章節管理" : pathname.endsWith("/qa") ? "問答管理" : pathname.startsWith("/admin/books/") ? "書本管理" : "管理後台");
-  useEffect(() => { document.title = `${name} · iBrain AI`; }, [name]);
+  useEffect(() => {
+    document.title = `${name} · iBrain AI`;
+    return () => { document.title = "iBrain AI 管理後台"; };
+  }, [name]);
   return null;
 }

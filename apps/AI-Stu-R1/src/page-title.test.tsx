@@ -14,6 +14,8 @@ describe("student brand and page title", () => {
     await act(async () => root.render(<MemoryRouter initialEntries={[path]}><StudentPageTitle />{path === "/knowledge-ai" && <KnowledgeAiPage />}</MemoryRouter>));
     expect(document.title).toBe(`${name} · iBrain AI`);
     if (path === "/knowledge-ai") expect(container.querySelector(".public-brand-link")?.textContent).toContain("iBrain AI");
-    await act(async () => root.unmount()); container.remove();
+    await act(async () => root.unmount());
+    expect(document.title).toBe("iBrain AI");
+    container.remove();
   });
 });

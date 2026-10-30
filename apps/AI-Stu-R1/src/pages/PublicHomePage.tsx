@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { DEFAULT_SITE_CONFIG } from "@ai-smartbook/schema";
+import { displayBrand } from "../display-brand";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { HomeAIComposer } from "../components/HomeAIComposer";
 import { StudentAnswerRenderer } from "../components/GuestAnswerRenderer";
@@ -78,7 +78,7 @@ function BrandMark() {
 }
 
 function PublicHomeHeader({ config, studentName }: { config: PublicSiteConfig; studentName: string }) {
-  const siteTitle = config.siteTitle === DEFAULT_SITE_CONFIG.siteTitle ? "iBrain AI" : config.siteTitle;
+  const siteTitle = displayBrand(config.siteTitle);
   return (
     <header className="public-home-header">
       <Link to="/" className="public-brand-link" aria-label={`${siteTitle} 首頁`}>

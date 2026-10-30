@@ -11,6 +11,9 @@ export function StudentPageTitle() {
             : pathname === "/profile-completion" ? "個人資料"
               : pathname === "/antiG/institutional-flow" ? "機構流程"
                 : pathname.startsWith("/antiG") ? "AntiG" : "首頁";
-  useEffect(() => { document.title = `${name} · iBrain AI`; }, [name]);
+  useEffect(() => {
+    document.title = `${name} · iBrain AI`;
+    return () => { document.title = "iBrain AI"; };
+  }, [name]);
   return null;
 }
