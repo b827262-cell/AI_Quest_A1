@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createServer, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import { rawHttpRequest, startStudentTestApp, type StudentTestApp } from "./testApp";
+import { createReadyCheck } from "./health-routes";
 
 /**
  * F2-HEALTH-01: the student API must expose the same public liveness/readiness
@@ -8,13 +11,64 @@ import { rawHttpRequest, startStudentTestApp, type StudentTestApp } from "./test
  */
 
 let app: StudentTestApp | null = null;
+const fakeAdmins: FakeAdmin[] = [];
 
 afterEach(async () => {
   if (app) {
     await app.close();
     app = null;
   }
+  while (fakeAdmins.length > 0) await fakeAdmins.pop()!.close();
 });
+
+interface FakeAdmin {
+  baseUrl: string;
+  requests: string[];
+  close(): Promise<void>;
+}
+
+/** Local stand-in for the admin API. `respond` may leave the request hanging. */
+async function startFakeAdmin(respond: (res: ServerResponse) => void): Promise<FakeAdmin> {
+  const requests: string[] = [];
+  const sockets = new Set<Socket>();
+  const server = createServer((req, res) => {
+    requests.push(req.url ?? "");
+    respond(res);
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("unexpected fake admin address");
+  const admin: FakeAdmin = {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    requests,
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  };
+  fakeAdmins.push(admin);
+  return admin;
+}
+
+function remoteApiApp(adminBaseUrl: string, readyTimeoutMs = 2000): Promise<StudentTestApp> {
+  return startStudentTestApp({
+    sessionTtlMs: 3_600_000,
+    readyTimeoutMs,
+    readyCheck: createReadyCheck({
+      mode: "remote-api",
+      remoteApiBaseUrl: adminBaseUrl,
+      timeoutMs: readyTimeoutMs,
+      // In remote-api mode the local data source must never be consulted.
+      getDataSource: () => {
+        throw new Error("SENTINEL_LOCAL_DATA_SOURCE_USED");
+      }
+    })
+  });
+}
 
 async function probe(path: string) {
   const response = await rawHttpRequest(new URL(`${app!.baseUrl}${path}`));
@@ -54,6 +108,22 @@ describe("Student API health probes over real HTTP", () => {
     expect(response.bodyText).not.toContain("<!DOCTYPE");
   });
 
+  it("answers 503 not_ready when the readiness probe exceeds the deadline", async () => {
+    app = await startStudentTestApp({
+      sessionTtlMs: 3_600_000,
+      readyTimeoutMs: 100,
+      // A probe that never settles stands in for a wedged data source.
+      readyCheck: () => new Promise<void>(() => undefined)
+    });
+
+    const startedAt = Date.now();
+    const response = await probe("/health/ready");
+
+    expect(response.status).toBe(503);
+    expect(response.payload).toEqual({ status: "not_ready" });
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+  });
+
   it("returns only the status literal, never application data", async () => {
     app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
     for (const path of ["/health/live", "/health/ready"]) {
@@ -64,5 +134,85 @@ describe("Student API health probes over real HTTP", () => {
       expect(response.bodyText, path).not.toContain("Alpha Botany");
       expect(response.bodyText, path).not.toContain("<!DOCTYPE");
     }
+  });
+});
+
+/**
+ * F2-HEALTH-01 follow-up: in `remote-api` mode the local data source is a
+ * credential-less proxy of an authenticated admin route, so readiness must ask
+ * the admin API's own public probe instead, and must not hang forever.
+ */
+describe("Student API readiness in remote-api mode", () => {
+  it("answers 200 ready when the admin readiness probe answers 200", async () => {
+    const admin = await startFakeAdmin((res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "ready" }));
+    });
+    app = await remoteApiApp(admin.baseUrl);
+
+    const response = await probe("/health/ready");
+
+    expect(response.status).toBe(200);
+    expect(response.payload).toEqual({ status: "ready" });
+    expect(admin.requests).toEqual(["/health/ready"]);
+  });
+
+  it("answers 503 not_ready when the admin readiness probe answers 503", async () => {
+    const admin = await startFakeAdmin((res) => {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "not_ready" }));
+    });
+    app = await remoteApiApp(admin.baseUrl);
+
+    const response = await probe("/health/ready");
+
+    expect(response.status).toBe(503);
+    expect(response.payload).toEqual({ status: "not_ready" });
+  });
+
+  it("answers 503 not_ready when the admin readiness probe answers 401", async () => {
+    const admin = await startFakeAdmin((res) => {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "SENTINEL_ADMIN_UNAUTHORIZED" }));
+    });
+    app = await remoteApiApp(admin.baseUrl);
+
+    const response = await probe("/health/ready");
+
+    expect(response.status).toBe(503);
+    expect(response.payload).toEqual({ status: "not_ready" });
+    expect(response.bodyText).not.toContain("SENTINEL_ADMIN_UNAUTHORIZED");
+    expect(response.bodyText).not.toContain("<!DOCTYPE");
+  });
+
+  it("answers 503 not_ready when the admin API never responds", async () => {
+    // The fake admin accepts the connection and never writes a response.
+    const admin = await startFakeAdmin(() => undefined);
+    app = await remoteApiApp(admin.baseUrl, 150);
+
+    const startedAt = Date.now();
+    const response = await probe("/health/ready");
+    const elapsed = Date.now() - startedAt;
+
+    expect(response.status).toBe(503);
+    expect(response.payload).toEqual({ status: "not_ready" });
+    expect(elapsed).toBeLessThan(2000);
+    expect(admin.requests).toEqual(["/health/ready"]);
+  });
+
+  it("answers 503 not_ready when the admin base url is not configured", async () => {
+    app = await startStudentTestApp({
+      sessionTtlMs: 3_600_000,
+      readyTimeoutMs: 150,
+      readyCheck: createReadyCheck({
+        mode: "remote-api",
+        getDataSource: () => null
+      })
+    });
+
+    const response = await probe("/health/ready");
+
+    expect(response.status).toBe(503);
+    expect(response.payload).toEqual({ status: "not_ready" });
   });
 });

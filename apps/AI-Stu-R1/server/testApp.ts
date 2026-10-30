@@ -109,6 +109,8 @@ export interface StartStudentTestAppOptions {
   secureCookies?: boolean;
   /** Overrides the readiness probe so suites can exercise the failure path. */
   readyCheck?: HealthReadyCheck;
+  /** Shortens the readiness deadline so timeout cases stay fast. */
+  readyTimeoutMs?: number;
 }
 
 export async function startStudentTestApp(options: StartStudentTestAppOptions): Promise<StudentTestApp> {
@@ -133,7 +135,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   // Same placement as stu-api.ts: public probes before the auth boundary.
   registerHealthRoutes(app, options.readyCheck ?? (async () => {
     await dataSource.listBooks();
-  }));
+  }), { timeoutMs: options.readyTimeoutMs });
   app.use("/api/student/auth", createStudentAuthRouter(runtime.auth, config));
   app.use("/api/student", createStudentSessionMiddleware(runtime.auth, config));
   app.use("/api/student", createStudentLearningHistoryRouter(runtime.learningHistory, config));
