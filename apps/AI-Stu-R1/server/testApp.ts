@@ -24,6 +24,7 @@ import {
 import type { StudentDataSource } from "@ai-smartbook/student-runtime";
 import type { Book, BookContent } from "@ai-smartbook/schema";
 import { createStudentRagRouter } from "./student-rag";
+import { registerHealthRoutes, type HealthReadyCheck } from "./health-routes";
 import { startFakeAccessCerts } from "../../../scripts/student-access-fixture";
 
 /**
@@ -106,6 +107,8 @@ export interface StartStudentTestAppOptions {
   sessionTtlMs: number;
   port?: number;
   secureCookies?: boolean;
+  /** Overrides the readiness probe so suites can exercise the failure path. */
+  readyCheck?: HealthReadyCheck;
 }
 
 export async function startStudentTestApp(options: StartStudentTestAppOptions): Promise<StudentTestApp> {
@@ -127,6 +130,10 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   const app: Express = express();
   app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
   app.use(express.json());
+  // Same placement as stu-api.ts: public probes before the auth boundary.
+  registerHealthRoutes(app, options.readyCheck ?? (async () => {
+    await dataSource.listBooks();
+  }));
   app.use("/api/student/auth", createStudentAuthRouter(runtime.auth, config));
   app.use("/api/student", createStudentSessionMiddleware(runtime.auth, config));
   app.use("/api/student", createStudentLearningHistoryRouter(runtime.learningHistory, config));
