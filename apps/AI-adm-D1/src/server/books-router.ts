@@ -83,7 +83,7 @@ router.get("/api/admin/books", (_req, res) => {
 
 router.post("/api/admin/books", (req, res) => {
   const parsed = createBookInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   res.status(201).json({ book: repos.books.create(parsed.data) });
 });
 
@@ -97,7 +97,7 @@ router.get("/api/admin/books/:bookId", (req, res) => {
 
 router.patch("/api/admin/books/:bookId", (req, res) => {
   const parsed = updateBookInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
   const book = repos.books.update(req.params.bookId, parsed.data);
   if (!book) return fail(res, 404, "book not found");
   res.json({ book });
@@ -125,7 +125,7 @@ router.post("/api/admin/books/:bookId/files", (req: Request, res: Response, next
         : file.originalname;
     const displayName = sanitizeUploadFileName(rawDisplayName);
     const parsedRole = bookFileRoleSchema.safeParse(req.body?.role ?? "source_document");
-    if (!parsedRole.success) return fail(res, 400, parsedRole.error.message);
+    if (!parsedRole.success) return failValidation(res, parsedRole.error);
 
     const role = parsedRole.data;
     if (role === READER_TOC_ROLE) {
@@ -283,7 +283,7 @@ router.post("/api/admin/books/:bookId/files/:fileId/generate-json-index", async 
   }
 
   const parsed = generatePdfJsonIndexInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
 
   try {
     const { contents, pageCount } = await parsePdfToContents(file.filePath, book.id, file.id);
@@ -318,7 +318,7 @@ router.post("/api/admin/books/:bookId/files/:fileId/save-json-index", async (req
   }
 
   const parsed = saveJsonIndexInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
 
   let storedPath: string | undefined;
   let committed = false;
@@ -373,7 +373,7 @@ router.post("/api/admin/books/:bookId/json-indexes/upload", jsonUpload.single("f
   }
   const parsed = pdfJsonIndexSchema.safeParse(json);
   if (!parsed.success) {
-    return fail(res, 400, `Invalid JSON index (smartbook-pdf-index-v1): ${parsed.error.message}`);
+    return failValidation(res, parsed.error);
   }
   if (parsed.data.bookId !== book.id) {
     return fail(
@@ -460,7 +460,7 @@ router.post("/api/admin/books/:bookId/reader-toc/import", (req, res) => {
   const book = repos.books.findById(req.params.bookId);
   if (!book) return fail(res, 404, "book not found");
   const parsed = readerTocImportPayloadSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
 
   try {
     const { outline, file } = parseReaderTocImportFromPayload(book.id, parsed.data);
@@ -542,7 +542,7 @@ router.post("/api/admin/books/:bookId/reader-toc/generate-from-json-index", (req
   if (!book) return fail(res, 404, "book not found");
 
   const parsed = generateReaderTocFromIndexInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
 
   const indexFile = repos.files.findById(parsed.data.jsonIndexFileId);
   if (!indexFile || indexFile.bookId !== book.id) return fail(res, 404, "JSON index not found");
@@ -617,7 +617,7 @@ router.post("/api/admin/books/:bookId/files/:fileId/apply-chapters", async (req,
   }
 
   const parsed = applyChapterPreviewInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, parsed.error.message);
+  if (!parsed.success) return failValidation(res, parsed.error);
 
   try {
     const normalizedRows = normalizePreviewRowsForApply(parsed.data.rows);
