@@ -75,23 +75,49 @@ describe("exam snapshot job polling", () => {
     expect(client.refreshStatus).not.toHaveBeenCalled();
   });
 
-  it("continues polling across client changes and re-enables the button", async () => {
+  it("discards a pending old client result after a client change", async () => {
+    vi.useFakeTimers();
+    const oldRow = { year: "116", last_snapshot_at: null, row_count: 1, status: "not_started" as const, last_error: null };
+    const newRow = { ...oldRow, row_count: 42 };
+    const base: ExamSnapshotJob = { job_id: "old-job", year: "116", status: "running", started_at: "2026-10-29T00:00:00Z", reused: false };
+    let complete!: (job: ExamSnapshotJob) => void;
+    const pending = new Promise<ExamSnapshotJob>((resolve) => { complete = resolve; });
+    const oldClient: ExamSnapshotClient = { listSnapshots: vi.fn(async () => ({ snapshots: [oldRow], data_source: "exam_courses" as const })), refreshTodaySnapshot: vi.fn(async () => base), refreshStatus: vi.fn(() => pending) };
+    const newClient: ExamSnapshotClient = { listSnapshots: vi.fn(async () => ({ snapshots: [newRow], data_source: "exam_courses" as const })), refreshTodaySnapshot: vi.fn(async () => base), refreshStatus: vi.fn(async () => base) };
+    const container = document.createElement("div"); document.body.appendChild(container); const root = createRoot(container);
+    await act(async () => { root.render(<MemoryRouter><ExamSnapshotsPage client={oldClient} /></MemoryRouter>); });
+    const getButton = () => [...container.querySelectorAll("button")].find((element) => element.textContent?.includes("更新今日快照"))!;
+    await act(async () => { getButton().click(); await vi.advanceTimersByTimeAsync(2000); });
+    expect(oldClient.refreshStatus).toHaveBeenCalledTimes(1);
+    await act(async () => { root.render(<MemoryRouter><ExamSnapshotsPage client={newClient} /></MemoryRouter>); });
+    expect(getButton().disabled).toBe(false);
+    await act(async () => { getButton().click(); });
+    const result = { ...base, status: "succeeded" as const, response: { year: "116", status: "fresh" as const, changed_count: 99, error_count: 0, fetched_at: "2026-10-29T00:00:00Z", reused: false, snapshot: { ...oldRow, row_count: 99, status: "fresh" as const } } };
+    await act(async () => { complete(result); await vi.advanceTimersByTimeAsync(10000); });
+    expect(oldClient.refreshStatus).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain("本次寫入 99 筆");
+    expect(container.textContent).toContain("42");
+    const activeButton = [...container.querySelectorAll("button")].find((element) => element.textContent?.includes("更新中"))!;
+    expect(activeButton.disabled).toBe(true);
+    expect(newClient.refreshStatus).toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
+  it("refreshes successfully with the new client after a client change", async () => {
     vi.useFakeTimers();
     const row = { year: "116", last_snapshot_at: null, row_count: 0, status: "not_started" as const, last_error: null };
     const base: ExamSnapshotJob = { job_id: "job-1", year: "116", status: "running", started_at: "2026-10-29T00:00:00Z", reused: false };
-    const client: ExamSnapshotClient = {
-      listSnapshots: vi.fn(async () => ({ snapshots: [row], data_source: "exam_courses" as const })),
-      refreshTodaySnapshot: vi.fn(async () => base),
-      refreshStatus: vi.fn(async () => ({ ...base, status: "succeeded" as const, response: { year: "116", status: "fresh" as const, changed_count: 3, error_count: 0, fetched_at: "2026-10-29T00:00:00Z", reused: false, snapshot: { ...row, row_count: 3, status: "fresh" as const } } }))
-    };
-    const nextClient = { ...client, listSnapshots: vi.fn(async () => ({ snapshots: [row], data_source: "exam_courses" as const })) };
+    const oldClient: ExamSnapshotClient = { listSnapshots: vi.fn(async () => ({ snapshots: [row], data_source: "exam_courses" as const })), refreshTodaySnapshot: vi.fn(async () => base), refreshStatus: vi.fn(async () => base) };
+    const newClient: ExamSnapshotClient = { listSnapshots: vi.fn(async () => ({ snapshots: [row], data_source: "exam_courses" as const })), refreshTodaySnapshot: vi.fn(async () => ({ ...base, job_id: "new-job" })), refreshStatus: vi.fn(async () => ({ ...base, job_id: "new-job", status: "succeeded" as const, response: { year: "116", status: "fresh" as const, changed_count: 3, error_count: 0, fetched_at: "2026-10-29T00:00:00Z", reused: false, snapshot: { ...row, row_count: 3, status: "fresh" as const } } })) };
     const container = document.createElement("div"); document.body.appendChild(container); const root = createRoot(container);
-    await act(async () => { root.render(<MemoryRouter><ExamSnapshotsPage client={client} /></MemoryRouter>); });
+    await act(async () => { root.render(<MemoryRouter><ExamSnapshotsPage client={oldClient} /></MemoryRouter>); });
     const getButton = () => [...container.querySelectorAll("button")].find((element) => element.textContent?.includes("更新今日快照"))!;
     await act(async () => { getButton().click(); });
-    await act(async () => { root.render(<MemoryRouter><ExamSnapshotsPage client={nextClient} /></MemoryRouter>); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-    expect(client.refreshStatus).toHaveBeenCalledTimes(1);
+    await act(async () => { root.render(<MemoryRouter><ExamSnapshotsPage client={newClient} /></MemoryRouter>); });
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => { getButton().click(); await vi.advanceTimersByTimeAsync(2000); });
+    expect(oldClient.refreshStatus).not.toHaveBeenCalled();
+    expect(newClient.refreshStatus).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("本次寫入 3 筆");
     expect(getButton().disabled).toBe(false);
     await act(async () => root.unmount());

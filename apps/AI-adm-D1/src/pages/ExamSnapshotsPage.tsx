@@ -45,6 +45,8 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
 
   useEffect(() => {
     lifecycle.current += 1;
+    setRefreshingYear(null);
+    setMessage("");
     const waits = pollWaits.current;
     return () => {
       lifecycle.current += 1;
@@ -55,7 +57,7 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
       }
       waits.clear();
     };
-  }, []);
+  }, [client]);
 
   useEffect(() => {
     void load();
