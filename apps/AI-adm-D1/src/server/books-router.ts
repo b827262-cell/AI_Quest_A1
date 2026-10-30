@@ -1,4 +1,5 @@
 import { failValidation } from "./validation-error";
+import { ZodError } from "zod";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import type { Repositories } from "@ai-smartbook/db";
 import type { BookCoreContext } from "@ai-smartbook/book-core";
@@ -48,7 +49,7 @@ export interface BooksRouterDependencies {
   setActiveQaReferenceId: (bookId: string, fileId: string | null) => void;
   getActiveQaReferenceId: (bookId: string) => string | null;
   summarizeStoredJsonIndex: (file: BookFile, activeId: string | null) => StoredJsonIndexSummary;
-  readStoredJsonIndex: (file: BookFile) => PdfJsonIndex | null;
+  readStoredJsonIndex: (file: BookFile, throwValidation?: boolean) => PdfJsonIndex | null;
   parseReaderTocImportFromPayload: (bookId: string, payload: ReaderTocImportPayload) => {
     file: { schemaVersion: string; bookId: string; source: string; items: ReaderTocInputNode[] };
     outline: ReaderOutlineNode[];
@@ -493,6 +494,7 @@ router.post("/api/admin/books/:bookId/reader-toc/import", (req, res) => {
       outline
     });
   } catch (err) {
+    if (err instanceof ZodError) return failValidation(res, err);
     fail(res, 400, "import manual TOC failed");
   }
 });
@@ -549,7 +551,13 @@ router.post("/api/admin/books/:bookId/reader-toc/generate-from-json-index", (req
   if (indexFile.role !== JSON_INDEX_ROLE) {
     return fail(res, 400, "Selected file is not a json_index file");
   }
-  const index = readStoredJsonIndex(indexFile);
+  let index: PdfJsonIndex | null;
+  try {
+    index = readStoredJsonIndex(indexFile, true);
+  } catch (error) {
+    if (error instanceof ZodError) return failValidation(res, error);
+    throw error;
+  }
   if (!index) return fail(res, 400, "Stored JSON index is not a valid smartbook-pdf-index-v1 file");
 
   try {

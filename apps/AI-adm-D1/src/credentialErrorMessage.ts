@@ -65,7 +65,7 @@ export function credentialErrorMessage(error: unknown, operation: "save" | "test
       : "Credential 操作失敗，請稍後再試。";
   }
   if (error.code === "validation_error") {
-    const fields = Object.keys(error.fields ?? {}).map(credentialFieldLabel);
+    const fields = (Array.isArray(error.fields) ? error.fields : Object.keys(error.fields ?? {})).map(credentialFieldLabel);
     return fields.length > 0
       ? `Credential 欄位格式不正確：${[...new Set(fields)].join("、")}。`
       : "Credential 欄位格式不正確，請檢查輸入內容。";
@@ -92,7 +92,9 @@ export function credentialErrorMessage(error: unknown, operation: "save" | "test
 }
 
 export function credentialFieldErrors(error: unknown): Record<string, string> {
-  return error instanceof ApiHttpError ? (error.fields ?? {}) : {};
+  if (!(error instanceof ApiHttpError)) return {};
+  if (Array.isArray(error.fields)) return Object.fromEntries(error.fields.map((field) => [field, "欄位格式不正確"]));
+  return error.fields ?? {};
 }
 
 export function credentialFormAfterFailure<T extends { apiKey: string }>(form: T, clearApiKey: boolean): T {

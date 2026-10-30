@@ -14,6 +14,12 @@ describe("Credential API error messages", () => {
     expect(credentialFieldErrors(error)).toEqual({ name: "名稱為必填", baseUrl: "格式錯誤" });
   });
 
+  it("handles array paths as field names instead of numeric indexes", () => {
+    const error = new ApiHttpError(400, "ignored", "validation_error", ["name", "apiKey"]);
+    expect(credentialErrorMessage(error, "save")).toContain("名稱");
+    expect(credentialFieldErrors(error)).toEqual({ name: "欄位格式不正確", apiKey: "欄位格式不正確" });
+  });
+
   it("labels endpointProfile validation errors instead of leaking the raw field key", () => {
     const error = new ApiHttpError(422, "ignored", "validation_error", {
       endpointProfile: "欄位格式不正確"

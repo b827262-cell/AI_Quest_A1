@@ -12,7 +12,7 @@ export class ApiHttpError extends Error {
     public readonly status: number,
     message: string,
     public readonly code?: string,
-    public readonly fields?: Record<string, string>,
+    public readonly fields?: Record<string, string> | string[],
     public readonly details?: CredentialTestDetails
   ) {
     super(message);
@@ -63,7 +63,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
       error?: string;
       message?: string;
       code?: string;
-      fields?: Record<string, string>;
+      fields?: Record<string, string> | string[];
       fieldErrors?: Record<string, string>;
       reason?: unknown;
       latencyMs?: unknown;

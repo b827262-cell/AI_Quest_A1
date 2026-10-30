@@ -185,6 +185,27 @@ describe("admin upload security boundaries", () => {
     expect(filesIn(join(uploadDir, ".pending"))).toHaveLength(0);
   });
 
+  it("returns validation fields when a stored JSON index fails schema validation", async () => {
+    const { app, book, token, dependencies, directory } = fixture();
+    const path = join(directory, "invalid-index.json");
+    writeFileSync(path, JSON.stringify({ schemaVersion: "bad-version" }));
+    const file = dependencies.repos.files.create({ bookId: book.id, fileName: "invalid-index.json", filePath: path,
+      fileType: "application/json", fileSize: 28, role: "json_index", parseStatus: "parsed" });
+    const response = await request(app).post(`/api/admin/books/${book.id}/reader-toc/generate-from-json-index`).set("x-admin-token", token)
+      .send({ jsonIndexFileId: file.id, pageStart: 1, pageEnd: 1 });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: "請求內容格式不正確", code: "invalid_request" });
+    expect(response.body.fields).toContain("schemaVersion");
+  });
+
+  it("returns validation fields for invalid nested manual TOC data", async () => {
+    const { app, book, token } = fixture();
+    const response = await request(app).post(`/api/admin/books/${book.id}/reader-toc/import`).set("x-admin-token", token)
+      .send({ format: "json", content: JSON.stringify([{ title: "" }]) });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: "請求內容格式不正確", code: "invalid_request", fields: ["0.title"] });
+  });
+
   it("returns safe validation fields for invalid book uploads", async () => {
     const { app, book, uploadDir, token } = fixture();
     const role = await request(app).post(`/api/admin/books/${book.id}/files`).set("x-admin-token", token)

@@ -800,7 +800,7 @@ function parseReaderTocImportFromPayload(
   if (isRecordValue(raw) && raw.schemaVersion === READER_TOC_SCHEMA_VERSION) {
     const parsed = readerTocFileSchema.safeParse(raw);
     if (!parsed.success) {
-      throw new Error("Invalid JSON structure for manual TOC file.");
+      throw parsed.error;
     }
     if (parsed.data.bookId !== bookId) {
       throw new Error(`JSON bookId mismatch: ${parsed.data.bookId}`);
@@ -822,7 +822,7 @@ function parseReaderTocImportFromPayload(
 
   const fallbackItems = readerTocInputNodeSchema.array().safeParse(raw);
   if (!fallbackItems.success) {
-    throw new Error("Invalid JSON structure. Expect schemaVersion payload or a raw items array.");
+    throw fallbackItems.error;
   }
   const outline = normalizeReaderTocNodes(fallbackItems.data);
   if (outline.length === 0) {
@@ -865,11 +865,16 @@ function writeJsonIndexArtifact(bookId: string, baseName: string, json: PdfJsonI
 }
 
 /** Read + validate a stored JSON index file. Returns null when unparseable. */
-function readStoredJsonIndex(file: BookFile): PdfJsonIndex | null {
+function readStoredJsonIndex(file: BookFile, throwValidation = false): PdfJsonIndex | null {
   try {
     const parsed = pdfJsonIndexSchema.safeParse(JSON.parse(readFileSync(file.filePath, "utf8")));
-    return parsed.success ? parsed.data : null;
-  } catch {
+    if (!parsed.success) {
+      if (throwValidation) throw parsed.error;
+      return null;
+    }
+    return parsed.data;
+  } catch (error) {
+    if (throwValidation && error instanceof z.ZodError) throw error;
     return null;
   }
 }
@@ -2859,7 +2864,7 @@ app.post("/api/admin/ai-credentials/:credentialId/quotas", (req, res) => {
   const credential = repos.aiProviders.findCredential(String(req.params.credentialId));
   if (!credential) return fail(res, 404, "credential not found");
   const parsed = createAiCredentialModelQuotaInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, "模型配額欄位格式不正確；上限須為正整數或留白");
+  if (!parsed.success) return failValidation(res, parsed.error, "模型配額欄位格式不正確；上限須為正整數或留白");
   if (repos.aiCredentialModelQuotas.findForCredential(credential.id, parsed.data.model)) {
     return fail(res, 409, "同一 Credential 不可重複建立相同 Model 配額");
   }
@@ -2876,7 +2881,7 @@ app.put("/api/admin/ai-credential-quotas/:quotaId", (req, res) => {
   const current = repos.aiCredentialModelQuotas.find(String(req.params.quotaId));
   if (!current || !repos.aiProviders.findCredential(current.credentialId)) return fail(res, 404, "模型配額不存在");
   const parsed = updateAiCredentialModelQuotaInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, "模型配額欄位格式不正確；上限須為正整數或留白");
+  if (!parsed.success) return failValidation(res, parsed.error, "模型配額欄位格式不正確；上限須為正整數或留白");
   const duplicateModel = parsed.data.model
     ? repos.aiCredentialModelQuotas.findForCredential(current.credentialId, parsed.data.model)
     : undefined;
@@ -2975,7 +2980,7 @@ app.put("/api/admin/ai-credentials/:credentialId", (req, res) => {
   const current = repos.aiProviders.findCredential(String(req.params.credentialId));
   if (!current) return fail(res, 404, "credential not found");
   const parsed = updateAiCredentialInputSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, "invalid credential payload");
+  if (!parsed.success) return failValidation(res, parsed.error, "Credential 欄位格式不正確");
   let { apiKey, model, rpmLimit, tpmLimit, rpdLimit, resetTimezone, isDefaultModel, ...safePatch } = parsed.data;
   // Some older clients populated the write-only input with the displayed
   // mask. Treat that as "unchanged" so a mask can never overwrite a key.

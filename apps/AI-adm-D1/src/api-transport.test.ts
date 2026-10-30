@@ -52,6 +52,11 @@ describe("Admin browser HTTP contract", () => {
     expect(unauthorized).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves validation field paths returned as an array", async () => {
+    vi.stubGlobal("fetch", async () => Response.json({ error: "請求內容格式不正確", code: "invalid_request", fields: ["items.0.name", "question"] }, { status: 400 }));
+    await expect(http("/api/admin/books")).rejects.toMatchObject({ status: 400, code: "invalid_request", fields: ["items.0.name", "question"] });
+  });
+
   it("does not turn a 403 into a 401 callback", async () => {
     const unauthorized = vi.fn();
     setUnauthorizedHandler(unauthorized);

@@ -3,6 +3,10 @@ import { ApiHttpError } from "./api";
 import { providerErrorMessage } from "./providerErrorMessage";
 
 describe("Provider API error messages", () => {
+  it("handles array field names in provider errors", () => {
+    expect(providerErrorMessage(new ApiHttpError(422, "ignored", "validation_error", ["baseUrl"]))).toContain("Base URL");
+    expect(providerErrorMessage(new ApiHttpError(409, "ignored", "provider_identity_conflict", ["slug"]))).toContain("Slug");
+  });
   it("maps safe backend error codes without exposing internals", () => {
     expect(providerErrorMessage(new ApiHttpError(409, "顯示名稱已存在", "provider_identity_conflict")))
       .toBe("Provider 顯示名稱或 Slug 已存在，請使用不同值。");

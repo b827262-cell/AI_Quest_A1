@@ -106,6 +106,19 @@ describe("Admin API HTTP authentication and quota behavior", () => {
     dbHandle.sqlite.close();
   });
 
+  it("keeps the localized quota validation message with structured fields", async () => {
+    const { app, dependencies, dbHandle } = buildTestApp();
+    const { credential } = seedCredential(dependencies);
+    const session = await login(app);
+    const response = await request(app).post(`/api/admin/ai-credentials/${credential.id}/quotas`)
+      .set("Cookie", session.cookieHeader).set("Origin", "http://127.0.0.1:5174")
+      .set("x-csrf-token", session.csrf).send({ model: "", rpmLimit: -1 });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ code: "invalid_request", error: "模型配額欄位格式不正確；上限須為正整數或留白" });
+    expect(response.body.fields).toEqual(expect.arrayContaining(["model"]));
+    dbHandle.sqlite.close();
+  });
+
   it("keeps book routes behind Origin, administrator authentication, CSRF and mutation audit", async () => {
     const { app, dependencies, dbHandle, token } = buildTestApp();
     const student = dependencies.repos.studentUsers.create({
