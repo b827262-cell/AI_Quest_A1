@@ -2506,6 +2506,15 @@ body {
   position: relative;
   overflow: hidden;
 }
+.login-glass-card > .gemini-btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.login-glass-card > .gemini-btn .btn-label {
+  min-width: 0;
+}
 .login-glass-card::before {
   content: "";
   position: absolute;
