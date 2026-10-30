@@ -18,6 +18,13 @@ export interface StudentBookDetail extends Book {
 
 /** Read-only data access used by the student API across all runtime modes. */
 export interface StudentDataSource {
+  /**
+   * Lightweight readiness check that does not read application data.
+   *
+   * Optional so existing fakes and implementations keep working unchanged;
+   * callers must fall back to a real read when it is absent.
+   */
+  ping?(): Promise<void>;
   listBooks(): Promise<Book[]>;
   getBook(bookId: string): Promise<StudentBookDetail | null>;
   getContents(bookId: string): Promise<BookContent[]>;

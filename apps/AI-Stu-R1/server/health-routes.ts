@@ -60,7 +60,10 @@ function remoteReadyUrl(baseUrl: string | undefined): URL {
  * session, so it would always fail. Instead we ask the admin API for its own
  * public readiness probe and require a 2xx answer.
  *
- * `static` and `sqlite-api` keep the cheap read-only local check.
+ * `static` and `sqlite-api` keep a local probe, but prefer the data source's
+ * own `ping()`. Synchronous SQLite calls cannot be preempted by the timeout
+ * timer above, so the probe must be close to zero cost: `listBooks()` reads
+ * and maps every published row, while `ping()` is a fixed `SELECT 1`.
  */
 export function createReadyCheck(sources: ReadyCheckSources): HealthReadyCheck {
   const { mode, remoteApiBaseUrl, getDataSource } = sources;
@@ -84,6 +87,12 @@ export function createReadyCheck(sources: ReadyCheckSources): HealthReadyCheck {
   return async () => {
     const dataSource = getDataSource();
     if (!dataSource) throw new Error("student data source unavailable");
+    // Prefer the lightweight probe; only older implementations that do not
+    // expose `ping()` fall back to a real read.
+    if (dataSource.ping) {
+      await dataSource.ping();
+      return;
+    }
     await dataSource.listBooks();
   };
 }

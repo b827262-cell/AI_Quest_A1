@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
+import type { Book, BookContent } from "@ai-smartbook/schema";
+import { SqliteDataSource, type StudentDataSource } from "@ai-smartbook/student-runtime";
 import { rawHttpRequest, startStudentTestApp, type StudentTestApp } from "./testApp";
 import { createReadyCheck } from "./health-routes";
 
@@ -11,12 +13,17 @@ import { createReadyCheck } from "./health-routes";
  */
 
 let app: StudentTestApp | null = null;
+let sqliteSource: SqliteDataSource | null = null;
 const fakeAdmins: FakeAdmin[] = [];
 
 afterEach(async () => {
   if (app) {
     await app.close();
     app = null;
+  }
+  if (sqliteSource) {
+    sqliteSource.close();
+    sqliteSource = null;
   }
   while (fakeAdmins.length > 0) await fakeAdmins.pop()!.close();
 });
@@ -214,5 +221,91 @@ describe("Student API readiness in remote-api mode", () => {
 
     expect(response.status).toBe(503);
     expect(response.payload).toEqual({ status: "not_ready" });
+  });
+});
+
+/**
+ * N-R300: in `sqlite-api` mode readiness must use the data source's
+ * lightweight `ping()` instead of reading application data. The SQLite calls
+ * are synchronous, so the timeout timer cannot preempt them — the probe has to
+ * be cheap enough that it never needs to be preempted.
+ */
+interface PingSpyDataSource extends StudentDataSource {
+  pingCalls: number;
+  listBooksCalls: number;
+}
+
+function createPingSpyDataSource(ping: () => Promise<void>): PingSpyDataSource {
+  const source: PingSpyDataSource = {
+    pingCalls: 0,
+    listBooksCalls: 0,
+    async ping() {
+      source.pingCalls += 1;
+      await ping();
+    },
+    async listBooks(): Promise<Book[]> {
+      source.listBooksCalls += 1;
+      return [];
+    },
+    async getBook(): Promise<null> {
+      return null;
+    },
+    async getContents(): Promise<BookContent[]> {
+      return [];
+    },
+    async getPdfFile(): Promise<null> {
+      return null;
+    }
+  };
+  return source;
+}
+
+describe("Student API readiness in sqlite-api mode", () => {
+  it("calls ping and never reads books", async () => {
+    const dataSource = createPingSpyDataSource(async () => undefined);
+    app = await startStudentTestApp({
+      sessionTtlMs: 3_600_000,
+      readyCheck: createReadyCheck({
+        mode: "sqlite-api",
+        getDataSource: () => dataSource
+      })
+    });
+
+    const response = await probe("/health/ready");
+
+    expect(response.status).toBe(200);
+    expect(response.payload).toEqual({ status: "ready" });
+    expect(dataSource.pingCalls).toBe(1);
+    expect(dataSource.listBooksCalls).toBe(0);
+  });
+
+  it("answers 503 not_ready when ping rejects", async () => {
+    const dataSource = createPingSpyDataSource(async () => {
+      throw new Error("SENTINEL_PING_FAILED");
+    });
+    app = await startStudentTestApp({
+      sessionTtlMs: 3_600_000,
+      readyCheck: createReadyCheck({
+        mode: "sqlite-api",
+        getDataSource: () => dataSource
+      })
+    });
+
+    const response = await probe("/health/ready");
+
+    expect(response.status).toBe(503);
+    expect(response.payload).toEqual({ status: "not_ready" });
+    expect(response.bodyText).not.toContain("SENTINEL_PING_FAILED");
+    expect(response.bodyText).not.toContain("<!DOCTYPE");
+    expect(dataSource.pingCalls).toBe(1);
+    expect(dataSource.listBooksCalls).toBe(0);
+  });
+
+  it("resolves ping on a real SqliteDataSource", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    // Reuse the SQLite file the harness already created for this test.
+    sqliteSource = new SqliteDataSource(app.runtime.dbHandle.sqlite.name);
+
+    await expect(sqliteSource.ping()).resolves.toBeUndefined();
   });
 });

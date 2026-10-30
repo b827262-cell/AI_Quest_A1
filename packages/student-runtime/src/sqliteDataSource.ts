@@ -115,6 +115,8 @@ function toPdfFile(r: BookFileRow): StudentBookPdfFile {
  */
 export class SqliteDataSource implements StudentDataSource {
   private readonly db: Database.Database;
+  /** Prepared once: the readiness probe runs on every health check. */
+  private readonly pingStatement: Database.Statement<[], unknown>;
 
   constructor(dbPath: string, readonly = true) {
     // Make sure the parent directory exists before opening; in dev this keeps
@@ -135,6 +137,7 @@ export class SqliteDataSource implements StudentDataSource {
     if (!readonly) {
       this.db.pragma("journal_mode = WAL");
     }
+    this.pingStatement = this.db.prepare<[], unknown>("SELECT 1");
   }
 
   private findPrimaryPdfFile(bookId: string): StudentBookPdfFile | null {
@@ -150,6 +153,11 @@ export class SqliteDataSource implements StudentDataSource {
       )
       .get(bookId) as BookFileRow | undefined;
     return row ? toPdfFile(row) : null;
+  }
+
+  /** Readiness probe: fixed `SELECT 1`, no application data is read. */
+  async ping(): Promise<void> {
+    this.pingStatement.get();
   }
 
   async listBooks(): Promise<Book[]> {
