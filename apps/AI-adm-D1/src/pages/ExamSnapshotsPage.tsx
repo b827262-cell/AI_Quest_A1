@@ -45,7 +45,6 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
 
   useEffect(() => {
     lifecycle.current += 1;
-    void load();
     const waits = pollWaits.current;
     return () => {
       lifecycle.current += 1;
@@ -56,6 +55,11 @@ export function ExamSnapshotsPage({ client = examSnapshotApi }: { client?: ExamS
       }
       waits.clear();
     };
+  }, []);
+
+  useEffect(() => {
+    void load();
+    return () => { requestSeq.current += 1; };
   }, [load]);
 
   const totals = useMemo(() => ({

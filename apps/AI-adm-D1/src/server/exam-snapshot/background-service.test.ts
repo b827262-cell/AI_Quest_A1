@@ -6,7 +6,7 @@ import { makeBackgroundExamSnapshotService, MAX_REFRESH_RECEIPTS } from "./backg
 import { ExamSnapshotServiceError, type ExamSnapshotService } from "./admin-service";
 import type { SqlExecutor } from "@ai-smartbook/db";
 
-function fakeDb() {
+function fakeDb(options: { failSucceeded?: boolean } = {}) {
   const rows = new Map<string, Record<string, unknown>>();
   const executor: SqlExecutor = { async query(sql, params = []) {
     if (sql.startsWith("SELECT *")) {
@@ -19,6 +19,7 @@ function fakeDb() {
       rows.set(key, row); return { rows: [{ ...row }] };
     }
     if (sql.startsWith("UPDATE exam_snapshot_refresh_receipts")) {
+      if (options.failSucceeded && sql.includes("'succeeded'")) throw new Error("receipt write failed");
       const row = [...rows.values()].find((item) => item.job_id === params[0]);
       if (!row) return { rows: [] };
       if (sql.includes("refresh_interrupted")) { if (row.status !== "running") return { rows: [] }; row.status = "failed"; row.error_code = "refresh_interrupted"; }
@@ -93,7 +94,30 @@ describe("background exam refresh", () => {
     expect(second.status).toBe(409); expect(second.body).toMatchObject({ code: "refresh_in_progress", job_id: first.body.job_id });
     gate.resolve(fixtureResponse()); await tick(); await tick();
     const status = await request(app).get(`/api/admin/exam-snapshots/116/jobs/${first.body.job_id}`);
-    expect(status.status).toBe(200); expect(status.body).toMatchObject({ status: "succeeded", response: { inserted: 1 } });
+    expect(status.status).toBe(200); expect(status.headers["cache-control"]).toBe("no-store"); expect(status.body).toMatchObject({ status: "succeeded", response: { inserted: 1 } });
+  });
+
+  it("rejects reuse of a key for a different supported year", async () => {
+    const db = fakeDb(); db.rows.set("cross-year-key", { idempotency_key: "cross-year-key", exam_year: 115, job_id: "previous-job", status: "succeeded", created_at: new Date().toISOString() });
+    const service = makeBackgroundExamSnapshotService({ worker: worker(async () => fixtureResponse()), resolveDatabase: db.resolve, isYearSupported: () => true });
+    await expect(service.start("116", "cross-year-key")).rejects.toMatchObject({ httpStatus: 409, code: "idempotency_key_year_conflict" });
+  });
+  it("records database_write_failed when saving succeeded receipt fails", async () => {
+    const db = fakeDb({ failSucceeded: true });
+    const service = makeBackgroundExamSnapshotService({ worker: worker(async () => fixtureResponse()), resolveDatabase: db.resolve });
+    const job = await service.start("116", "write-failure-key"); await tick(); await tick();
+    expect(await service.status("116", job.job_id)).toMatchObject({ status: "failed", error_code: "database_write_failed" });
+  });
+  it("protects job status and returns no-store for an unknown job", async () => {
+    const db = fakeDb(); const service = makeBackgroundExamSnapshotService({ worker: worker(async () => fixtureResponse()), resolveDatabase: db.resolve });
+    const unauthenticated = express(); unauthenticated.use("/api/admin/exam-snapshots", createExamSnapshotRouter({ background: service }));
+    const denied = await request(unauthenticated).get("/api/admin/exam-snapshots/116/jobs/unknown");
+    expect(denied.status).toBe(401); expect(denied.body.code).toBe("admin_authentication_required");
+    const app = express(); app.use((req, _res, next) => { req.adminAuth = { kind: "token", id: "admin-api-token" }; next(); });
+    app.use("/api/admin/exam-snapshots", createExamSnapshotRouter({ background: service }));
+    const missing = await request(app).get("/api/admin/exam-snapshots/116/jobs/unknown");
+    expect(missing.status).toBe(404); expect(missing.body.code).toBe("refresh_job_not_found");
+    expect(missing.headers["cache-control"]).toBe("no-store");
   });
 
 });
