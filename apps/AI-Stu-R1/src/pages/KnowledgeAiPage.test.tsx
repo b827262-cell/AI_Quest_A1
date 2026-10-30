@@ -56,7 +56,7 @@ describe("knowledge search syntax guidance", () => {
     expect(alert?.getAttribute("aria-labelledby")).toBe("knowledge-query-error-heading");
     expect(alert?.querySelector("h3")?.textContent).toBe("此搜尋語法暫時無法使用");
     expect(alert?.querySelectorAll("li")).toHaveLength(3);
-    for (const text of ["一般關鍵字", "行政法 OR 民法", '"行政法"', "-民法", "空白分隔", "同時符合所有詞", "憲法 行政", "品名、品號、師資、適用範圍"]) {
+    for (const text of ["一般關鍵字", "行政法 OR 民法", '"行政法"', "-民法", "空白分隔", "同時符合所有詞", "行政法 民法", "品名、品號、師資、適用範圍"]) {
       expect(alert?.textContent).toContain(text);
     }
     expect(alert?.textContent).not.toMatch(/HTTP|400|Snapshot|unsupported_snapshot_query/);
@@ -78,5 +78,24 @@ describe("knowledge search syntax guidance", () => {
     expect(container?.querySelector('[role="alert"]')?.textContent).toBe(`公開課程搜尋暫時無法使用（HTTP ${status}）`);
     expect(container?.querySelector(".knowledge-query-error")).toBeNull();
     expect(container?.textContent).not.toContain("Do not show this server message");
+    expect(container?.textContent).not.toContain("目前資料僅涵蓋部分 116 年公開課程");
   });
+  it("explains the limited source coverage when a successful search has no results", async () => {
+    const empty = new Response(JSON.stringify({ contractVersion: 1, mode: "snapshot", query: { keyword: "行政法", search_mode: "product_name", limit: 20 }, total: 0, results: [] }));
+    await renderPage(vi.fn<typeof fetch>().mockResolvedValue(empty));
+    expect(container?.textContent).not.toContain("目前資料僅涵蓋部分 116 年公開課程");
+    await submitSearch();
+    expect(container?.textContent).toContain("目前資料僅涵蓋部分 116 年公開課程");
+    expect(container?.textContent).toContain("請更換關鍵字或改用品名、品號查詢");
+    expect(container?.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("does not show the empty-result guidance when courses are returned", async () => {
+    await renderPage(vi.fn<typeof fetch>().mockResolvedValue(successResponse()));
+    expect(container?.querySelector('input[aria-label="搜尋關鍵字"]')?.getAttribute("placeholder")).toBe("例如：行政法、民法、會計");
+    await submitSearch();
+    expect(container?.textContent).toContain("憲法課程");
+    expect(container?.textContent).not.toContain("目前資料僅涵蓋部分 116 年公開課程");
+  });
+
 });

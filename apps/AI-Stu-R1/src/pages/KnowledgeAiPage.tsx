@@ -22,7 +22,7 @@ const SEARCH_MODE_LABELS: Record<PublicSourceSearchMode, string> = {
 };
 
 const SEARCH_PLACEHOLDERS: Record<PublicSourceSearchMode, string> = {
-  product_name: "例如：憲法、行政法概要、基本權",
+  product_name: "例如：行政法、民法、會計",
   product_code: "例如：GA-CON-002、IPKKW126262",
   teacher: "例如：宗台大、林清、趙治勳",
   scope: "例如：高普考、法研所、普考"
@@ -118,7 +118,7 @@ export function KnowledgeAiPage() {
                   <li>引號片語（例如：{"\"行政法\""}）</li>
                   <li>否定詞（例如：-民法）</li>
                 </ul>
-                <p>請只輸入一般關鍵字，多個詞以空白分隔（會同時符合所有詞），例如：憲法 行政；或改用上方的品名、品號、師資、適用範圍查詢。</p>
+                <p>請只輸入一般關鍵字，多個詞以空白分隔（會同時符合所有詞），例如：行政法 民法；或改用上方的品名、品號、師資、適用範圍查詢。</p>
               </div>
             ) : searchError ? <p className="knowledge-empty" role="alert">{searchError.message}</p> : results.length ? <ul>{buildKnowledgePriorities(results).map((priority) => {
               const course = priority.course;
@@ -146,7 +146,7 @@ export function KnowledgeAiPage() {
                   </> : <span className="knowledge-source-url">公開來源暫時無法提供</span>}
                 </div>
               </li>;
-            })}</ul> : <p className="knowledge-empty">找不到相符的公開課程。請調整年度或關鍵字後再試。</p>}
+            })}</ul> : <p className="knowledge-empty">找不到相符的公開課程。目前資料僅涵蓋部分 116 年公開課程，請更換關鍵字或改用品名、品號查詢。</p>}
           </section>
         ) : null}
       </main>
