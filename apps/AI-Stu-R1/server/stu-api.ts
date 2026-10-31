@@ -23,6 +23,7 @@ import {
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
+import { createReadyCheck, registerHealthRoutes } from "./health-routes";
 
 const config = loadStudentRuntimeConfig();
 const studentAuthConfig = resolveStudentAuthConfig(process.env);
@@ -122,6 +123,17 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
 const app = express();
 app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
 app.use(express.json());
+
+// Liveness/readiness probes are public and registered ahead of both the auth
+// boundary and the SPA fallback, so a probe never needs a session and never
+// receives index.html. In remote-api mode readiness asks the admin API's own
+// public probe: the local data source proxies an authenticated admin route and
+// would always answer 503 here. The result is never returned to the caller.
+registerHealthRoutes(app, createReadyCheck({
+  mode: config.mode,
+  remoteApiBaseUrl: config.remoteApiBaseUrl,
+  getDataSource: () => dataSource
+}));
 
 // Appearance is authored in the admin system; the standalone student server
 // serves the schema defaults so the SPA never 404s on boot.

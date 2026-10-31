@@ -67,6 +67,9 @@ const DEMO_CONTENTS: BookContent[] = [
 
 /** In-memory data source for the `static` runtime mode. */
 export class StaticDataSource implements StudentDataSource {
+  /** Readiness probe: nothing to reach, so it resolves directly. */
+  async ping(): Promise<void> {}
+
   async listBooks(): Promise<Book[]> {
     return [DEMO_BOOK];
   }
