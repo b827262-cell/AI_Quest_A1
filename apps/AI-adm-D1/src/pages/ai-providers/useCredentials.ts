@@ -1,6 +1,5 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { adminApi } from "../../api";
-import { useConfirm } from "../../components/useConfirm";
 import {
   credentialErrorMessage,
   credentialFieldErrors,
@@ -13,6 +12,7 @@ import {
   floatOrNull,
   numberOrNull,
   quotaFormFrom,
+  type ConfirmAction,
   type Credential,
   type CredentialActionKind,
   type CredentialForm,
@@ -50,6 +50,7 @@ export type CredentialSectionInput = {
   quotaForm: QuotaForm;
   setQuotaForm: Dispatch<SetStateAction<QuotaForm>>;
   setEditingQuotaId: Dispatch<SetStateAction<string | null>>;
+  confirmAction: ConfirmAction;
 };
 
 /** Credential list, credential editor form and the credential mutations. */
@@ -58,14 +59,14 @@ export function useCredentials({
   selectedProvider,
   quotaForm,
   setQuotaForm,
-  setEditingQuotaId
+  setEditingQuotaId,
+  confirmAction
 }: CredentialSectionInput): CredentialSection {
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [credentialForm, setCredentialForm] = useState<CredentialForm>(EMPTY_CREDENTIAL);
   const [editingCredentialId, setEditingCredentialId] = useState<string | null>(null);
   const [credentialErrors, setCredentialErrors] = useState<Record<string, string>>({});
   const [credentialsLoading, setCredentialsLoading] = useState(false);
-  const confirmAction = useConfirm();
   const { setError, setMessage, setBusy } = status;
 
   async function loadCredentials(providerId: string) {

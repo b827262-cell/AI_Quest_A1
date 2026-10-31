@@ -1,11 +1,11 @@
 import type { Dispatch, SetStateAction } from "react";
 import { adminApi } from "../../api";
-import { useConfirm } from "../../components/useConfirm";
 import { credentialErrorMessage } from "../../credentialErrorMessage";
 import {
   EMPTY_QUOTA,
   floatOrNull,
   numberOrNull,
+  type ConfirmAction,
   type Credential,
   type ModelQuota,
   type Provider,
@@ -32,6 +32,7 @@ export type QuotaSectionInput = {
   setEditingQuotaId: Dispatch<SetStateAction<string | null>>;
   loadCredentials: (providerId: string) => Promise<void>;
   editCredential: (credential: Credential) => void;
+  confirmAction: ConfirmAction;
 };
 
 /** Model quota mutations for the credential currently being edited. */
@@ -45,9 +46,9 @@ export function useQuotaActions({
   editingQuotaId,
   setEditingQuotaId,
   loadCredentials,
-  editCredential
+  editCredential,
+  confirmAction
 }: QuotaSectionInput): QuotaActions {
-  const confirmAction = useConfirm();
   const { setError, setMessage, setBusy } = status;
 
   function editQuota(credential: Credential, quota: ModelQuota) {

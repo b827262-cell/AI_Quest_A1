@@ -3,6 +3,7 @@ import type { AiProviderId } from "@ai-smartbook/ai/browser";
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
+import { useConfirm, useNotice } from "../components/useConfirm";
 import { CredentialFormCard } from "./ai-providers/CredentialFormCard";
 import { CredentialTable } from "./ai-providers/CredentialTable";
 import { ProviderFormCard } from "./ai-providers/ProviderFormCard";
@@ -20,17 +21,22 @@ import { useProviders } from "./ai-providers/useProviders";
 import { useQuotaActions } from "./ai-providers/useQuotaActions";
 
 export function AiProvidersPage() {
+  // 唯一的 dialog owner：原版 L280/L281 的 useConfirm/useNotice，宣告在所有資料
+  // effect 之前，讓 owner effect 的執行順序與原版一致；各 section 只接收回呼。
+  const confirmAction = useConfirm();
+  const notice = useNotice();
   const status = useAdminStatus();
-  const providers = useProviders(status);
   const [quotaForm, setQuotaForm] = useState<QuotaForm>(EMPTY_QUOTA);
   const [editingQuotaId, setEditingQuotaId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const providers = useProviders({ status, confirmAction, notice });
   const credentials = useCredentials({
     status,
     selectedProvider: providers.selectedProvider,
     quotaForm,
     setQuotaForm,
-    setEditingQuotaId
+    setEditingQuotaId,
+    confirmAction
   });
   const quotaActions = useQuotaActions({
     status,
@@ -42,7 +48,8 @@ export function AiProvidersPage() {
     editingQuotaId,
     setEditingQuotaId,
     loadCredentials: credentials.loadCredentials,
-    editCredential: credentials.editCredential
+    editCredential: credentials.editCredential,
+    confirmAction
   });
 
   // Effect 1 (原版 L333)：掛載時載入 Provider 清單。

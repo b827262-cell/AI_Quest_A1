@@ -1,6 +1,15 @@
+import type { useConfirm, useNotice } from "../../components/useConfirm";
+
 export type ProviderId = "openai" | "gemini" | "kimi" | "qwen" | "zai";
 export type CredentialStatus = "active" | "standby" | "disabled";
 export type CredentialActionKind = "enable" | "disable" | "delete";
+
+/**
+ * Dialog callbacks are owned by the page (one `useConfirm`/`useNotice` each)
+ * and passed down, so every section shares the same request owner.
+ */
+export type ConfirmAction = ReturnType<typeof useConfirm>;
+export type NoticeAction = ReturnType<typeof useNotice>;
 
 export type Provider = {
   id: string;

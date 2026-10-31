@@ -1,8 +1,7 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { adminApi, ApiHttpError } from "../../api";
-import { useConfirm, useNotice } from "../../components/useConfirm";
 import { providerErrorMessage } from "../../providerErrorMessage";
-import { EMPTY_PROVIDER, type Provider, type ProviderForm } from "./types";
+import { EMPTY_PROVIDER, type ConfirmAction, type NoticeAction, type Provider, type ProviderForm } from "./types";
 import type { AdminStatus } from "./useAdminStatus";
 
 export type ProviderSection = {
@@ -20,15 +19,19 @@ export type ProviderSection = {
   deleteProvider: (provider: Provider) => Promise<void>;
 };
 
+export type ProviderSectionInput = {
+  status: AdminStatus;
+  confirmAction: ConfirmAction;
+  notice: NoticeAction;
+};
+
 /** Provider list, the Provider editor form and the Provider mutations. */
-export function useProviders(status: AdminStatus): ProviderSection {
+export function useProviders({ status, confirmAction, notice }: ProviderSectionInput): ProviderSection {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [providerForm, setProviderForm] = useState<ProviderForm>(EMPTY_PROVIDER);
   const [loading, setLoading] = useState(true);
   const providerSaveInFlight = useRef(false);
-  const confirmAction = useConfirm();
-  const notice = useNotice();
   const { setError, setMessage, setBusy } = status;
 
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? null;
