@@ -35,7 +35,13 @@ describe("Search Friend PWA contract", () => {
 
   it("keeps the clipboard fallback behind its explicit button gesture", () => {
     const css = readFileSync(resolve(appRoot, "src/styles.css"), "utf8");
-    const page = readFileSync(resolve(appRoot, "src/pages/PublicHomePage.tsx"), "utf8");
+    // The public home surface is split across these modules; assertions below are unchanged.
+    const page = [
+      "src/pages/PublicHomePage.tsx",
+      "src/pages/public-home/PublicHero.tsx",
+      "src/pages/public-home/LearningHistoryPanel.tsx",
+      "src/pages/public-home/useShareIntake.ts"
+    ].map((file) => readFileSync(resolve(appRoot, file), "utf8")).join("\n");
     expect(css).toContain("@media (max-width: 412px)"); // Covers 360, 390, and 412 CSS-pixel viewports.
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
     expect(css).toContain(".learning-history-raw-evidence pre");

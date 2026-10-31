@@ -7,7 +7,7 @@ const repoFile = (relative: string) =>
 
 describe("guest answer public surface", () => {
   it("does not render the removed internal process note", () => {
-    const page = readFileSync(repoFile("apps/AI-Stu-R1/src/pages/PublicHomePage.tsx"), "utf8");
+    const page = readFileSync(repoFile("apps/AI-Stu-R1/src/pages/public-home/GuestAnswer.tsx"), "utf8");
     expect(page).not.toContain("處理流程：");
     expect(page).not.toContain("guest-process-note");
     expect(page).toContain("正式 AI");
@@ -70,7 +70,7 @@ describe("guest answer public surface", () => {
     const client = readFileSync(repoFile("apps/AI-Stu-R1/src/studentClient.ts"), "utf8");
     expect(client).toContain('"x-guest-recovery-token"');
     expect(client).toContain("recoveryToken");
-    const page = readFileSync(repoFile("apps/AI-Stu-R1/src/pages/PublicHomePage.tsx"), "utf8");
+    const page = readFileSync(repoFile("apps/AI-Stu-R1/src/pages/public-home/useGuestQuestion.ts"), "utf8");
     // The client persists a {requestId, recoveryToken} credential, not a bare id.
     expect(page).toContain("recoveryToken");
     expect(page).toContain("saveGuestAnswerCredential");
