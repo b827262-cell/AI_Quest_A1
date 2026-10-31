@@ -14,7 +14,7 @@ const safeText = (max: number, fallback: string) =>
     .default(fallback);
 
 export const siteConfigSchema = z.object({
-  siteTitle: safeText(80, "AI-SmartBook"),
+  siteTitle: safeText(80, "iBrain AI"),
   siteSubtitle: safeText(160, "多模型領域智慧解題平台"),
   homeGreeting: safeText(100, "今天想學習什麼？"),
   homeInputPlaceholder: safeText(120, "輸入你的問題……"),

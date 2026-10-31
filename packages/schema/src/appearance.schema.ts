@@ -9,7 +9,7 @@ export const appearanceSettingsSchema = z.object({
   // Navigation
   dashboardNavLabel: z.string().default("首頁"),
   // Header / brand
-  systemName: z.string().default("iBrain 智匯"),
+  systemName: z.string().default("iBrain AI"),
   headerLogoUrl: z.string().default(""),
   headerLogoSize: z.number().int().min(8).max(96).default(24),
   headerLogoTextGap: z.number().int().min(0).max(48).default(8),
@@ -40,7 +40,7 @@ export const appearanceSettingsSchema = z.object({
   // --- Student header: brand area ---
   studentHeaderBrandLogoUrl: z.string().default(""),
   studentHeaderBrandLogoSize: z.number().int().min(12).max(96).default(28),
-  studentHeaderBrandText: z.string().default("iBrain 智匯"),
+  studentHeaderBrandText: z.string().default("iBrain AI"),
   studentHeaderBrandTextColor: z.string().default("#111827"),
   studentHeaderBrandFontSize: z.number().int().min(12).max(40).default(18),
   studentHeaderBrandGap: z.number().int().min(0).max(40).default(10),

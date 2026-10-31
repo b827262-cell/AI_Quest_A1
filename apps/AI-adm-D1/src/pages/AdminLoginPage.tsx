@@ -42,7 +42,7 @@ export function AdminLoginPage() {
       <section className="admin-login-card" aria-labelledby="admin-login-title">
         <div className="admin-login-mark">iB</div>
         <h1 id="admin-login-title">管理端登入</h1>
-        <p className="admin-login-subtitle">請使用管理員帳號登入 AI-SmartBook。</p>
+        <p className="admin-login-subtitle">請使用管理員帳號登入 iBrain AI。</p>
         {sessionExpired && <p className="admin-login-notice">登入工作階段已過期，請重新登入。</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <form onSubmit={submit}>

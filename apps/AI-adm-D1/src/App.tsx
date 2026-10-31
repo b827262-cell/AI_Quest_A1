@@ -1,3 +1,4 @@
+import { AdminPageTitle } from "./page-title";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppearanceProvider } from "./appearance";
 import { AdminAuthProvider, RequireAdmin } from "./admin-auth";
@@ -22,6 +23,7 @@ import { AdminLoginPage } from "./pages/AdminLoginPage";
 export function App() {
   return (
     <BrowserRouter>
+      <AdminPageTitle />
       <AdminAuthProvider>
         <Routes>
           <Route path="/login" element={<AdminLoginPage />} />

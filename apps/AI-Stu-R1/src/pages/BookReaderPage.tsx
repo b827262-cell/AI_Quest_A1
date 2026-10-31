@@ -653,7 +653,7 @@ export function BookReaderPage() {
   const safeActiveChapter = activeChapter?.id ?? null;
   const activeChapterTitle = activeOutlineNode?.title ?? activeChapter?.title ?? null;
   const watermarkText = [
-    "iBrain 智匯",
+    "iBrain AI",
     pdfSessionId ? `session ${pdfSessionId}` : "session pending",
     book.title || book.id,
     watermarkStamp || new Date().toLocaleDateString()

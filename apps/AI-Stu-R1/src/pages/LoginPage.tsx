@@ -30,7 +30,7 @@ export function LoginPage() {
       <div className="login-glass-card">
         <div className="login-header">
           <div className="login-logo">✨</div>
-          <h1>iBrain 智匯</h1>
+          <h1>iBrain AI</h1>
           <p>智能學習書本入口</p>
         </div>
         {reason === "session_expired" ? <p className="login-error">登入狀態已到期，請重新登入。</p> : null}

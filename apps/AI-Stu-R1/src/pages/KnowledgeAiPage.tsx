@@ -59,8 +59,8 @@ export function KnowledgeAiPage() {
   return (
     <div className="public-home-page knowledge-ai-page">
       <header className="public-home-header">
-        <Link to="/" className="public-brand-link" aria-label="AI-SmartBook 首頁">
-          <span className="public-brand-mark" aria-hidden="true">知</span><span>AI-SmartBook</span>
+        <Link to="/" className="public-brand-link" aria-label="iBrain AI 首頁">
+          <span className="public-brand-mark" aria-hidden="true">知</span><span>iBrain AI</span>
         </Link>
         <Link className="knowledge-back-link" to="/">返回首頁</Link>
       </header>

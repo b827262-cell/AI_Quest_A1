@@ -1,3 +1,4 @@
+import { StudentPageTitle } from "./page-title";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { AppearanceProvider } from "./appearance";
 import { BooksPage } from "./pages/BooksPage";
@@ -33,6 +34,7 @@ export function StudentAppRoutes() {
   return (
     <StudentAuthProvider>
       <AppearanceProvider>
+        <StudentPageTitle />
         <StudentChrome />
         <main className="stu-main">
           <Routes>
