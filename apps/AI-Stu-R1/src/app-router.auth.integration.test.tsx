@@ -114,6 +114,15 @@ async function waitForPath(expected: string, timeoutMs = 8_000): Promise<void> {
   throw new Error(`expected route ${expected}, stayed at ${currentPath()}`);
 }
 
+async function waitForContent(text: string, timeoutMs = 8_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (container?.textContent?.includes(text)) return;
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+  }
+  throw new Error(`expected content ${text}`);
+}
+
 async function loginViaRealAccess(baseUrl: string, displayName?: string): Promise<void> {
   // Real Access assertion over raw TCP against the express auth router.
   sessionCookie = await accessLoginViaRawHttp(baseUrl, app!.assertion());
@@ -154,6 +163,7 @@ describe("Student router + real session boundary (H-4)", () => {
 
     await renderAt("/knowledge-ai");
     await waitForPath("/knowledge-ai");
+    await waitForContent("知識達 AI 學習問答");
     const html = container?.innerHTML ?? "";
     expect(html).toContain("知識達 AI 學習問答");
     expect(html).toContain("公開來源查詢方式");
@@ -183,9 +193,7 @@ describe("Student router + real session boundary (H-4)", () => {
 
     await renderAt("/dashboard");
     await waitForPath("/dashboard");
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    });
+    await waitForContent("已登入學員");
     const html = container?.innerHTML ?? "";
     expect(html).toContain("已登入學員");
     expect(html).toContain("Real Session Student");

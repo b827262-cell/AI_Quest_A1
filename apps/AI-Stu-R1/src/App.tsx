@@ -1,16 +1,18 @@
+import { lazy } from "react";
+import { RouteLoading } from "./route-loading";
 import { StudentPageTitle } from "./page-title";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { AppearanceProvider } from "./appearance";
-import { BooksPage } from "./pages/BooksPage";
-import { BookReaderPage } from "./pages/BookReaderPage";
-import { AntiGPortalPage } from "./pages/AntiGPortalPage";
-import { InstitutionalFlowPage } from "./pages/InstitutionalFlowPage";
+const BooksPage = lazy(async () => ({ default: (await import("./pages/BooksPage")).BooksPage }));
+const BookReaderPage = lazy(async () => ({ default: (await import("./pages/BookReaderPage")).BookReaderPage }));
+const AntiGPortalPage = lazy(async () => ({ default: (await import("./pages/AntiGPortalPage")).AntiGPortalPage }));
+const InstitutionalFlowPage = lazy(async () => ({ default: (await import("./pages/InstitutionalFlowPage")).InstitutionalFlowPage }));
 import { LoginPage } from "./pages/LoginPage";
 import { StudentHeader } from "./components/StudentHeader";
 import { PublicHomePage } from "./pages/PublicHomePage";
-import { KnowledgeAiPage } from "./pages/KnowledgeAiPage";
-import { ProfileCompletionPage } from "./pages/ProfileCompletionPage";
-import { StudentDashboardPage } from "./pages/StudentDashboardPage";
+const KnowledgeAiPage = lazy(async () => ({ default: (await import("./pages/KnowledgeAiPage")).KnowledgeAiPage }));
+const ProfileCompletionPage = lazy(async () => ({ default: (await import("./pages/ProfileCompletionPage")).ProfileCompletionPage }));
+const StudentDashboardPage = lazy(async () => ({ default: (await import("./pages/StudentDashboardPage")).StudentDashboardPage }));
 import { RequireStudent, StudentAuthProvider } from "./student-auth";
 
 function StudentChrome() {
@@ -31,13 +33,14 @@ function RedirectToReader() {
  * MemoryRouter to assert session-driven redirects through the real router.
  */
 export function StudentAppRoutes() {
+  const location = useLocation();
   return (
     <StudentAuthProvider>
       <AppearanceProvider>
         <StudentPageTitle />
         <StudentChrome />
         <main className="stu-main">
-          <Routes>
+          <RouteLoading key={location.pathname}><Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/" element={<PublicHomePage />} />
               <Route path="/share-target" element={<PublicHomePage />} />
@@ -54,7 +57,7 @@ export function StudentAppRoutes() {
               <Route path="/antiG/institutional-flow" element={<InstitutionalFlowPage />} />
               <Route path="/antiG/report" element={<Navigate to="/antiG/institutional-flow" replace />} />
               <Route path="*" element={<Navigate to="/books" replace />} />
-            </Routes>
+            </Routes></RouteLoading>
           </main>
         </AppearanceProvider>
       </StudentAuthProvider>
