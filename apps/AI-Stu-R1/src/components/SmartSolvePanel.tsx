@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { AIActionButton, PrimaryButton, SecondaryButton, GhostButton } from "./ui/Buttons";
+import { useNotice } from "./useConfirm";
 
 interface Citation {
   text: string;
@@ -201,6 +202,7 @@ export function SmartSolvePanel({ bookId: _bookId, prefillText = "", onPrefillHa
   const [feedback, setFeedback] = useState<"like" | "dislike" | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [alertMsg, setAlertMsg] = useState("");
+  const notice = useNotice();
 
   // Handle selected text prefill
   useEffect(() => {
@@ -503,7 +505,7 @@ export function SmartSolvePanel({ bookId: _bookId, prefillText = "", onPrefillHa
               </PrimaryButton>
               <SecondaryButton
                 onClick={() => {
-                  alert("問題已回報給助教群進行人工複核。");
+                  void notice({ title: "已回報問題", message: "問題已回報給助教群進行人工複核。" });
                 }}
                 style={{ flex: 1 }}
               >

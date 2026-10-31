@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import type { BookContent } from "@ai-smartbook/schema";
 import { adminApi } from "../../api";
+import { useConfirm } from "../../components/useConfirm";
 
 export function ContentsTab({ bookId }: { bookId: string }) {
   const [contents, setContents] = useState<BookContent[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const confirmAction = useConfirm();
 
   function reload() {
     adminApi
@@ -20,7 +22,12 @@ export function ContentsTab({ bookId }: { bookId: string }) {
   }, [bookId]);
 
   async function onClear() {
-    if (!window.confirm(`確定清空這本書的 ${contents.length} 段內容？`)) return;
+    const confirmed = await confirmAction({
+      title: "確認清空內容",
+      message: `確定清空這本書的 ${contents.length} 段內容？`,
+      tone: "danger"
+    });
+    if (!confirmed) return;
 
     setBusy(true);
     setMsg("");

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SmartBookNote, SmartBookNoteType } from "@ai-smartbook/schema";
 import { studentClient } from "../studentClient";
+import { useConfirm } from "./useConfirm";
 
 const CANVAS_W = 600;
 const CANVAS_H = 360;
@@ -131,6 +132,7 @@ export function SmartNotesPanel({
   const [textBody, setTextBody] = useState("");
   const [canvasDirty, setCanvasDirty] = useState(false);
   const [preview, setPreview] = useState<SmartBookNote | null>(null);
+  const confirmAction = useConfirm();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const strokes = useRef<Point[][]>([]);
@@ -254,8 +256,13 @@ export function SmartNotesPanel({
     });
   }
 
-  function onDelete(noteId: string) {
-    if (!window.confirm("刪除這則筆記？")) return;
+  async function onDelete(noteId: string) {
+    const confirmed = await confirmAction({
+      title: "刪除筆記",
+      message: "刪除這則筆記？",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     void run(async () => {
       await studentClient.deleteNote(bookId, noteId);
       if (preview?.id === noteId) setPreview(null);
@@ -357,7 +364,7 @@ export function SmartNotesPanel({
                   <button
                     type="button"
                     className="notes-btn small"
-                    onClick={() => onDelete(note.id)}
+                    onClick={() => void onDelete(note.id)}
                     disabled={busy}
                   >
                     刪除
