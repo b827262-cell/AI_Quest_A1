@@ -1,25 +1,40 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type KeyboardEvent,
+  type SetStateAction
+} from "react";
 import { MOBILE_NOTICE_DURATION } from "./constants";
 import { clamp } from "./layout";
 
 /**
  * PDF page navigation state shared by the toolbar, the mobile jump bar, the
  * mobile action bar and the mobile touch zones.
+ *
+ * The mobile chrome visibility (`showMobileControls` / `showPageJumpBar`) is
+ * owned by `useMobileReaderShell` so its reset effect can run before these
+ * effects, exactly like the pre-split page did.
  */
 export function useReaderPagination({
   isMobile,
-  hasPdf
+  hasPdf,
+  showPageJumpBar,
+  setShowPageJumpBar,
+  setShowMobileControls
 }: {
   isMobile: boolean;
   hasPdf: boolean;
+  showPageJumpBar: boolean;
+  setShowPageJumpBar: Dispatch<SetStateAction<boolean>>;
+  setShowMobileControls: Dispatch<SetStateAction<boolean>>;
 }) {
   // PDF physical page is the canonical navigation source of truth.
   const [pdfPage, setPdfPage] = useState(1);
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [mobilePageInput, setMobilePageInput] = useState("");
   const [mobileBarPageInput, setMobileBarPageInput] = useState("1");
-  const [showMobileControls, setShowMobileControls] = useState(true);
-  const [showPageJumpBar, setShowPageJumpBar] = useState(false);
   const [mobileNotice, setMobileNotice] = useState("");
   const pageJumpInputRef = useRef<HTMLInputElement>(null);
   const mobileNoticeTimerRef = useRef<number | null>(null);
@@ -177,10 +192,6 @@ export function useReaderPagination({
     setMobilePageInput,
     mobileBarPageInput,
     setMobileBarPageInput,
-    showMobileControls,
-    setShowMobileControls,
-    showPageJumpBar,
-    setShowPageJumpBar,
     mobileNotice,
     pageJumpInputRef,
     jumpToPage,

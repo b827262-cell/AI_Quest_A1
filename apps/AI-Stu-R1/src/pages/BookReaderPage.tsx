@@ -27,13 +27,14 @@ import {
 import { useReaderViewport } from "./book-reader/useReaderViewport";
 import { useReaderLayout } from "./book-reader/useReaderLayout";
 import { useReaderPagination } from "./book-reader/useReaderPagination";
-import { useMobileReaderShell } from "./book-reader/useMobileReaderShell";
-import { useProtectedPdf } from "./book-reader/useProtectedPdf";
+import { useMobileReaderMetrics, useMobileReaderShell } from "./book-reader/useMobileReaderShell";
+import { useProtectedPdfSession, useProtectedPdfState } from "./book-reader/useProtectedPdf";
 import { useMobileTouchNavigation } from "./book-reader/useMobileTouchNavigation";
 
 export function BookReaderPage() {
   const { bookId = "" } = useParams();
   const notice = useNotice();
+  // Effects 1-2: reader-resizing cleanup and viewport width tracking.
   const { isMobile, isTablet } = useReaderViewport();
   const [book, setBook] = useState<BookDetail | null>(null);
   const [outline, setOutline] = useState<ReaderOutlineNode[]>([]);
@@ -44,6 +45,94 @@ export function BookReaderPage() {
   // The right column shows the AI Q&A, Smart Notes, or Progress panel — mutually
   // exclusive so the PDF grows when all are collapsed.
   const [rightPanel, setRightPanel] = useState<"ai" | "notes" | "progress" | "grid" | null>("ai");
+  const [zoom, setZoom] = useState(100);
+  const [notesRefreshKey, setNotesRefreshKey] = useState(0);
+  // PDF text selection: drag-select text to copy / save as note / ask AI.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedText, setSelectedText] = useState("");
+  const [pageHasText, setPageHasText] = useState(true);
+  const [copyNotice, setCopyNotice] = useState("");
+  const [aiPrefill, setAiPrefill] = useState<{ text: string; nonce: number } | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const chatRef = useRef<HTMLDivElement>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const touchZoneRef = useRef<HTMLDivElement>(null);
+  const hasPdf = Boolean(book?.pdfFileId);
+  // State only: the PDF effects stay at their original position further down.
+  const {
+    pdfBlob,
+    setPdfBlob,
+    pdfSessionId,
+    setPdfSessionId,
+    pdfLoading,
+    setPdfLoading,
+    pdfError,
+    setPdfError,
+    watermarkStamp,
+    setWatermarkStamp
+  } = useProtectedPdfState();
+
+  // Effects 3-6: desktop chrome reset, overlay body class, keyboard metrics and
+  // the mobile reading scroll lock.
+  const {
+    mobilePanel,
+    setMobilePanel,
+    showMobileControls,
+    setShowMobileControls,
+    showPageJumpBar,
+    setShowPageJumpBar,
+    outerLayoutRef,
+    readerMainRef,
+    actionBarRef
+  } = useMobileReaderShell({ isMobile, activeTab });
+
+  // Effects 7-10: jump-bar focus, outside-pointer close, notice cleanup and the
+  // action-bar page input sync.
+  const {
+    pdfPage,
+    setPdfPage,
+    pageCount,
+    setPageCount,
+    mobilePageInput,
+    setMobilePageInput,
+    mobileBarPageInput,
+    setMobileBarPageInput,
+    mobileNotice,
+    pageJumpInputRef,
+    jumpToPage,
+    prevPage,
+    nextPage,
+    applyMobilePageJump,
+    onMobilePageJumpKeyDown,
+    applyMobileBarJump,
+    onMobileBarJumpKeyDown,
+    toggleMobileControls,
+    toggleMobilePageJumpBar,
+    resetPageState
+  } = useReaderPagination({
+    isMobile,
+    hasPdf,
+    showPageJumpBar,
+    setShowPageJumpBar,
+    setShowMobileControls
+  });
+
+  // Effect 11: measure the reader chrome height for the fixed mobile viewport.
+  useMobileReaderMetrics({
+    isMobile,
+    activeTab,
+    mobilePanel,
+    rightPanel,
+    selectionMode,
+    pdfPage,
+    pdfBlob,
+    outerLayoutRef,
+    readerMainRef,
+    actionBarRef
+  });
+
+  // Effects 12-15: persist pane widths, outer gutters and the layout ratio.
   const {
     tocWidth,
     aiWidth,
@@ -58,74 +147,6 @@ export function BookReaderPage() {
     resizeLeftOuter,
     resizeRightOuter
   } = useReaderLayout({ collapsed, rightPanel });
-  const [zoom, setZoom] = useState(100);
-  const hasPdf = Boolean(book?.pdfFileId);
-  const {
-    pdfPage,
-    setPdfPage,
-    pageCount,
-    setPageCount,
-    mobilePageInput,
-    setMobilePageInput,
-    mobileBarPageInput,
-    setMobileBarPageInput,
-    showMobileControls,
-    setShowMobileControls,
-    showPageJumpBar,
-    setShowPageJumpBar,
-    mobileNotice,
-    pageJumpInputRef,
-    jumpToPage,
-    prevPage,
-    nextPage,
-    applyMobilePageJump,
-    onMobilePageJumpKeyDown,
-    applyMobileBarJump,
-    onMobileBarJumpKeyDown,
-    toggleMobileControls,
-    toggleMobilePageJumpBar,
-    resetPageState
-  } = useReaderPagination({ isMobile, hasPdf });
-  const [notesRefreshKey, setNotesRefreshKey] = useState(0);
-  // PDF text selection: drag-select text to copy / save as note / ask AI.
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selectedText, setSelectedText] = useState("");
-  const [pageHasText, setPageHasText] = useState(true);
-  const [copyNotice, setCopyNotice] = useState("");
-  const [aiPrefill, setAiPrefill] = useState<{ text: string; nonce: number } | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const { pdfBlob, pdfSessionId, pdfLoading, pdfError, setPdfError, watermarkStamp } =
-    useProtectedPdf({ bookId, book });
-  const { mobilePanel, setMobilePanel, outerLayoutRef, readerMainRef, actionBarRef } =
-    useMobileReaderShell({
-      isMobile,
-      activeTab,
-      rightPanel,
-      selectionMode,
-      pdfPage,
-      pdfBlob,
-      onDesktopChromeReset: () => {
-        setShowMobileControls(true);
-        setShowPageJumpBar(false);
-      }
-    });
-  const chatRef = useRef<HTMLDivElement>(null);
-  const autoSaveTimerRef = useRef<number | null>(null);
-  const touchZoneRef = useRef<HTMLDivElement>(null);
-  const {
-    onPointerDown: onPdfTouchZonePointerDown,
-    onPointerUp: onPdfTouchZonePointerUp,
-    onPointerCancel: onPdfTouchZonePointerCancel
-  } = useMobileTouchNavigation({
-    isMobile,
-    hasPdf,
-    touchZoneRef,
-    onPrevPage: prevPage,
-    onNextPage: nextPage,
-    onToggleControls: toggleMobileControls,
-    onTogglePageJumpBar: toggleMobilePageJumpBar
-  });
 
   // Reset per-book view state when switching books.
   useEffect(() => {
@@ -166,6 +187,17 @@ export function BookReaderPage() {
     };
   }, [book]);
 
+  // Effects 19-20: reset the PDF state per book and load the protected blob.
+  useProtectedPdfSession({
+    bookId,
+    book,
+    setPdfBlob,
+    setPdfSessionId,
+    setPdfLoading,
+    setPdfError,
+    setWatermarkStamp
+  });
+
   // Debounced auto-save: record page_view 1.5s after each page change.
   // Fire-and-forget — errors are intentionally suppressed so a backend hiccup
   // never disrupts reading. Chapter is inferred server-side from the page number.
@@ -188,6 +220,21 @@ export function BookReaderPage() {
       }
     };
   }, [pdfPage, pdfSessionId, book?.pdfFileId, bookId]);
+
+  // No effects here: pure pointer handlers for the mobile PDF tap zones.
+  const {
+    onPointerDown: onPdfTouchZonePointerDown,
+    onPointerUp: onPdfTouchZonePointerUp,
+    onPointerCancel: onPdfTouchZonePointerCancel
+  } = useMobileTouchNavigation({
+    isMobile,
+    hasPdf,
+    touchZoneRef,
+    onPrevPage: prevPage,
+    onNextPage: nextPage,
+    onToggleControls: toggleMobileControls,
+    onTogglePageJumpBar: toggleMobilePageJumpBar
+  });
 
   if (loading) return <p className="muted reader-state">載入中…</p>;
   if (error) return <p className="error-text reader-state">{error}</p>;

@@ -1,18 +1,54 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { studentClient, type BookDetail } from "../../studentClient";
 import { studentSessionKey } from "./layout";
 
 /**
- * Protected PDF lifecycle: ensure the book session, fetch the protected blob
- * and retry once when a stored session id has expired.
+ * Protected PDF state holder. Kept separate from the effects so the page can
+ * read `pdfBlob` before the chrome measurement effect while the session/blob
+ * effects still run in their original position (after the book/outline ones).
  */
-export function useProtectedPdf({ bookId, book }: { bookId: string; book: BookDetail | null }) {
+export function useProtectedPdfState() {
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [pdfSessionId, setPdfSessionId] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState("");
   const [watermarkStamp, setWatermarkStamp] = useState("");
 
+  return {
+    pdfBlob,
+    setPdfBlob,
+    pdfSessionId,
+    setPdfSessionId,
+    pdfLoading,
+    setPdfLoading,
+    pdfError,
+    setPdfError,
+    watermarkStamp,
+    setWatermarkStamp
+  };
+}
+
+/**
+ * Protected PDF lifecycle: ensure the book session, fetch the protected blob
+ * and retry once when a stored session id has expired.
+ */
+export function useProtectedPdfSession({
+  bookId,
+  book,
+  setPdfBlob,
+  setPdfSessionId,
+  setPdfLoading,
+  setPdfError,
+  setWatermarkStamp
+}: {
+  bookId: string;
+  book: BookDetail | null;
+  setPdfBlob: Dispatch<SetStateAction<Blob | null>>;
+  setPdfSessionId: Dispatch<SetStateAction<string | null>>;
+  setPdfLoading: Dispatch<SetStateAction<boolean>>;
+  setPdfError: Dispatch<SetStateAction<string>>;
+  setWatermarkStamp: Dispatch<SetStateAction<string>>;
+}) {
   useEffect(() => {
     setPdfBlob(null);
     setPdfLoading(false);
@@ -70,6 +106,4 @@ export function useProtectedPdf({ bookId, book }: { bookId: string; book: BookDe
       disposed = true;
     };
   }, [bookId, book?.pdfFileId]);
-
-  return { pdfBlob, pdfSessionId, pdfLoading, pdfError, setPdfError, watermarkStamp };
 }
