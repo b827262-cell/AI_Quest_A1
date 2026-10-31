@@ -1,23 +1,25 @@
+import { lazy } from "react";
+import { RouteLoading } from "./route-loading";
 import { AdminPageTitle } from "./page-title";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppearanceProvider } from "./appearance";
 import { AdminAuthProvider, RequireAdmin } from "./admin-auth";
 import { AdminShell } from "./components/admin/AdminShell";
-import { AdminDashboardPage } from "./pages/AdminDashboardPage";
-import { AdminAccountsPage } from "./pages/AdminAccountsPage";
-import { AdminLearningHistoryPage } from "./pages/AdminLearningHistoryPage";
-import { AppearanceSettingsPage } from "./pages/AppearanceSettingsPage";
-import { SiteConfigPage } from "./pages/SiteConfigPage";
-import { AiAnalyticsPage } from "./pages/AiAnalyticsPage";
-import { AiProvidersPage } from "./pages/AiProvidersPage";
-import { AiQuotaCenterPage } from "./pages/AiQuotaCenterPage";
-import { AiQualityEvaluationsPage } from "./pages/AiQualityEvaluationsPage";
-import { ExamSnapshotsPage } from "./pages/ExamSnapshotsPage";
-import { BooksPage } from "./pages/BooksPage";
-import { NewBookPage } from "./pages/NewBookPage";
-import { BookDetail } from "./pages/BookDetail";
-import { ChaptersPage } from "./pages/ChaptersPage";
-import { QaPage } from "./pages/QaPage";
+const AdminDashboardPage = lazy(async () => ({ default: (await import("./pages/AdminDashboardPage")).AdminDashboardPage }));
+const AdminAccountsPage = lazy(async () => ({ default: (await import("./pages/AdminAccountsPage")).AdminAccountsPage }));
+const AdminLearningHistoryPage = lazy(async () => ({ default: (await import("./pages/AdminLearningHistoryPage")).AdminLearningHistoryPage }));
+const AppearanceSettingsPage = lazy(async () => ({ default: (await import("./pages/AppearanceSettingsPage")).AppearanceSettingsPage }));
+const SiteConfigPage = lazy(async () => ({ default: (await import("./pages/SiteConfigPage")).SiteConfigPage }));
+const AiAnalyticsPage = lazy(async () => ({ default: (await import("./pages/AiAnalyticsPage")).AiAnalyticsPage }));
+const AiProvidersPage = lazy(async () => ({ default: (await import("./pages/AiProvidersPage")).AiProvidersPage }));
+const AiQuotaCenterPage = lazy(async () => ({ default: (await import("./pages/AiQuotaCenterPage")).AiQuotaCenterPage }));
+const AiQualityEvaluationsPage = lazy(async () => ({ default: (await import("./pages/AiQualityEvaluationsPage")).AiQualityEvaluationsPage }));
+const ExamSnapshotsPage = lazy(async () => ({ default: (await import("./pages/ExamSnapshotsPage")).ExamSnapshotsPage }));
+const BooksPage = lazy(async () => ({ default: (await import("./pages/BooksPage")).BooksPage }));
+const NewBookPage = lazy(async () => ({ default: (await import("./pages/NewBookPage")).NewBookPage }));
+const BookDetail = lazy(async () => ({ default: (await import("./pages/BookDetail")).BookDetail }));
+const ChaptersPage = lazy(async () => ({ default: (await import("./pages/ChaptersPage")).ChaptersPage }));
+const QaPage = lazy(async () => ({ default: (await import("./pages/QaPage")).QaPage }));
 import { AdminLoginPage } from "./pages/AdminLoginPage";
 
 export function App() {
@@ -35,11 +37,12 @@ export function App() {
 }
 
 function ProtectedAdminRoutes() {
+  const location = useLocation();
   return (
     <RequireAdmin>
       <AppearanceProvider>
         <AdminShell>
-          <Routes>
+          <RouteLoading key={location.pathname}><Routes>
             <Route path="/" element={<Navigate to="/admin" replace />} />
             <Route path="/admin" element={<AdminDashboardPage />} />
             <Route path="/admin/accounts" element={<AdminAccountsPage />} />
@@ -58,7 +61,7 @@ function ProtectedAdminRoutes() {
             <Route path="/admin/books/:bookId/qa" element={<QaPage />} />
             <Route path="/admin/books/:bookId/*" element={<BookDetail />} />
             <Route path="*" element={<Navigate to="/admin" replace />} />
-          </Routes>
+          </Routes></RouteLoading>
         </AdminShell>
       </AppearanceProvider>
     </RequireAdmin>
