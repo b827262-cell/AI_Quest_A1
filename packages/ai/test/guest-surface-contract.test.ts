@@ -1,13 +1,30 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const repoFile = (relative: string) =>
   fileURLToPath(new URL(`../../../${relative}`, import.meta.url));
 
+/** The public home page plus every module under `pages/public-home/`. */
+function publicHomeSources(): string[] {
+  const pageDir = repoFile("apps/AI-Stu-R1/src/pages");
+  const collect = (directory: string): string[] =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const path = join(directory, entry.name);
+      return entry.isDirectory() ? collect(path) : [path];
+    });
+  return [
+    join(pageDir, "PublicHomePage.tsx"),
+    ...collect(join(pageDir, "public-home")).sort()
+  ];
+}
+
 describe("guest answer public surface", () => {
   it("does not render the removed internal process note", () => {
-    const page = readFileSync(repoFile("apps/AI-Stu-R1/src/pages/public-home/GuestAnswer.tsx"), "utf8");
+    const page = publicHomeSources()
+      .map((file) => readFileSync(file, "utf8"))
+      .join("\n");
     expect(page).not.toContain("處理流程：");
     expect(page).not.toContain("guest-process-note");
     expect(page).toContain("正式 AI");
