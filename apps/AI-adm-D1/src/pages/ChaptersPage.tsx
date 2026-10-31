@@ -5,6 +5,7 @@ import { adminApi } from "../api";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
+import { useConfirm } from "../components/useConfirm";
 
 const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
   linked: { text: "已連結", cls: "parsed" },
@@ -31,6 +32,7 @@ export function ChaptersPage() {
   const [editing, setEditing] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditState>({ title: "", pageStart: "", pageEnd: "", level: "0" });
   const [newCh, setNewCh] = useState<EditState>({ title: "", pageStart: "", pageEnd: "", level: "0" });
+  const confirmAction = useConfirm();
 
   const load = useCallback(() => {
     setError("");
@@ -74,6 +76,16 @@ export function ChaptersPage() {
       pageEnd: c.pageEnd != null ? String(c.pageEnd) : "",
       level: String(c.level ?? 0)
     });
+  }
+
+  async function onDeleteChapter(chapter: AdminChapter) {
+    const confirmed = await confirmAction({
+      title: "確認刪除章節",
+      message: "確定刪除此章節嗎？",
+      tone: "danger"
+    });
+    if (!confirmed) return;
+    await run(() => adminApi.deleteChapter(bookId, chapter.id), "已刪除章節");
   }
 
   if (error && chapters.length === 0 && !book) {
@@ -188,9 +200,7 @@ export function ChaptersPage() {
                           ) : (
                             <>
                               <button className="admin-link-btn" onClick={() => startEdit(c)}>編輯</button>
-                              <button className="admin-link-btn" disabled={busy} onClick={() => {
-                                if (window.confirm("確定刪除此章節嗎？")) void run(() => adminApi.deleteChapter(bookId, c.id), "已刪除章節");
-                              }}>刪除</button>
+                              <button className="admin-link-btn" disabled={busy} onClick={() => void onDeleteChapter(c)}>刪除</button>
                             </>
                           )}
                         </div>

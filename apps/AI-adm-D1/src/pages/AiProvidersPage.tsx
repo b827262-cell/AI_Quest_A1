@@ -4,6 +4,7 @@ import { priceFor, type AiProviderId } from "@ai-smartbook/ai/browser";
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
+import { useConfirm, useNotice } from "../components/useConfirm";
 import { quotaMetric, quotaStatus, usageSourceLabel, SYSTEM_DAILY_RESET_LABEL } from "./aiQuotaDisplay";
 import { providerErrorMessage } from "../providerErrorMessage";
 import { credentialErrorMessage, credentialFieldErrors, credentialFormAfterFailure, credentialTestResultMessage } from "../credentialErrorMessage";
@@ -276,6 +277,8 @@ export function AiProvidersPage() {
   const [message, setMessage] = useState("");
   const [credentialErrors, setCredentialErrors] = useState<Record<string, string>>({});
   const providerSaveInFlight = useRef(false);
+  const confirmAction = useConfirm();
+  const notice = useNotice();
 
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? null;
 
@@ -404,7 +407,12 @@ export function AiProvidersPage() {
   async function toggleProvider() {
     if (!selectedProvider) return;
     const nextEnabled = !selectedProvider.enabled;
-    if (!window.confirm(`確定要${nextEnabled ? "啟用" : "停用"} ${selectedProvider.displayName}？`)) return;
+    const confirmed = await confirmAction({
+      title: nextEnabled ? "確認啟用 Provider" : "確認停用 Provider",
+      message: `確定要${nextEnabled ? "啟用" : "停用"} ${selectedProvider.displayName}？`,
+      tone: nextEnabled ? "default" : "danger"
+    });
+    if (!confirmed) return;
     setBusy(true);
     setError("");
     try {
@@ -420,11 +428,19 @@ export function AiProvidersPage() {
 
   async function deleteProvider(provider: Provider) {
     if (provider.isRouterProvider) {
-      window.confirm("此 Provider 是 Default Router，不能直接刪除；請先指定其他 Default Router。\n\n按「確定」關閉提示。");
+      await notice({
+        title: "無法刪除 Provider",
+        message: "此 Provider 是 Default Router，不能直接刪除；請先指定其他 Default Router。\n\n按「確定」關閉提示。"
+      });
       setError("此 Provider 是 Default Router，請先指定其他 Default Router 再刪除。");
       return;
     }
-    if (!window.confirm(`確定要刪除 ${provider.displayName}？\n\n這會停用所屬 Credential 與所有模型配額，Gateway 將立即停止選用。`)) return;
+    const confirmed = await confirmAction({
+      title: "確認刪除 Provider",
+      message: `確定要刪除 ${provider.displayName}？\n\n這會停用所屬 Credential 與所有模型配額，Gateway 將立即停止選用。`,
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setBusy(true);
     setError("");
     setMessage("");
@@ -566,7 +582,12 @@ export function AiProvidersPage() {
       setError("預設模型不可直接刪除，請先指定其他預設模型。");
       return;
     }
-    if (!window.confirm(`確定刪除 ${quota.model} 的模型配額？刪除後該模型不再受此配額限制。`)) return;
+    const confirmed = await confirmAction({
+      title: "確認刪除模型配額",
+      message: `確定刪除 ${quota.model} 的模型配額？刪除後該模型不再受此配額限制。`,
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setBusy(true);
     setError("");
     try {
@@ -590,7 +611,12 @@ export function AiProvidersPage() {
       return;
     }
     const action = quota.enabled ? "停用" : "啟用";
-    if (!window.confirm(`確定要${action} ${quota.model} 的模型配額？`)) return;
+    const confirmed = await confirmAction({
+      title: `確認${action}模型配額`,
+      message: `確定要${action} ${quota.model} 的模型配額？`,
+      tone: action === "停用" ? "danger" : "default"
+    });
+    if (!confirmed) return;
     setBusy(true);
     setError("");
     try {
@@ -707,10 +733,22 @@ export function AiProvidersPage() {
   async function credentialAction(credential: Credential, action: "enable" | "disable" | "delete") {
     const deletingLastActive = action === "delete" && credential.status === "active"
       && credentials.filter((row) => row.status === "active").length === 1;
-    if (action === "delete" && !window.confirm(
-      `確定要軟刪除 ${credential.name}？刪除後不可再被 Gateway 選用。${deletingLastActive ? "\n警告：這是此 Provider 最後一組 Active Key。" : ""}`
-    )) return;
-    if (action === "disable" && !window.confirm(`確定要停用 ${credential.name}？`)) return;
+    if (action === "delete") {
+      const confirmed = await confirmAction({
+        title: "確認刪除 Credential",
+        message: `確定要軟刪除 ${credential.name}？刪除後不可再被 Gateway 選用。${deletingLastActive ? "\n警告：這是此 Provider 最後一組 Active Key。" : ""}`,
+        tone: "danger"
+      });
+      if (!confirmed) return;
+    }
+    if (action === "disable") {
+      const confirmed = await confirmAction({
+        title: "確認停用 Credential",
+        message: `確定要停用 ${credential.name}？`,
+        tone: "danger"
+      });
+      if (!confirmed) return;
+    }
     if (!selectedProvider) return;
     setBusy(true);
     setError("");

@@ -19,7 +19,7 @@ describe("AI quality evaluation admin UI contract", () => {
   it("shows confidence calibration", () => expect(pageSource).toContain("Confidence Calibration"));
   it("shows safe failed cases", () => expect(pageSource).toContain("Safe Summary"));
   it("offers report downloads", () => { expect(pageSource).toContain("下載 JSON"); expect(pageSource).toContain("下載 Markdown"); });
-  it("requires delete confirmation in the UI", () => expect(pageSource).toContain("window.confirm"));
+  it("requires delete confirmation in the UI", () => expect(pageSource).toContain("useConfirm"));
   it("renders explicit mode badges", () => expect(pageSource).toContain("evaluation-mode-badge"));
   it("offers comparable baseline selection", () => expect(pageSource).toContain("evaluation-baseline-picker"));
 });
