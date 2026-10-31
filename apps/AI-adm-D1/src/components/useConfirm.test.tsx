@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, type ReactElement } from "react";
+import { StrictMode, act, useEffect, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { confirmDialog, useConfirm, type ConfirmOptions } from "./useConfirm";
@@ -158,5 +158,82 @@ describe("useConfirm lifecycle", () => {
       await Promise.resolve();
     });
     await expect(pending).resolves.toBe(true);
+  });
+
+  it("ignores the stale onConfirm of a replaced dialog when it fires twice", async () => {
+    const onDelete = vi.fn(async () => undefined);
+    const results: boolean[] = [];
+    render(<Caller results={results} onDelete={onDelete} />);
+
+    await act(async () => {
+      findButton("連續兩筆").click();
+    });
+
+    // Both clicks land before React repaints, so the second one still runs the
+    // callback that was bound to the first request.
+    const staleConfirm = findButton("確定", dialog()!);
+    await act(async () => {
+      staleConfirm.click();
+      staleConfirm.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(results).toEqual([true]);
+    expect(dialog()).not.toBeNull();
+  });
+
+  it("rejects a confirm call made through a stale hook after unmount", async () => {
+    let staleConfirm: ((options: ConfirmOptions) => Promise<boolean>) | undefined;
+    function Holder() {
+      staleConfirm = useConfirm();
+      return null;
+    }
+    render(<Holder />);
+
+    await act(async () => {
+      root!.unmount();
+      await Promise.resolve();
+    });
+    root = null;
+
+    let pending: Promise<boolean> | undefined;
+    await act(async () => {
+      pending = staleConfirm!(DANGER);
+      await Promise.resolve();
+    });
+
+    await expect(pending).resolves.toBe(false);
+    expect(dialog()).toBeNull();
+  });
+
+  it("keeps working when a StrictMode remount re-runs the owner effect", async () => {
+    const results: boolean[] = [];
+    function StrictCaller() {
+      const confirm = useConfirm();
+      useEffect(() => {
+        void confirm(DANGER).then((value) => {
+          results.push(value);
+        });
+      }, [confirm]);
+      return null;
+    }
+
+    render(
+      <StrictMode>
+        <StrictCaller />
+      </StrictMode>
+    );
+
+    expect(dialog()).not.toBeNull();
+
+    await act(async () => {
+      findButton("確定", dialog()!).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(results[results.length - 1]).toBe(true);
+    expect(dialog()).toBeNull();
   });
 });

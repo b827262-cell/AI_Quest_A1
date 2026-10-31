@@ -17,7 +17,10 @@ export interface NoticeOptions {
 }
 
 /** Component instance that issued a request; used to cancel its requests on unmount. */
-type RequestOwner = object;
+interface RequestOwner {
+  /** True while the owning component is unmounted; StrictMode resets it on remount. */
+  disposed: boolean;
+}
 
 interface RequestBase {
   id: number;
@@ -63,9 +66,12 @@ function showNext() {
   emit();
 }
 
-function settle(confirmed: boolean) {
-  const request = active;
-  if (!request) return;
+/**
+ * Settles the request the callback was created for. A stale callback (the host
+ * already moved on to the next request) must not settle whatever is active now.
+ */
+function settle(request: DialogRequest, confirmed: boolean) {
+  if (active !== request) return;
   active = null;
   finish(request, confirmed);
   showNext();
@@ -83,8 +89,8 @@ function DialogHost() {
         message={request.options.message}
         confirmLabel={request.options.confirmLabel}
         cancelLabel={null}
-        onConfirm={() => settle(true)}
-        onCancel={() => settle(false)}
+        onConfirm={() => settle(request, true)}
+        onCancel={() => settle(request, false)}
       />
     );
   }
@@ -97,8 +103,8 @@ function DialogHost() {
       confirmLabel={request.options.confirmLabel}
       cancelLabel={request.options.cancelLabel}
       tone={request.options.tone}
-      onConfirm={() => settle(true)}
-      onCancel={() => settle(false)}
+      onConfirm={() => settle(request, true)}
+      onCancel={() => settle(request, false)}
     />
   );
 }
@@ -122,6 +128,12 @@ function ensureHost() {
 }
 
 function enqueue(request: DialogRequest) {
+  // Requests from an unmounted owner are rejected outright: queueing them would
+  // show a dialog nobody is waiting for anymore.
+  if (request.owner?.disposed) {
+    finish(request, false);
+    return;
+  }
   if (typeof document === "undefined") {
     if (request.kind === "confirm") request.resolve(false);
     else request.resolve();
@@ -197,9 +209,13 @@ export function noticeDialog(options: NoticeOptions): Promise<void> {
 }
 
 function useRequestOwner(): RequestOwner {
-  const owner = useMemo<RequestOwner>(() => ({}), []);
+  const owner = useMemo<RequestOwner>(() => ({ disposed: false }), []);
   useEffect(() => {
+    // StrictMode runs cleanup before re-running the effect, so re-arm the owner
+    // here; otherwise the remounted component could never open a dialog again.
+    owner.disposed = false;
     return () => {
+      owner.disposed = true;
       cancelOwner(owner);
     };
   }, [owner]);
