@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ConfirmDialog, type ConfirmDialogTone } from "./ConfirmDialog";
 
@@ -16,10 +16,20 @@ export interface NoticeOptions {
   confirmLabel?: string;
 }
 
-type DialogRequest =
-  | { kind: "confirm"; options: ConfirmOptions; resolve: (value: boolean) => void }
-  | { kind: "notice"; options: NoticeOptions; resolve: () => void };
+/** Component instance that issued a request; used to cancel its requests on unmount. */
+type RequestOwner = object;
 
+interface RequestBase {
+  id: number;
+  owner?: RequestOwner;
+  settled: boolean;
+}
+
+type DialogRequest =
+  | (RequestBase & { kind: "confirm"; options: ConfirmOptions; resolve: (value: boolean) => void })
+  | (RequestBase & { kind: "notice"; options: NoticeOptions; resolve: () => void });
+
+let nextRequestId = 1;
 let queue: DialogRequest[] = [];
 let active: DialogRequest | null = null;
 const listeners = new Set<() => void>();
@@ -41,6 +51,13 @@ function getSnapshot() {
   return active;
 }
 
+function finish(request: DialogRequest, confirmed: boolean) {
+  if (request.settled) return;
+  request.settled = true;
+  if (request.kind === "confirm") request.resolve(confirmed);
+  else request.resolve();
+}
+
 function showNext() {
   active = queue.shift() ?? null;
   emit();
@@ -49,9 +66,9 @@ function showNext() {
 function settle(confirmed: boolean) {
   const request = active;
   if (!request) return;
+  active = null;
+  finish(request, confirmed);
   showNext();
-  if (request.kind === "confirm") request.resolve(confirmed);
-  else request.resolve();
 }
 
 function DialogHost() {
@@ -60,6 +77,7 @@ function DialogHost() {
   if (request.kind === "notice") {
     return (
       <ConfirmDialog
+        key={request.id}
         open
         title={request.options.title ?? "提示"}
         message={request.options.message}
@@ -72,6 +90,7 @@ function DialogHost() {
   }
   return (
     <ConfirmDialog
+      key={request.id}
       open
       title={request.options.title}
       message={request.options.message}
@@ -113,24 +132,86 @@ function enqueue(request: DialogRequest) {
   ensureHost();
 }
 
+function enqueueConfirm(owner: RequestOwner | undefined, options: ConfirmOptions): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    enqueue({ id: nextRequestId++, kind: "confirm", options, resolve, settled: false, owner });
+  });
+}
+
+function enqueueNotice(owner: RequestOwner | undefined, options: NoticeOptions): Promise<void> {
+  return new Promise<void>((resolve) => {
+    enqueue({ id: nextRequestId++, kind: "notice", options, resolve, settled: false, owner });
+  });
+}
+
+/**
+ * Drops every request owned by a component that unmounted: queued requests are
+ * removed and the visible one is closed. Both settle as "cancelled" so callers
+ * awaiting them never hang and never proceed with the destructive action.
+ */
+function cancelOwner(owner: RequestOwner) {
+  let changed = false;
+  for (let index = queue.length - 1; index >= 0; index -= 1) {
+    const request = queue[index];
+    if (request.owner !== owner) continue;
+    queue.splice(index, 1);
+    finish(request, false);
+    changed = true;
+  }
+  if (active?.owner === owner) {
+    const request = active;
+    active = null;
+    finish(request, false);
+    active = queue.shift() ?? null;
+    changed = true;
+  }
+  if (changed) emit();
+}
+
+/** Tears the host down (hot reload / module disposal) and cancels what is left. */
+function disposeHost() {
+  const pending = active ? [active, ...queue] : [...queue];
+  active = null;
+  queue = [];
+  for (const request of pending) finish(request, false);
+  emit();
+  if (hostRoot) {
+    hostRoot.unmount();
+    hostRoot = null;
+  }
+  hostContainer?.remove();
+  hostContainer = null;
+}
+
+const hot = (import.meta as ImportMeta & { hot?: { dispose: (callback: () => void) => void } }).hot;
+hot?.dispose(disposeHost);
+
 /** Resolves true when confirmed and false on cancel, Escape or close. */
 export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    enqueue({ kind: "confirm", options, resolve });
-  });
+  return enqueueConfirm(undefined, options);
 }
 
 /** Resolves when the notice is dismissed. */
 export function noticeDialog(options: NoticeOptions): Promise<void> {
-  return new Promise<void>((resolve) => {
-    enqueue({ kind: "notice", options, resolve });
-  });
+  return enqueueNotice(undefined, options);
+}
+
+function useRequestOwner(): RequestOwner {
+  const owner = useMemo<RequestOwner>(() => ({}), []);
+  useEffect(() => {
+    return () => {
+      cancelOwner(owner);
+    };
+  }, [owner]);
+  return owner;
 }
 
 export function useConfirm() {
-  return useCallback((options: ConfirmOptions) => confirmDialog(options), []);
+  const owner = useRequestOwner();
+  return useCallback((options: ConfirmOptions) => enqueueConfirm(owner, options), [owner]);
 }
 
 export function useNotice() {
-  return useCallback((options: NoticeOptions) => noticeDialog(options), []);
+  const owner = useRequestOwner();
+  return useCallback((options: NoticeOptions) => enqueueNotice(owner, options), [owner]);
 }

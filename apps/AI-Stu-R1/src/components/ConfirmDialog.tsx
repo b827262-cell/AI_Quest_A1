@@ -48,7 +48,10 @@ export function ConfirmDialog({
     const initial = tone === "danger" ? cancelRef.current : confirmRef.current;
     initial?.focus();
     return () => {
-      restoreFocusRef.current?.focus();
+      // The previously focused node may already be gone (e.g. the whole host was
+      // torn down); focusing a detached element would only steal focus.
+      const previous = restoreFocusRef.current;
+      if (previous?.isConnected) previous.focus();
     };
   }, [open, tone]);
 
