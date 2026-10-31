@@ -27,6 +27,7 @@ import { SmartNotesPanel } from "../components/SmartNotesPanel";
 import { ProgressPanel } from "../components/ProgressPanel";
 import { LearningGridPanel } from "../components/LearningGridPanel";
 import { TabPlaceholder } from "../components/TabPlaceholder";
+import { useNotice } from "../components/useConfirm";
 
 const QUICK_PROMPTS = [
   "整理這頁重點",
@@ -240,6 +241,7 @@ function OuterResizeHandle({
 
 export function BookReaderPage() {
   const { bookId = "" } = useParams();
+  const notice = useNotice();
   const initialOuterLayout = useMemo(() => readStoredOuterLayout(), []);
   const [book, setBook] = useState<BookDetail | null>(null);
   const [outline, setOutline] = useState<ReaderOutlineNode[]>([]);
@@ -709,9 +711,9 @@ export function BookReaderPage() {
         pageNumber: book.pdfFileId ? pdfPage : null
       });
       setNotesRefreshKey((k) => k + 1);
-      window.alert("已存成筆記，可於「智能筆記」分頁查看。");
+      void notice({ title: "已存成筆記", message: "已存成筆記，可於「智能筆記」分頁查看。" });
     } catch (e) {
-      window.alert(`存成筆記失敗：${e instanceof Error ? e.message : String(e)}`);
+      void notice({ title: "存成筆記失敗", message: `存成筆記失敗：${e instanceof Error ? e.message : String(e)}` });
     }
   }
 
@@ -770,7 +772,7 @@ export function BookReaderPage() {
       setNotesRefreshKey((k) => k + 1);
       setSelectedText("");
     } catch (e) {
-      window.alert(`加入筆記失敗：${e instanceof Error ? e.message : String(e)}`);
+      void notice({ title: "加入筆記失敗", message: `加入筆記失敗：${e instanceof Error ? e.message : String(e)}` });
     }
   }
 

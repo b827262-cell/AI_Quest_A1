@@ -3,6 +3,7 @@ import { adminApi, type AiEvaluationAlert, type AiEvaluationDetail, type AiEvalu
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
+import { useConfirm } from "../components/useConfirm";
 
 const DATASET_ID = "phase-4a-core";
 const MODE_LABELS: Record<AiEvaluationMode, string> = { fixture: "Fixture", mock_orchestrator: "Mock", live: "Live" };
@@ -62,6 +63,7 @@ export function AiQualityEvaluationsPage() {
   const [productionReadiness, setProductionReadiness] = useState<AiProductionReadiness | null>(null);
   const [pilotSettings, setPilotSettings] = useState<AiPilotSettings | null>(null);
   const [pilotBusy, setPilotBusy] = useState(false);
+  const confirmAction = useConfirm();
 
   const loadRuns = useCallback(async () => {
     setLoading(true); setError("");
@@ -118,7 +120,13 @@ export function AiQualityEvaluationsPage() {
   }
 
   async function remove() {
-    if (!selectedId || !window.confirm("確定刪除此評測紀錄及其安全指標？")) return;
+    if (!selectedId) return;
+    const confirmed = await confirmAction({
+      title: "確認刪除評測紀錄",
+      message: "確定刪除此評測紀錄及其安全指標？",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setBusy("delete");
     try { await adminApi.deleteAiEvaluation(selectedId); setMessage("評測紀錄已刪除。"); setSelectedId(null); setDetail(null); await loadRuns(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "刪除失敗"); }
@@ -137,7 +145,13 @@ export function AiQualityEvaluationsPage() {
   }
 
   async function liveRun() {
-    if (!preflight?.allowed || !preflight.confirmationToken || !window.confirm("確認執行受控 Live Evaluation？這會呼叫真實模型，但只使用 Evaluation Pool，不會使用 Personal Credential 或 Production Pool。")) return;
+    if (!preflight?.allowed || !preflight.confirmationToken) return;
+    const confirmed = await confirmAction({
+      title: "確認執行受控 Live Evaluation",
+      message: "確認執行受控 Live Evaluation？這會呼叫真實模型，但只使用 Evaluation Pool，不會使用 Personal Credential 或 Production Pool。",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setLiveBusy("run"); setError("");
     try {
       const result = await adminApi.startLiveAiEvaluation({ datasetId: DATASET_ID, maxCases: Number(liveCases), maxTokenBudget: Number(liveBudget), logicalModelIds: liveModels, dryRunId: preflight.dryRunId, confirmationToken: preflight.confirmationToken }, `eval-live-ui-${preflight.dryRunId}`);
@@ -160,7 +174,13 @@ export function AiQualityEvaluationsPage() {
   }
 
   async function executeRetention() {
-    if (!retentionPreview || !window.confirm("確認執行 Retention？受保護的 Running、Baseline、最新成功與退化紀錄不會刪除。")) return;
+    if (!retentionPreview) return;
+    const confirmed = await confirmAction({
+      title: "確認執行 Retention",
+      message: "確認執行 Retention？受保護的 Running、Baseline、最新成功與退化紀錄不會刪除。",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     try { const result = await adminApi.runAiEvaluationRetention({ previewId: retentionPreview.id, confirmationToken: retentionPreview.confirmationToken }); setMessage(`Retention 已刪除 ${result.deleted} 筆。`); setRetentionPreview(null); await loadRuns(); await loadGovernance(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Retention 執行失敗"); }
   }
@@ -176,7 +196,12 @@ export function AiQualityEvaluationsPage() {
   }
 
   async function deleteSchedule(schedule: AiEvaluationSchedule) {
-    if (!window.confirm("確認刪除這個離線排程？既有評測紀錄不會刪除。")) return;
+    const confirmed = await confirmAction({
+      title: "確認刪除離線排程",
+      message: "確認刪除這個離線排程？既有評測紀錄不會刪除。",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     try { await adminApi.deleteAiEvaluationSchedule(schedule.id); await loadGovernance(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "排程刪除失敗"); }
   }

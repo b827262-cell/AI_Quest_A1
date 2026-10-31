@@ -7,6 +7,7 @@ import {
   type StudentQuestion
 } from "../api";
 import { AdminPageHeader } from "../components/admin/AdminPageHeader";
+import { useConfirm } from "../components/useConfirm";
 import { AdminCard } from "../components/admin/AdminCard";
 import { AdminErrorCard } from "../components/admin/AdminErrorCard";
 
@@ -98,6 +99,7 @@ export function AdminDashboardPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const confirmAction = useConfirm();
 
   const loadStats = useCallback(
     (r: DashboardRange) =>
@@ -142,7 +144,12 @@ export function AdminDashboardPage() {
   }
 
   async function deleteOne(id: string) {
-    if (!window.confirm("確定要刪除此筆訊息紀錄嗎？此操作可能無法復原。")) return;
+    const confirmed = await confirmAction({
+      title: "確認刪除訊息紀錄",
+      message: "確定要刪除此筆訊息紀錄嗎？此操作可能無法復原。",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setBusy(true);
     try {
       await adminApi.deleteStudentQuestion(id);
@@ -159,7 +166,12 @@ export function AdminDashboardPage() {
 
   async function deleteBatch() {
     if (selected.size === 0) return;
-    if (!window.confirm("確定要刪除此筆訊息紀錄嗎？此操作可能無法復原。")) return;
+    const confirmed = await confirmAction({
+      title: "確認刪除訊息紀錄",
+      message: "確定要刪除此筆訊息紀錄嗎？此操作可能無法復原。",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setBusy(true);
     try {
       await adminApi.deleteStudentQuestions([...selected]);

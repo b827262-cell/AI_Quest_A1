@@ -15,6 +15,7 @@ import {
   type ReaderTocImportPayload,
   type ReaderTocResponse
 } from "../../api";
+import { useConfirm } from "../../components/useConfirm";
 
 const ENTRY_TYPE_OPTIONS: ChapterPreviewEntryType[] = [
   "front_matter",
@@ -254,6 +255,7 @@ export function FilesTab({ bookId }: { bookId: string }) {
   const previewSectionRef = useRef<HTMLDivElement>(null);
   const jsonResultRef = useRef<HTMLDivElement>(null);
   const readerTocSectionRef = useRef<HTMLDivElement>(null);
+  const confirmAction = useConfirm();
 
   async function reload() {
     const [data, idx, toc] = await Promise.all([
@@ -359,7 +361,12 @@ export function FilesTab({ bookId }: { bookId: string }) {
   }
 
   async function onDelete(fileId: string, fileName: string) {
-    if (!window.confirm(`Delete file "${fileName}"?`)) return;
+    const confirmed = await confirmAction({
+      title: "Delete file",
+      message: `Delete file "${fileName}"?`,
+      tone: "danger"
+    });
+    if (!confirmed) return;
 
     await run(async () => {
       await adminApi.deleteFile(bookId, fileId);
@@ -437,7 +444,12 @@ export function FilesTab({ bookId }: { bookId: string }) {
       setMsg("No active reader TOC to delete.");
       return;
     }
-    if (!window.confirm(`Delete active reader TOC "${readerToc.file.fileName}"?`)) return;
+    const confirmed = await confirmAction({
+      title: "Delete reader TOC",
+      message: `Delete active reader TOC "${readerToc.file.fileName}"?`,
+      tone: "danger"
+    });
+    if (!confirmed) return;
 
     await run(async () => {
       const result = await adminApi.deleteReaderToc(bookId);
@@ -512,7 +524,12 @@ export function FilesTab({ bookId }: { bookId: string }) {
   }
 
   async function onDeleteJsonIndex(indexFileId: string, fileName: string) {
-    if (!window.confirm(`Delete JSON index "${fileName}"? The source PDF is not affected.`)) return;
+    const confirmed = await confirmAction({
+      title: "Delete JSON index",
+      message: `Delete JSON index "${fileName}"? The source PDF is not affected.`,
+      tone: "danger"
+    });
+    if (!confirmed) return;
     await run(async () => {
       await adminApi.deleteJsonIndex(bookId, indexFileId);
       setMsg(`Deleted JSON index: ${fileName}`);
