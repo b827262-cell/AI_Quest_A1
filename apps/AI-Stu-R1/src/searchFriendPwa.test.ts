@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const appRoot = resolve(import.meta.dirname, "..");
@@ -10,6 +10,20 @@ const readStyles = () =>
     readFileSync(resolve(appRoot, "src/styles.css"), "utf8"),
     ...readdirSync(stylesDir).sort().map((file) => readFileSync(resolve(stylesDir, file), "utf8"))
   ].join("\n");
+
+/** The public home page plus every module under `pages/public-home/`. */
+function publicHomeSources(): string[] {
+  const pageDir = resolve(appRoot, "src/pages");
+  const collect = (directory: string): string[] =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const path = join(directory, entry.name);
+      return entry.isDirectory() ? collect(path) : [path];
+    });
+  return [
+    resolve(pageDir, "PublicHomePage.tsx"),
+    ...collect(resolve(pageDir, "public-home")).sort()
+  ];
+}
 
 describe("Search Friend PWA contract", () => {
   it("declares owned PNG icons and a multipart POST share target without a provider key", () => {
@@ -41,7 +55,8 @@ describe("Search Friend PWA contract", () => {
 
   it("keeps the clipboard fallback behind its explicit button gesture", () => {
     const css = readStyles();
-    const page = readFileSync(resolve(appRoot, "src/pages/PublicHomePage.tsx"), "utf8");
+    // The public home surface is split across modules; assertions below are unchanged.
+    const page = publicHomeSources().map((file) => readFileSync(file, "utf8")).join("\n");
     expect(css).toContain("@media (max-width: 412px)"); // Covers 360, 390, and 412 CSS-pixel viewports.
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
     expect(css).toContain(".learning-history-raw-evidence pre");
