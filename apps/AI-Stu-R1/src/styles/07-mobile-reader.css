@@ -1,0 +1,250 @@
+/* Body state when a mobile reader panel is open. */
+body.reader-mobile-overlay-open {
+  overflow: hidden;
+}
+
+/* Mobile reader overlays and action bar. */
+.reader-mobile-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  background: rgba(15, 23, 42, 0.34);
+}
+.reader-mobile-sheet {
+  width: 100%;
+  max-height: min(90vh, 920px);
+  border: 1px solid var(--border);
+  border-radius: 16px 16px 0 0;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  margin-top: auto;
+  box-shadow: 0 -14px 42px rgba(15, 23, 42, 0.24);
+}
+.reader-mobile-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+.reader-mobile-sheet-head h4 {
+  margin: 0;
+  font-size: 15px;
+}
+.reader-mobile-sheet-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px 16px;
+}
+.reader-mobile-close {
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font: inherit;
+  cursor: pointer;
+  line-height: 1;
+}
+.reader-mobile-close:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.reader-mobile-sheet .reader-mobile-close {
+  margin-left: auto;
+}
+.reader-mobile-sheet .chat-wrap,
+.reader-mobile-sheet .notes-panel {
+  min-height: 0;
+}
+.reader-mobile-sheet .chat-wrap {
+  display: flex;
+  flex-direction: column;
+  height: auto;
+  max-width: none;
+  margin: 0;
+}
+.reader-mobile-sheet .chat-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.reader-mobile-action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 75;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+}
+.reader-mobile-action-buttons {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+.reader-mobile-page-controls {
+  display: grid;
+  grid-template-columns: 36px 1fr 68px 32px 36px;
+  gap: 6px;
+  align-items: center;
+  min-height: 36px;
+}
+.reader-mobile-page-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reader-mobile-page-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 16px;
+  padding: 6px 4px;
+  text-align: center;
+  color: var(--text);
+  background: #fff;
+}
+.reader-mobile-page-btn {
+  min-height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.reader-mobile-page-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.reader-mobile-page-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.reader-mobile-touch-zone-half {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  pointer-events: none;
+  z-index: 1;
+}
+.reader-mobile-touch-zone-half.left { left: 0; }
+.reader-mobile-touch-zone-half.right { right: 0; }
+.reader-mobile-action-btn,
+.reader-mobile-action-btn:visited {
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+  text-decoration: none;
+  padding: 8px 4px;
+  white-space: nowrap;
+  line-height: 1.1;
+}
+.reader-mobile-action-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.reader-mobile-action-btn.active {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.reader-mobile-action-bar.is-hidden {
+  display: none;
+}
+
+/* Mobile page jump bar + gesture helpers ----------------------------------- */
+.reader-mobile-touch-zone {
+  position: relative;
+  min-height: 0;
+}
+.reader-page-jump-bar {
+  pointer-events: auto;
+}
+/* On mobile the reader chrome (top bar / tabs / toolbar) flows normally at the
+   top; the PDF viewport is pinned (position:fixed) below it, so the workbench
+   is a normal block and the body scroll is locked (see .reader-reading-mobile)
+   to keep the body from becoming the PDF scroll container. */
+.reader-layout-mobile .reader-workbench {
+  display: block;
+  min-height: 0;
+}
+body.reader-reading-mobile {
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DOWNLOAD / PRINT PROTECTION (best-effort)
+   Hiding the reader during browser print (Ctrl+P) is the primary
+   defence. This cannot prevent: OS screenshots, DevTools canvas
+   capture, or browser extensions. See also ProtectedPdfViewer.tsx.
+   ═══════════════════════════════════════════════════════════════════ */
+@media print {
+  .reader-outer-layout,
+  .pdf-canvas-frame,
+  .pdf-canvas-scroll,
+  .pdf-canvas,
+  .pdf-canvas-snapshot,
+  .student-pdf-watermark {
+    display: none !important;
+  }
+  body::after {
+    content: "此內容受版權保護，不允許列印。";
+    display: block;
+    padding: 40px;
+    font-size: 18px;
+    text-align: center;
+  }
+}
+
+/* ── Mobile toolbar: hide non-essential items to keep the toolbar slim ─────
+   Placeholder / ratio / full-width controls are omitted on mobile since the
+   bottom action bar already provides the primary navigation.
+   This keeps the in-flow toolbar height low so the fixed PDF viewport
+   (--mobile-reader-top) is measured accurately.
+   ──────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Hide placeholder (coming-soon) buttons — they don't work on mobile yet */
+  .pdf-toolbar .tool-btn-placeholder { display: none; }
+  /* Hide layout-ratio preset buttons — not useful on single-column mobile */
+  .pdf-toolbar .tool-ratio { display: none; }
+  /* Hide full-width toggle — not meaningful on mobile */
+  .pdf-toolbar .tool-btn[title="切換閱讀器滿版 / 一般寬度"] { display: none; }
+  /* Progress toggle hidden in toolbar on mobile — use the bottom action bar "進度" button */
+  .pdf-toolbar .progress-toggle-btn { display: none; }
+  /* Grid toggle hidden in toolbar on mobile — use the bottom action bar "5×5" button */
+  .pdf-toolbar .grid-toggle-btn { display: none; }
+  /* Compact toolbar padding */
+  .pdf-toolbar { padding: 7px 8px; gap: 6px; margin-bottom: 8px; }
+}
+

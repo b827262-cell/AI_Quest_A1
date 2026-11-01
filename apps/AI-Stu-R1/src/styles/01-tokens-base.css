@@ -1,0 +1,36 @@
+:root {
+  --primary: #1171df;
+  --primary-2: #4ba4ff;
+  --accent: #ffd44d;
+  --bg: #eef5fb;
+  --panel: #ffffff;
+  --panel-soft: #f8fbff;
+  --border: #d7e4f0;
+  --text: #142235;
+  --muted: #66788f;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Noto Sans TC", "Segoe UI", sans-serif;
+  /* Default white; the homepage overrides --student-page-background per the
+     admin appearance settings (other pages fall back to white). */
+  background: var(--student-page-background, #ffffff);
+  color: var(--text);
+}
+a { color: var(--primary); text-decoration: none; }
+
+/* Keep form labels available to screen readers without taking layout space. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+

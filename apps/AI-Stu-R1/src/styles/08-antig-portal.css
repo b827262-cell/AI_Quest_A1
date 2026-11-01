@@ -1,0 +1,427 @@
+/* ═══════════════════════════════════════════════════════════════════
+   AntiG Portal & Institutional Flow Pages
+   ═══════════════════════════════════════════════════════════════════ */
+
+.antig-portal-bg {
+  min-height: calc(100vh - 64px);
+  background: linear-gradient(135deg, #0d1b2a 0%, #1a2e42 40%, #0f2235 100%);
+  padding: 48px 20px 60px;
+  color: #e8f1fb;
+}
+
+.antig-portal-container {
+  max-width: 820px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.antig-flow-container {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ── Hero ──────────────────────────────────────── */
+.antig-portal-hero {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.antig-portal-badge {
+  display: inline-block;
+  padding: 4px 16px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(17,113,223,0.35), rgba(75,164,255,0.25));
+  border: 1px solid rgba(75,164,255,0.4);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #4ba4ff;
+}
+
+.antig-portal-title {
+  margin: 0;
+  font-size: clamp(22px, 4vw, 32px);
+  font-weight: 800;
+  background: linear-gradient(135deg, #ffffff 0%, #a8d4ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.25;
+}
+
+.antig-portal-subtitle {
+  margin: 0;
+  color: #7fa8c9;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* ── Flow hero ─────────────────────────────────── */
+.antig-flow-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.antig-flow-title {
+  margin: 0;
+  font-size: clamp(20px, 3.5vw, 28px);
+  font-weight: 800;
+  background: linear-gradient(135deg, #ffffff 0%, #a8d4ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.antig-flow-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #7fa8c9;
+  flex-wrap: wrap;
+}
+
+.antig-status-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.antig-status-badge.ok {
+  background: rgba(34,197,94,0.18);
+  color: #4ade80;
+  border: 1px solid rgba(34,197,94,0.35);
+}
+.antig-status-badge.warn {
+  background: rgba(234,179,8,0.18);
+  color: #facc15;
+  border: 1px solid rgba(234,179,8,0.35);
+}
+
+/* ── Report card ───────────────────────────────── */
+.antig-report-card {
+  background: linear-gradient(135deg, rgba(255,255,255,0.07) 0%, rgba(17,113,223,0.08) 100%);
+  border: 1px solid rgba(75,164,255,0.2);
+  border-radius: 20px;
+  backdrop-filter: blur(16px);
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+
+.antig-report-card-header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 24px 28px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+
+.antig-report-icon {
+  font-size: 36px;
+  flex-shrink: 0;
+}
+
+.antig-report-card-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #e8f1fb;
+}
+
+.antig-report-card-desc {
+  margin: 0;
+  font-size: 13px;
+  color: #7fa8c9;
+}
+
+.antig-report-card-body {
+  padding: 16px 28px;
+}
+
+.antig-report-preview-text {
+  margin: 0;
+  color: #a0bbd4;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.antig-report-card-actions {
+  padding: 20px 28px 24px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ── Info chips row ────────────────────────────── */
+.antig-info-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.antig-info-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  font-size: 13px;
+  color: #a0bbd4;
+}
+
+/* ── Buttons ───────────────────────────────────── */
+.antig-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+  border: none;
+  transition: all 0.2s ease;
+}
+
+.antig-btn-primary {
+  background: linear-gradient(135deg, #1171df, #4ba4ff);
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(17,113,223,0.4);
+}
+
+.antig-btn-primary:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 8px 28px rgba(17,113,223,0.55);
+  transform: translateY(-1px);
+  text-decoration: none;
+  color: #fff;
+}
+
+.antig-btn-secondary {
+  background: rgba(255,255,255,0.08);
+  color: #a0bbd4;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+
+.antig-btn-secondary:hover {
+  background: rgba(255,255,255,0.14);
+  color: #e8f1fb;
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+/* ── Breadcrumb ────────────────────────────────── */
+.antig-breadcrumb {
+  padding-bottom: 8px;
+}
+
+.antig-back-link {
+  font-size: 13px;
+  color: #7fa8c9;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 0.15s;
+}
+.antig-back-link:hover { color: #4ba4ff; text-decoration: none; }
+
+/* ── Sections ──────────────────────────────────── */
+.antig-section {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.antig-section-sm { padding: 20px 24px; }
+
+.antig-risk {
+  background: rgba(234,179,8,0.05);
+  border-color: rgba(234,179,8,0.2);
+}
+
+.antig-section-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #c8def5;
+}
+
+/* ── Data chips grid ───────────────────────────── */
+.antig-chips-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.antig-chip {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.antig-chip.pos {
+  border-color: rgba(34,197,94,0.35);
+  background: rgba(34,197,94,0.07);
+}
+.antig-chip.neg {
+  border-color: rgba(239,68,68,0.35);
+  background: rgba(239,68,68,0.07);
+}
+
+.antig-chip-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #7fa8c9;
+}
+
+.antig-chip-val {
+  font-size: 17px;
+  font-weight: 700;
+  color: #e8f1fb;
+  word-break: break-all;
+}
+.antig-chip.pos .antig-chip-val { color: #4ade80; }
+.antig-chip.neg .antig-chip-val { color: #f87171; }
+
+/* ── Interpretation list ───────────────────────── */
+.antig-interp-list {
+  margin: 0;
+  padding: 0 0 0 20px;
+  color: #a0bbd4;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.antig-interp-list li { margin-bottom: 4px; }
+
+/* ── Source list ───────────────────────────────── */
+.antig-source-list {
+  margin: 0;
+  padding: 0 0 0 20px;
+  color: #7fa8c9;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.antig-source-list a { color: #4ba4ff; }
+.antig-source-list a:hover { text-decoration: underline; }
+
+/* ── Tables ────────────────────────────────────── */
+.antig-table-wrapper {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.antig-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.antig-table th {
+  background: rgba(17,113,223,0.15);
+  color: #7fa8c9;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 10px 14px;
+  text-align: right;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.antig-table th:first-child { text-align: left; }
+
+.antig-table td {
+  padding: 9px 14px;
+  text-align: right;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  color: #c8def5;
+}
+.antig-table td:first-child {
+  text-align: left;
+  color: #7fa8c9;
+  font-weight: 600;
+}
+.antig-table tr:last-child td { border-bottom: none; }
+.antig-table tr:hover td { background: rgba(255,255,255,0.03); }
+.antig-table td.pos { color: #4ade80; font-weight: 600; }
+.antig-table td.neg { color: #f87171; font-weight: 600; }
+
+/* ── Note ──────────────────────────────────────── */
+.antig-note {
+  margin: 0;
+  font-size: 12px;
+  color: #facc15;
+  opacity: 0.8;
+}
+
+/* ── Loading ───────────────────────────────────── */
+.antig-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #7fa8c9;
+  font-size: 15px;
+  justify-content: center;
+  padding: 60px 0;
+}
+
+.antig-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(75,164,255,0.2);
+  border-top-color: #4ba4ff;
+  border-radius: 50%;
+  animation: antig-spin 0.8s linear infinite;
+}
+
+@keyframes antig-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Error ─────────────────────────────────────── */
+.antig-error-box {
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.3);
+  border-radius: 14px;
+  padding: 20px 24px;
+  color: #f87171;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.antig-error-box p { margin: 0 0 8px; }
+.antig-error-box a { color: #4ba4ff; }
+
+/* ── GitHub row ────────────────────────────────── */
+.antig-github-row {
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
+

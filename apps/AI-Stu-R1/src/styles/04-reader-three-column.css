@@ -1,0 +1,161 @@
+/* ---- Reader (3-column) --------------------------------------------------- */
+.reader-grid { display: grid; grid-template-columns: 260px 1fr 360px; gap: 22px; align-items: start; }
+.reader-meta, .reader-body, .reader-chat { background: var(--panel); border-radius: 16px; padding: 20px; }
+.reader-meta h2 { margin: 14px 0 4px; font-size: 20px; }
+.reader-meta .cat-tag {
+  display: inline-block; font-size: 12px; background: #eef2ff; color: var(--primary);
+  padding: 3px 10px; border-radius: 999px; margin: 6px 0;
+}
+.reader-meta .desc { font-size: 14px; color: var(--muted); line-height: 1.7; }
+.reader-body h4, .reader-chat h4 { margin: 0 0 12px; }
+.chapter-list { list-style: none; padding: 0; margin: 0; }
+.chapter-list button {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer; font: inherit; color: var(--text);
+}
+.chapter-list button:hover { background: #f1f5f9; }
+.chapter-list button.active { background: #eef2ff; color: var(--primary); font-weight: 600; }
+.chapter-list .ch-order { color: var(--muted); margin-right: 4px; }
+.chapter-list .ch-summary { font-size: 13px; color: var(--muted); padding: 4px 10px 8px; margin: 0; line-height: 1.7; }
+.toc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.toc-head h4 { margin: 0; }
+.toc-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.toc-node ul {
+  list-style: none;
+  margin: 2px 0 4px;
+  padding: 0;
+}
+.toc-node-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+.toc-expander {
+  flex: 0 0 22px;
+  width: 22px;
+  min-height: 32px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: center;
+}
+.toc-expander.placeholder { cursor: default; }
+.toc-node-btn {
+  flex: 1;
+  display: flex !important;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+.toc-node-btn:disabled {
+  cursor: default;
+  color: var(--muted);
+}
+.toc-node-title {
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.toc-node-page {
+  color: #d97706;
+  font-size: 12px;
+  font-weight: 700;
+}
+.toc-node.level-1 > .toc-node-row .toc-node-btn {
+  color: #0b63c7;
+  font-weight: 800;
+}
+.toc-node.level-2 { padding-left: 12px; }
+.toc-node.level-3 { padding-left: 24px; }
+.toc-node.level-4 { padding-left: 36px; }
+.toc-node.level-2 .toc-node-btn,
+.toc-node.level-3 .toc-node-btn,
+.toc-node.level-4 .toc-node-btn {
+  font-size: 13px;
+  color: #2a3a52;
+}
+.reader-body .para { line-height: 1.9; margin-bottom: 16px; }
+.reader-body .para .pageno { color: var(--muted); font-size: 12px; margin-right: 8px; }
+.reader-chat .chat-wrap { height: 520px; max-width: none; margin: 0; }
+.reader-chat .chat-scroll { padding: 8px 4px; }
+.reader-chat .chat-input { padding: 12px 4px 4px; }
+
+@media (max-width: 920px) {
+  .reader-grid { grid-template-columns: 1fr; }
+  .reader-chat .chat-wrap { height: 420px; }
+  .student-header-inner {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "brand user"
+      "home home";
+    row-gap: 10px;
+  }
+  .brand-link { grid-area: brand; }
+  .home-pill { grid-area: home; justify-self: start; }
+  .student-user-area { grid-area: user; }
+  .hero-search-inner {
+    padding: 28px 18px 18px;
+  }
+  .hero-search-box {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .stu-main { padding: 0 14px 28px; }
+  .student-header-inner {
+    padding: 10px 14px;
+    gap: 10px;
+  }
+  .student-name {
+    max-width: 108px;
+  }
+  .student-points {
+    padding: 6px 8px;
+  }
+  .hero-search-section {
+    padding-top: 14px;
+  }
+  /* Allow the hero title/subtitle to wrap on phones instead of
+     overflowing the viewport horizontally. */
+  .hero-title-main {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+  .hero-title-main h1,
+  .hero-subtitle {
+    white-space: normal;
+  }
+  /* Stack search box and assistant button on phones. */
+  .hero-search-row {
+    flex-wrap: wrap;
+  }
+  .hero-assistant-btn {
+    flex: 1 0 100%;
+    justify-content: center;
+  }
+  .hero-subtitle {
+    font-size: 14px;
+  }
+  .bookshelf-section-title h2 {
+    font-size: 20px;
+  }
+  .bookshelf-grid, .book-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
