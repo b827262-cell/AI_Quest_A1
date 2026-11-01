@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const root = new URL(".", import.meta.url);
@@ -10,7 +10,8 @@ describe("Admin browser/server boundary", () => {
       "main.tsx",
       "App.tsx",
       "api.ts",
-      ...["pages/AiProvidersPage.tsx", "pages/AiAnalyticsPage.tsx"]
+      ...["pages/AiProvidersPage.tsx", "pages/AiAnalyticsPage.tsx"],
+      ...readdirSync(new URL("pages/ai-analytics/", root)).map((file) => `pages/ai-analytics/${file}`)
     ].map(read).join("\n");
     expect(clientSources).not.toMatch(/node:(?:crypto|fs|path|os)/);
     expect(clientSources).not.toMatch(/AI_CREDENTIAL_ENCRYPTION_KEY|IP_HASH_SECRET|GUEST_ASK_IP_HMAC_SECRET/);
