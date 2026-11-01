@@ -16,7 +16,8 @@ describe("Admin browser/server boundary", () => {
       read("App.tsx"),
       read("api.ts"),
       readAiProvidersSources(),
-      read("pages/AiAnalyticsPage.tsx")
+      read("pages/AiAnalyticsPage.tsx"),
+      ...readdirSync(new URL("pages/ai-analytics/", root)).map((file) => read(`pages/ai-analytics/${file}`))
     ].join("\n");
     expect(clientSources).not.toMatch(/node:(?:crypto|fs|path|os)/);
     expect(clientSources).not.toMatch(/AI_CREDENTIAL_ENCRYPTION_KEY|IP_HASH_SECRET|GUEST_ASK_IP_HMAC_SECRET/);
