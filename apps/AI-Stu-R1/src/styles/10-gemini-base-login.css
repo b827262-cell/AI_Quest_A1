@@ -365,3 +365,7 @@ body {
   margin-top: 4px;
 }
 
+
+.passcode-login-form { display: grid; gap: 12px; width: 100%; min-width: 0; margin-bottom: 16px; }
+.passcode-login-form label { display: grid; gap: 4px; min-width: 0; }
+.passcode-login-form input { box-sizing: border-box; width: 100%; min-width: 0; }

@@ -1,5 +1,7 @@
 import type { Request, RequestHandler, Response, Router } from "express";
 import express from "express";
+import { z } from "zod";
+import { createStudentPasscodeThrottle } from "./passcode";
 import {
   clearStudentSessionCookieOptions,
   readStudentCookie,
@@ -95,6 +97,7 @@ export function createStudentAuthRouter(
   config: StudentAuthConfig = resolveStudentAuthConfig()
 ): Router {
   const router = express.Router();
+  const passcodeThrottle = createStudentPasscodeThrottle();
 
   router.get(["/google/start", "/google/callback"], (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -118,6 +121,26 @@ export function createStudentAuthRouter(
       else if (error instanceof AccessUnavailableError) res.status(503).json({ error: "ACCESS_UNAVAILABLE" });
       else if (error instanceof AccessInvalidTokenError) res.status(401).json({ error: "ACCESS_ASSERTION_INVALID" });
       else res.status(503).json({ error: "ACCESS_UNAVAILABLE" });
+    }
+  });
+
+  router.post("/passcode/login", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (!config.passcodeLoginEnabled) { res.status(404).end(); return; }
+    if (rejectOrigin(req, res, config)) return;
+    const parsed = z.object({ email: z.string().max(320), passcode: z.string().max(128), returnTo: z.string().max(2048).optional() }).safeParse(req.body);
+    if (!parsed.success) { res.status(401).json({ error: "INVALID_CREDENTIALS" }); return; }
+    const reservation = passcodeThrottle.reserve(req.ip || "unknown", parsed.data.email);
+    if (!reservation.allowed) { res.setHeader("Retry-After", String(reservation.retryAfter)); res.status(429).json({ error: "RATE_LIMITED" }); return; }
+    try {
+      const result = await auth.completePasscodeLogin({ ...parsed.data, ipAddress: req.ip || null, userAgent: req.header("user-agent") || null });
+      reservation.finish(true);
+      setStudentSessionCookie(res, config, result.sessionToken);
+      const redirectTo = result.profile.profileCompleted ? result.returnTo : `/profile-completion?next=${encodeURIComponent(result.returnTo)}`;
+      res.json({ redirectTo });
+    } catch {
+      reservation.finish(false);
+      res.status(401).json({ error: "INVALID_CREDENTIALS" });
     }
   });
 

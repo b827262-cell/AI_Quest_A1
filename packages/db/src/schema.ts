@@ -395,6 +395,17 @@ export const studentUsers = sqliteTable("student_users", {
   updatedAt: text("updated_at").notNull()
 });
 
+export const studentPasscodes = sqliteTable("student_passcodes", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  passcodeHash: text("passcode_hash").notNull(),
+  status: text("status", { enum: ["active", "disabled"] }).notNull(),
+  note: text("note"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  lastUsedAt: text("last_used_at")
+});
+
 /** Revocable Student browser sessions; only the token digest is persisted. */
 export const studentSessions = sqliteTable("student_sessions", {
   id: text("id").primaryKey(),
@@ -1021,6 +1032,7 @@ export type DbSchema = {
   aiCredentialDailyUsage: typeof aiCredentialDailyUsage;
   aiCredentialDailyReservations: typeof aiCredentialDailyReservations;
   studentUsers: typeof studentUsers;
+  studentPasscodes: typeof studentPasscodes;
   studentSessions: typeof studentSessions;
   studentLearningHistory: typeof studentLearningHistory;
   studentOAuthStates: typeof studentOAuthStates;
@@ -1072,6 +1084,7 @@ export const schema = {
   aiCredentialDailyUsage,
   aiCredentialDailyReservations,
   studentUsers,
+  studentPasscodes,
   studentSessions,
   studentLearningHistory,
   studentOAuthStates

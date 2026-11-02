@@ -37,6 +37,10 @@ export function makeStudentSessionRepo(db: Db) {
       db.update(studentSessions).set({ lastSeenAt: now }).where(eq(studentSessions.id, row.id)).run();
       return { ...row, lastSeenAt: now };
     },
+    revokeByUserId(userId: string, at = nowIso()) {
+      return db.update(studentSessions).set({ revokedAt: at })
+        .where(and(eq(studentSessions.userId, userId), isNull(studentSessions.revokedAt))).run().changes;
+    },
     revokeById(id: string, at = nowIso()) {
       return db.update(studentSessions).set({ revokedAt: at })
         .where(and(eq(studentSessions.id, id), isNull(studentSessions.revokedAt))).run().changes > 0;

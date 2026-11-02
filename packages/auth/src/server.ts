@@ -6,6 +6,7 @@ import {
   timingSafeEqual
 } from "node:crypto";
 import { createDbHandle, createRepositories, runMigrations, type DbHandle, type StudentLearningHistoryRepo } from "@ai-smartbook/db";
+import { verifyStudentPasscode } from "./passcode";
 import type {
   StudentAuthMeResponse,
   StudentProfile,
@@ -24,6 +25,7 @@ export const DEFAULT_GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapi
 
 export interface StudentAuthConfig extends AccessConfig {
   production: boolean;
+  passcodeLoginEnabled: boolean;
   enabled: boolean;
   googleClientId: string | undefined;
   googleClientSecret: string | undefined;
@@ -56,6 +58,7 @@ export interface StudentAuthSessionRecord {
 }
 
 export interface StudentAuthRepositories {
+  passcodes?: { findActiveByEmail(email: string): { id: string; passcodeHash: string } | undefined; touchUsed(id: string): void };
   users: {
     findByGoogleSubject(subject: string): StudentAuthUserRecord | undefined;
     findByEmail(email: string): StudentAuthUserRecord[];
@@ -121,6 +124,7 @@ export function resolveStudentAuthConfig(env: NodeJS.ProcessEnv = process.env): 
   );
   return {
     production: env.NODE_ENV === "production",
+    passcodeLoginEnabled: env.STUDENT_PASSCODE_LOGIN === "true",
     accessTeamDomain: env.STUDENT_ACCESS_TEAM_DOMAIN?.trim().toLowerCase().replace(/\.cloudflareaccess\.com$/i, "") || undefined,
     accessAud: env.STUDENT_ACCESS_AUD?.trim() || undefined,
     accessCertsUrl: env.NODE_ENV === "production" ? undefined : env.STUDENT_ACCESS_CERTS_URL?.trim() || undefined,
@@ -149,7 +153,7 @@ export function assertStudentAuthConfig(config: StudentAuthConfig): void {
   if (!config.secureCookies) {
     throw new Error("production Student auth requires STUDENT_SESSION_SECURE=true");
   }
-  if (!config.accessTeamDomain || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/.test(config.accessTeamDomain) || !config.accessAud || config.accessCertsUrl) {
+  if ((!config.passcodeLoginEnabled || config.accessTeamDomain || config.accessAud || config.accessCertsUrl) && (!config.accessTeamDomain || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/.test(config.accessTeamDomain) || !config.accessAud || config.accessCertsUrl)) {
     throw new Error("production Student auth requires valid Cloudflare Access team domain and AUD");
   }
   if (!config.sessionSecret || config.sessionSecret.length < 32) {
@@ -275,6 +279,42 @@ export class StudentAuthService {
     private readonly exchangeIdentity: (code: string, verifier: string) => Promise<GoogleIdentity> = (code, verifier) => exchangeGoogleCode(config, code, verifier)
   ) {}
 
+  private uniqueMatch(email: string): StudentAuthUserRecord | undefined {
+    const matches = this.repositories.users.findByEmail(email);
+    if (matches.length > 1) {
+      console.warn("STUDENT_ACCESS_EMAIL_CONFLICT", {
+        emailSha256: digestStudentSecret(email),
+        matchCount: matches.length
+      });
+      throw new AccessEmailConflictError("multiple student users have this email");
+    }
+    return matches[0];
+  }
+
+  async completePasscodeLogin(input: { email: string; passcode: string; returnTo?: string; ipAddress?: string | null; userAgent?: string | null }) {
+    const email = input.email.trim().toLowerCase();
+    const credential = this.repositories.passcodes?.findActiveByEmail(email);
+    const valid = await verifyStudentPasscode(input.passcode, credential?.passcodeHash);
+    const current = this.repositories.passcodes?.findActiveByEmail(email);
+    if (!credential || !valid || !current || current.passcodeHash !== credential.passcodeHash) throw new Error("INVALID_CREDENTIALS");
+    let user = this.uniqueMatch(email);
+    if (!user) {
+      const subject = `passcode:${email}`;
+      try { user = this.repositories.users.create({ googleSubject: subject, email, displayName: email }); }
+      catch (error) {
+        const winner = this.repositories.users.findByGoogleSubject(subject);
+        user = this.uniqueMatch(email);
+        if (!winner || !user || user.id !== winner.id) throw error;
+      }
+    }
+    this.repositories.passcodes?.touchUsed(credential.id);
+    this.repositories.sessions.purgeExpired(new Date(this.now()).toISOString());
+    const { sessionToken } = createStudentSessionSecrets();
+    const session = this.repositories.sessions.create({ tokenDigest: digestStudentSecret(sessionToken), userId: user.id,
+      expiresAt: new Date(this.now() + this.config.sessionTtlMs).toISOString(), ipAddress: input.ipAddress, userAgent: input.userAgent });
+    return { sessionToken, session, user: toStudentUser(user), profile: toStudentProfile(user), returnTo: safeStudentReturnTo(input.returnTo) };
+  }
+
   async completeAccessLogin(input: {
     assertion: string | undefined;
     returnTo?: string;
@@ -282,20 +322,7 @@ export class StudentAuthService {
     userAgent?: string | null;
   }): Promise<{ sessionToken: string; session: StudentSession; user: StudentUser; profile: StudentProfile; returnTo: string }> {
     const email = await verifyAccessAssertion(input.assertion, this.config, this.now());
-    const uniqueMatch = (): StudentAuthUserRecord | undefined => {
-      const matches = this.repositories.users.findByEmail(email);
-      if (matches.length > 1) {
-        // A stable digest lets operators correlate incidents without logging
-        // the address, assertion, or any other credential.
-        console.warn("STUDENT_ACCESS_EMAIL_CONFLICT", {
-          emailSha256: digestStudentSecret(email),
-          matchCount: matches.length
-        });
-        throw new AccessEmailConflictError("multiple student users have this email");
-      }
-      return matches[0];
-    };
-    let user = uniqueMatch();
+    let user = this.uniqueMatch(email);
     if (!user) {
       const accessSubject = `cf-access:${email}`;
       try {
@@ -304,7 +331,7 @@ export class StudentAuthService {
         // Concurrent creators share the schema's unique google_subject. Only
         // reuse the winner if it is now the sole normalized-email match.
         const winner = this.repositories.users.findByGoogleSubject(accessSubject);
-        user = uniqueMatch();
+        user = this.uniqueMatch(email);
         if (!winner || !user || user.id !== winner.id) throw error;
       }
     }
@@ -448,6 +475,7 @@ export function createStudentAuthRuntime(
     dbHandle,
     learningHistory: repositories.studentLearningHistory,
     auth: createStudentAuthService(config, {
+      passcodes: repositories.studentPasscodes,
       users: repositories.studentUsers,
       sessions: repositories.studentSessions,
       oauthStates: repositories.studentOAuthStates
