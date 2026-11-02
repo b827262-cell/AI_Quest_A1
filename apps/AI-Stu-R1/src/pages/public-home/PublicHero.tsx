@@ -3,7 +3,7 @@ import { HomeAIComposer } from "../../components/HomeAIComposer";
 import type { PublicSiteConfig } from "../../studentClient";
 import { GuestAnswer } from "./GuestAnswer";
 import { LearningHistoryPanel } from "./LearningHistoryPanel";
-import { QUICK_STARTS } from "./constants";
+import { GOOGLE_CONFIRM_HINT, QUICK_STARTS } from "./constants";
 import type { useGuestQuestion } from "./useGuestQuestion";
 import type { useLearningHistorySync } from "./useLearningHistorySync";
 import type { useShareIntake } from "./useShareIntake";
@@ -54,6 +54,7 @@ export function PublicHero({
             <span>{guest.strategy === "google-ai" ? "搜尋好朋友／谷哥不需 API 金鑰 · 每題最多 2,000 字" : `訪客每日可體驗 ${config.guestDailyLimit} 題 · 每題最多 2,000 字`}</span>
             <span>目前模式：{guest.category === "auto" ? "自動判斷" : guest.category}</span>
           </div>
+          {guest.strategy === "google-ai" ? <p className="public-google-confirm-hint">{GOOGLE_CONFIRM_HINT}</p> : null}
           {guest.error ? <p className="public-form-error" role="alert">{guest.error}</p> : null}
           {intake.googleStatus ? <p className="public-google-status" role="status" aria-live="polite">{intake.googleStatus}</p> : null}
           {guest.feedback ? <p className="public-feedback-text" role="status">{guest.feedback}</p> : null}

@@ -1,6 +1,8 @@
 import type { LearningSourceType } from "../../learningHistory";
 import type { GuestQuestionCategory, PublicSiteConfig } from "../../studentClient";
 
+export const GOOGLE_CONFIRM_HINT = "若 Google 跳出確認視窗，請捲到最下方，或按 End 鍵。";
+
 export const DEFAULT_CONFIG: PublicSiteConfig = {
   siteTitle: "iBrain AI",
   siteSubtitle: "多模型領域智慧解題平台",
