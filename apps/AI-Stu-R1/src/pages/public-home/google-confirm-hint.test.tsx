@@ -30,6 +30,10 @@ function render(node: ReactNode) {
 }
 
 describe("Google confirmation hint", () => {
+  it("uses the approved wording", () => {
+    expect(GOOGLE_CONFIRM_HINT).toBe("若 Google 跳出確認視窗，請捲到最下方，或按 End 鍵。");
+  });
+
   it.each([["google-ai", true], ["api", false]])("shows the pre-submit hint only for %s", async (strategy, visible) => {
     const guest = { strategy, response: null, restoringAnswer: false, category: "auto", busy: false };
     const history = { studentName: "", authStatus: "anonymous", learningHistory: [] };
