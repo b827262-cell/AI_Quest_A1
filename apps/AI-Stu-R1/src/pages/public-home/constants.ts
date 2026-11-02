@@ -1,6 +1,8 @@
 import type { LearningSourceType } from "../../learningHistory";
 import type { GuestQuestionCategory, PublicSiteConfig } from "../../studentClient";
 
+export const GOOGLE_CONFIRM_HINT = "Google 若跳出「要繼續搜尋嗎？」視窗，題目較長時請在視窗內往下捲到底，再按「是，請繼續」。";
+
 export const DEFAULT_CONFIG: PublicSiteConfig = {
   siteTitle: "iBrain AI",
   siteSubtitle: "多模型領域智慧解題平台",

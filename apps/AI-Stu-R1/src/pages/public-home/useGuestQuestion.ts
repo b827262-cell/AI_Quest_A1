@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { GOOGLE_CONFIRM_HINT } from "./constants";
 import {
   addLearningHistoryEntry,
   googleAiSearchUrl,
@@ -187,7 +188,7 @@ export function useGuestQuestion({
     setLearningHistory(historyRecord.entries);
     window.open(googleAiSearchUrl(trimmed), "_blank", "noopener,noreferrer");
     setQuestion("");
-    setGoogleStatus("已用搜尋好朋友／谷哥開啟問題；回來後可用分享、剪貼簿或貼上備援帶回回覆。");
+    setGoogleStatus(`已用搜尋好朋友／谷哥開啟問題；回來後可用分享、剪貼簿或貼上備援帶回回覆。${GOOGLE_CONFIRM_HINT}`);
   }
 
   async function submitFeedback(helpful: boolean) {
