@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rawHttpRequest, startStudentTestApp, type StudentTestApp } from "./testApp";
-import { createRepositories } from "../../../packages/db/src";
+import { createDbHandle, createRepositories } from "../../../packages/db/src";
+import { hashStudentPasscode } from "@ai-smartbook/auth/passcode";
 
 let app: StudentTestApp | null = null;
 afterEach(async () => { await app?.close(); app = null; });
@@ -216,4 +217,35 @@ it("returns 429 for the sixth email attempt and eleventh IP attempt", async () =
   expect(Number(sixth.headers["retry-after"]?.[0])).toBeGreaterThan(0);
   for (let i = 0; i < 5; i++) expect((await attempt(`${i}@example.test`)).status).toBe(401);
   expect((await attempt("last@example.test")).status).toBe(429);
+});
+
+
+describe("passcode transaction across SQLite connections", () => {
+  it.each(["disable", "reset"] as const)("rejects login if %s occurs after verification", async (action) => {
+    let update = () => {};
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, beforePasscodeCommit: () => update() });
+    app.config.passcodeLoginEnabled = true;
+    const other = createDbHandle(app.runtime.dbHandle.sqlite.name);
+    try {
+      const repos = createRepositories(other.db);
+      const row = repos.studentPasscodes.create({ email: "race@example.test", passcodeHash: hashStudentPasscode("ABCDE-FGHJK") });
+      update = () => { repos.studentPasscodes.changeAndRevoke(row.id, action === "disable" ? { status: "disabled" } : { passcodeHash: hashStudentPasscode("ZZZZZ-ZZZZZ") }); };
+      const response = await rawHttpRequest(new URL(`${app.baseUrl}/api/student/auth/passcode/login`), {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: row.email, passcode: "ABCDE-FGHJK" })
+      });
+      expect(response.status).toBe(401);
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(other.sqlite.prepare("SELECT COUNT(*) AS count FROM student_sessions WHERE revoked_at IS NULL").get()).toEqual({ count: 0 });
+    } finally { other.sqlite.close(); }
+  });
+  it.each(["disable", "reset"] as const)("%s revokes every session across users sharing the same normalized email", async (action) => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const repos = createRepositories(app.runtime.dbHandle.db);
+    const row = repos.studentPasscodes.create({ email: "multi@example.test", passcodeHash: hashStudentPasscode("ABCDE-FGHJK") });
+    const user1 = repos.studentUsers.create({ googleSubject: "one", email: "multi@example.test", displayName: "one" });
+    const user2 = repos.studentUsers.create({ googleSubject: "two", email: " MULTI@EXAMPLE.TEST ", displayName: "two" });
+    for (const [index, user] of [user1, user1, user2].entries()) repos.studentSessions.create({ tokenDigest: `digest-${index}`, userId: user.id, expiresAt: "2099-01-01T00:00:00.000Z" });
+    repos.studentPasscodes.changeAndRevoke(row.id, action === "disable" ? { status: "disabled" } : { passcodeHash: hashStudentPasscode("ZZZZZ-ZZZZZ") });
+    for (let index = 0; index < 3; index++) expect(repos.studentSessions.findActiveByTokenDigest(`digest-${index}`)).toBeUndefined();
+  });
 });

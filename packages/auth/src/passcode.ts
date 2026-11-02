@@ -35,15 +35,29 @@ export async function verifyStudentPasscode(passcode: string, hash?: string): Pr
 }
 
 type Attempt = { id: number; at: number };
-export function createStudentPasscodeThrottle() {
+export function createStudentPasscodeThrottle(maxKeys = 10_000) {
   const ips = new Map<string, Attempt[]>();
   const emails = new Map<string, Attempt[]>();
   let sequence = 0;
   const windowMs = 15 * 60_000;
   return {
+    keyCount() { return ips.size + emails.size; },
     reserve(ip: string, email: string, now = Date.now()) {
-      const account = createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
+      for (const map of [ips, emails]) {
+        for (const [key, entries] of map) {
+          const active = entries.filter((entry) => now - entry.at < windowMs);
+          if (active.length) map.set(key, active); else map.delete(key);
+        }
+      }
+      const normalizedEmail = email.trim().toLowerCase();
+      if (normalizedEmail.length > 320) return { allowed: false, retryAfter: 1, finish: (_success: boolean) => {} };
+      const account = createHash("sha256").update(normalizedEmail).digest("hex");
       const keys: Array<[Map<string, Attempt[]>, string, number]> = [[ips, ip || "unknown", 10], [emails, account, 5]];
+      const newKeys = keys.filter(([map, key]) => !map.has(key)).length;
+      if (ips.size + emails.size + newKeys > maxKeys) {
+        const oldest = Math.min(...[...ips.values(), ...emails.values()].map((entries) => entries[0]!.at));
+        return { allowed: false, retryAfter: Number.isFinite(oldest) ? Math.max(1, Math.ceil((oldest + windowMs - now) / 1000)) : 1, finish: (_success: boolean) => {} };
+      }
       const lists = keys.map(([map, key]) => (map.get(key) ?? []).filter((a) => now - a.at < windowMs));
       const until = Math.max(...lists.map((list, index) => list.length >= keys[index]![2] ? list[0]!.at + windowMs : 0));
       if (until > now) return { allowed: false, retryAfter: Math.ceil((until - now) / 1000), finish: (_success: boolean) => {} };

@@ -30,6 +30,15 @@ export function makeStudentPasscodeRepo(db: Db) {
       db.update(studentPasscodes).set({ passcodeHash, updatedAt: nowIso() }).where(eq(studentPasscodes.id, id)).run();
       return this.findById(id);
     },
+    withActiveCredential<T>(email: string, hash: string, operation: () => T): T | undefined {
+      return db.transaction((tx) => {
+        const current = tx.select().from(studentPasscodes).where(and(
+          eq(studentPasscodes.email, email.trim().toLowerCase()), eq(studentPasscodes.status, "active")
+        )).get();
+        if (!current || current.passcodeHash !== hash) return undefined;
+        return operation();
+      }, { behavior: "immediate" });
+    },
     changeAndRevoke(id: string, change: { status?: "active" | "disabled"; passcodeHash?: string }) {
       return db.transaction((tx) => {
         const existing = tx.select().from(studentPasscodes).where(eq(studentPasscodes.id, id)).get();

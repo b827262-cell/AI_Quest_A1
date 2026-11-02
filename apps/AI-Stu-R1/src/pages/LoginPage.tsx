@@ -50,9 +50,9 @@ export function LoginPage() {
         </div>
         {reason === "session_expired" ? <p className="login-error">登入狀態已到期，請重新登入。</p> : null}
         {error ? <p className="login-error">{error}</p> : null}
-        <form className="passcode-login-form" onSubmit={(event) => void passcodeLogin(event)}>
-          <label>電子郵件<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-          <label>通行碼<input type="password" autoComplete="current-password" required value={passcode} onChange={(event) => setPasscode(event.target.value)} /></label>
+        <form className="login-form passcode-login-form" onSubmit={(event) => void passcodeLogin(event)}>
+          <div className="form-group"><label>電子郵件<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label></div>
+          <div className="form-group"><label>通行碼<input type="password" autoComplete="current-password" required value={passcode} onChange={(event) => setPasscode(event.target.value)} /></label></div>
           <PrimaryButton type="submit" disabled={busy || status === "loading"}>以通行碼登入</PrimaryButton>
         </form>
         <PrimaryButton type="button" onClick={beginAccessLogin} disabled={status === "loading"}>

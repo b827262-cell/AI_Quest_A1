@@ -58,7 +58,7 @@ export interface StudentAuthSessionRecord {
 }
 
 export interface StudentAuthRepositories {
-  passcodes?: { findActiveByEmail(email: string): { id: string; passcodeHash: string } | undefined; touchUsed(id: string): void };
+  passcodes?: { findActiveByEmail(email: string): { id: string; passcodeHash: string } | undefined; touchUsed(id: string): void; withActiveCredential<T>(email: string, hash: string, operation: () => T): T | undefined };
   users: {
     findByGoogleSubject(subject: string): StudentAuthUserRecord | undefined;
     findByEmail(email: string): StudentAuthUserRecord[];
@@ -276,7 +276,8 @@ export class StudentAuthService {
     private readonly config: StudentAuthConfig,
     private readonly repositories: StudentAuthRepositories,
     private readonly now: () => number = Date.now,
-    private readonly exchangeIdentity: (code: string, verifier: string) => Promise<GoogleIdentity> = (code, verifier) => exchangeGoogleCode(config, code, verifier)
+    private readonly exchangeIdentity: (code: string, verifier: string) => Promise<GoogleIdentity> = (code, verifier) => exchangeGoogleCode(config, code, verifier),
+    private readonly beforePasscodeCommit?: () => void
   ) {}
 
   private uniqueMatch(email: string): StudentAuthUserRecord | undefined {
@@ -295,24 +296,28 @@ export class StudentAuthService {
     const email = input.email.trim().toLowerCase();
     const credential = this.repositories.passcodes?.findActiveByEmail(email);
     const valid = await verifyStudentPasscode(input.passcode, credential?.passcodeHash);
-    const current = this.repositories.passcodes?.findActiveByEmail(email);
-    if (!credential || !valid || !current || current.passcodeHash !== credential.passcodeHash) throw new Error("INVALID_CREDENTIALS");
-    let user = this.uniqueMatch(email);
-    if (!user) {
-      const subject = `passcode:${email}`;
-      try { user = this.repositories.users.create({ googleSubject: subject, email, displayName: email }); }
-      catch (error) {
-        const winner = this.repositories.users.findByGoogleSubject(subject);
-        user = this.uniqueMatch(email);
-        if (!winner || !user || user.id !== winner.id) throw error;
+    if (!credential || !valid || !this.repositories.passcodes) throw new Error("INVALID_CREDENTIALS");
+    this.beforePasscodeCommit?.();
+    const result = this.repositories.passcodes.withActiveCredential(email, credential.passcodeHash, () => {
+      let user = this.uniqueMatch(email);
+      if (!user) {
+        const subject = `passcode:${email}`;
+        try { user = this.repositories.users.create({ googleSubject: subject, email, displayName: email }); }
+        catch (error) {
+          const winner = this.repositories.users.findByGoogleSubject(subject);
+          user = this.uniqueMatch(email);
+          if (!winner || !user || user.id !== winner.id) throw error;
+        }
       }
-    }
-    this.repositories.passcodes?.touchUsed(credential.id);
-    this.repositories.sessions.purgeExpired(new Date(this.now()).toISOString());
-    const { sessionToken } = createStudentSessionSecrets();
-    const session = this.repositories.sessions.create({ tokenDigest: digestStudentSecret(sessionToken), userId: user.id,
-      expiresAt: new Date(this.now() + this.config.sessionTtlMs).toISOString(), ipAddress: input.ipAddress, userAgent: input.userAgent });
-    return { sessionToken, session, user: toStudentUser(user), profile: toStudentProfile(user), returnTo: safeStudentReturnTo(input.returnTo) };
+      this.repositories.passcodes!.touchUsed(credential.id);
+      this.repositories.sessions.purgeExpired(new Date(this.now()).toISOString());
+      const { sessionToken } = createStudentSessionSecrets();
+      const session = this.repositories.sessions.create({ tokenDigest: digestStudentSecret(sessionToken), userId: user.id,
+        expiresAt: new Date(this.now() + this.config.sessionTtlMs).toISOString(), ipAddress: input.ipAddress, userAgent: input.userAgent });
+      return { sessionToken, session, user: toStudentUser(user), profile: toStudentProfile(user), returnTo: safeStudentReturnTo(input.returnTo) };
+    });
+    if (!result) throw new Error("INVALID_CREDENTIALS");
+    return result;
   }
 
   async completeAccessLogin(input: {
@@ -458,15 +463,17 @@ export class StudentAuthService {
 export function createStudentAuthService(
   config: StudentAuthConfig = resolveStudentAuthConfig(),
   repositories: StudentAuthRepositories,
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  beforePasscodeCommit?: () => void
 ): StudentAuthService {
-  return new StudentAuthService(config, repositories, now);
+  return new StudentAuthService(config, repositories, now, undefined, beforePasscodeCommit);
 }
 
 export function createStudentAuthRuntime(
   dbPath: string,
   config: StudentAuthConfig = resolveStudentAuthConfig(),
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  beforePasscodeCommit?: () => void
 ): StudentAuthRuntime {
   const dbHandle = createDbHandle(dbPath);
   runMigrations(dbHandle.sqlite);
@@ -479,7 +486,7 @@ export function createStudentAuthRuntime(
       users: repositories.studentUsers,
       sessions: repositories.studentSessions,
       oauthStates: repositories.studentOAuthStates
-    }, now)
+    }, now, beforePasscodeCommit)
   };
 }
 

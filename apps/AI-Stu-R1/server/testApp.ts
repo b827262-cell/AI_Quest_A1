@@ -112,6 +112,7 @@ export interface StartStudentTestAppOptions {
   /** Shortens the readiness deadline so timeout cases stay fast. */
   readyTimeoutMs?: number;
   mountTestAdmin?: boolean;
+  beforePasscodeCommit?: () => void;
 }
 
 export async function startStudentTestApp(options: StartStudentTestAppOptions): Promise<StudentTestApp> {
@@ -127,7 +128,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
     STUDENT_ALLOWED_ORIGINS: STUDENT_TEST_ORIGIN,
     STUDENT_SESSION_TTL_MS: String(options.sessionTtlMs)
   });
-  const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config);
+  const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config, Date.now, options.beforePasscodeCommit);
   const dataSource = createMemoryDataSource();
 
   const app: Express = express();

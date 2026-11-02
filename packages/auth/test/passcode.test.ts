@@ -11,6 +11,19 @@ describe("student passcodes", () => {
     expect(await verifyStudentPasscode("wrong", hash)).toBe(false);
     expect(await verifyStudentPasscode(code)).toBe(false);
   });
+  it("bounds both maps, clears expired keys and releases successful reservations", () => {
+    const throttle = createStudentPasscodeThrottle(8);
+    const first = throttle.reserve("ip", " First@Example.test ", 1);
+    expect(first.allowed).toBe(true);
+    first.finish(true);
+    expect(throttle.keyCount()).toBe(0);
+    for (let i = 0; i < 100; i++) throttle.reserve("ip", `${i}@example.test`, 2);
+    expect(throttle.keyCount()).toBeLessThanOrEqual(8);
+    expect(throttle.reserve("ip", "another@example.test", 2).allowed).toBe(false);
+    expect(throttle.reserve("new-ip", "new@example.test", 900_003).allowed).toBe(true);
+    expect(throttle.keyCount()).toBe(2);
+    expect(throttle.reserve("ip", "x".repeat(321), 900_003).allowed).toBe(false);
+  });
   it("limits each email after five failures and each IP after ten", () => {
     const throttle = createStudentPasscodeThrottle();
     for (let i = 0; i < 5; i++) expect(throttle.reserve(`ip${i}`, "email", 1).allowed).toBe(true);
