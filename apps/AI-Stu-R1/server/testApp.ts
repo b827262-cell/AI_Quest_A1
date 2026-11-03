@@ -111,6 +111,8 @@ export interface StartStudentTestAppOptions {
   readyCheck?: HealthReadyCheck;
   /** Shortens the readiness deadline so timeout cases stay fast. */
   readyTimeoutMs?: number;
+  mountTestAdmin?: boolean;
+  beforePasscodeCommit?: () => void;
 }
 
 export async function startStudentTestApp(options: StartStudentTestAppOptions): Promise<StudentTestApp> {
@@ -126,7 +128,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
     STUDENT_ALLOWED_ORIGINS: STUDENT_TEST_ORIGIN,
     STUDENT_SESSION_TTL_MS: String(options.sessionTtlMs)
   });
-  const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config);
+  const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config, Date.now, options.beforePasscodeCommit);
   const dataSource = createMemoryDataSource();
 
   const app: Express = express();
@@ -136,6 +138,16 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   registerHealthRoutes(app, options.readyCheck ?? (async () => {
     await dataSource.listBooks();
   }), { timeoutMs: options.readyTimeoutMs });
+  if (options.mountTestAdmin) {
+    const { createRepositories } = await import("../../../packages/db/src");
+    const { createStudentPasscodesRouter } = await import("../../AI-adm-D1/src/server/student-passcodes-router");
+    const { createLearningHistoryRouter } = await import("../../AI-adm-D1/src/server/learning-history-router");
+    const { createAdminRouteBoundary } = await import("../../AI-adm-D1/src/server/admin-route-boundary");
+    const repos = createRepositories(runtime.dbHandle.db);
+    createAdminRouteBoundary({ NODE_ENV: "test", ADMIN_API_TOKEN: "test-only-admin-token" }, repos).protectRoutes(app);
+    app.use(createStudentPasscodesRouter(repos));
+    app.use(createLearningHistoryRouter(repos.studentLearningHistory));
+  }
   app.use("/api/student/auth", createStudentAuthRouter(runtime.auth, config));
   app.use("/api/student", createStudentSessionMiddleware(runtime.auth, config));
   app.use("/api/student", createStudentLearningHistoryRouter(runtime.learningHistory, config));
