@@ -17,12 +17,51 @@ describe("student passcodes", () => {
     expect(first.allowed).toBe(true);
     first.finish(true);
     expect(throttle.keyCount()).toBe(0);
-    for (let i = 0; i < 100; i++) throttle.reserve("ip", `${i}@example.test`, 2);
+    for (let i = 0; i < 100; i++) throttle.reserve(`ip${i}`, `${i}@example.test`, 2);
     expect(throttle.keyCount()).toBeLessThanOrEqual(8);
-    expect(throttle.reserve("ip", "another@example.test", 2).allowed).toBe(false);
+    expect(throttle.reserve("fresh-ip", "another@example.test", 2).allowed).toBe(true);
     expect(throttle.reserve("new-ip", "new@example.test", 900_003).allowed).toBe(true);
     expect(throttle.keyCount()).toBe(2);
     expect(throttle.reserve("ip", "x".repeat(321), 900_003).allowed).toBe(false);
+  });
+  it("evicts the least recently updated keys independently and keeps recently updated keys", () => {
+    const throttle = createStudentPasscodeThrottle(4);
+    for (let i = 0; i < 4; i++) expect(throttle.reserve("hot-ip", "hot@example.test", 1).allowed).toBe(true);
+    expect(throttle.reserve("old-ip", "old@example.test", 2).allowed).toBe(true);
+    expect(throttle.reserve("hot-ip", "hot@example.test", 3).allowed).toBe(true);
+    expect(throttle.reserve("new-ip", "new@example.test", 4).allowed).toBe(true);
+    expect(throttle.keyCount()).toBe(4);
+    expect(throttle.reserve("hot-ip", "hot@example.test", 5).allowed).toBe(false);
+    expect(throttle.reserve("old-ip", "old@example.test", 6).allowed).toBe(true);
+    expect(throttle.keyCount()).toBe(4);
+  });
+  it("preserves the recently updated IP when a new IP evicts an older one", () => {
+    const throttle = createStudentPasscodeThrottle(4);
+    for (let i = 0; i < 9; i++) expect(throttle.reserve("hot-ip", `a${i}@test`, 1).allowed).toBe(true);
+    expect(throttle.reserve("old-ip", "b@test", 2).allowed).toBe(true);
+    expect(throttle.reserve("hot-ip", "c@test", 3).allowed).toBe(true);
+    expect(throttle.reserve("new-ip", "d@test", 4).allowed).toBe(true);
+    expect(throttle.reserve("hot-ip", "fresh@test", 5).allowed).toBe(false);
+    expect(throttle.reserve("old-ip", "fresh@test", 6).allowed).toBe(true);
+    expect(throttle.keyCount()).toBeLessThanOrEqual(4);
+  });
+  it("preserves the recently updated email when a new email evicts an older one", () => {
+    const throttle = createStudentPasscodeThrottle(4);
+    for (let i = 0; i < 4; i++) expect(throttle.reserve(`a${i}`, "hot@test", 1).allowed).toBe(true);
+    expect(throttle.reserve("b", "old@test", 2).allowed).toBe(true);
+    expect(throttle.reserve("c", "hot@test", 3).allowed).toBe(true);
+    expect(throttle.reserve("d", "new@test", 4).allowed).toBe(true);
+    expect(throttle.reserve("fresh", "hot@test", 5).allowed).toBe(false);
+    expect(throttle.reserve("fresh", "old@test", 6).allowed).toBe(true);
+    expect(throttle.keyCount()).toBeLessThanOrEqual(4);
+  });
+  it("returns the next available slot time and uses the later blocked bucket", () => {
+    const throttle = createStudentPasscodeThrottle();
+    for (let i = 0; i < 10; i++) expect(throttle.reserve("limited-ip", `other${i}@test`, 1000 + i * 1000).allowed).toBe(true);
+    for (let i = 0; i < 5; i++) expect(throttle.reserve(`ip${i}`, "limited@test", 20000 + i * 1000).allowed).toBe(true);
+    expect(throttle.reserve("limited-ip", "another@test", 25001)).toMatchObject({ allowed: false, retryAfter: 876 });
+    expect(throttle.reserve("different-ip", "limited@test", 25001)).toMatchObject({ allowed: false, retryAfter: 895 });
+    expect(throttle.reserve("limited-ip", "limited@test", 25001)).toMatchObject({ allowed: false, retryAfter: 895 });
   });
   it("limits each email after five failures and each IP after ten", () => {
     const throttle = createStudentPasscodeThrottle();

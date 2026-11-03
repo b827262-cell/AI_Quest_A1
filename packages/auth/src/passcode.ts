@@ -36,6 +36,8 @@ export async function verifyStudentPasscode(passcode: string, hash?: string): Pr
 
 type Attempt = { id: number; at: number };
 export function createStudentPasscodeThrottle(maxKeys = 10_000) {
+  const capacity = Math.floor(maxKeys / 2);
+  if (!Number.isSafeInteger(capacity) || capacity < 1) throw new RangeError("maxKeys must be at least 2");
   const ips = new Map<string, Attempt[]>();
   const emails = new Map<string, Attempt[]>();
   let sequence = 0;
@@ -53,21 +55,23 @@ export function createStudentPasscodeThrottle(maxKeys = 10_000) {
       if (normalizedEmail.length > 320) return { allowed: false, retryAfter: 1, finish: (_success: boolean) => {} };
       const account = createHash("sha256").update(normalizedEmail).digest("hex");
       const keys: Array<[Map<string, Attempt[]>, string, number]> = [[ips, ip || "unknown", 10], [emails, account, 5]];
-      const newKeys = keys.filter(([map, key]) => !map.has(key)).length;
-      if (ips.size + emails.size + newKeys > maxKeys) {
-        const oldest = Math.min(...[...ips.values(), ...emails.values()].map((entries) => entries[0]!.at));
-        return { allowed: false, retryAfter: Number.isFinite(oldest) ? Math.max(1, Math.ceil((oldest + windowMs - now) / 1000)) : 1, finish: (_success: boolean) => {} };
-      }
-      const lists = keys.map(([map, key]) => (map.get(key) ?? []).filter((a) => now - a.at < windowMs));
-      const until = Math.max(...lists.map((list, index) => list.length >= keys[index]![2] ? list[0]!.at + windowMs : 0));
-      if (until > now) return { allowed: false, retryAfter: Math.ceil((until - now) / 1000), finish: (_success: boolean) => {} };
+      const lists = keys.map(([map, key]) => map.get(key) ?? []);
+      const until = Math.max(...lists.map((list, index) => {
+        const limit = keys[index]![2];
+        return list.length >= limit ? list[list.length - limit]!.at + windowMs : 0;
+      }));
+      if (until > now) return { allowed: false, retryAfter: Math.max(1, Math.ceil((until - now) / 1000)), finish: (_success: boolean) => {} };
       const attempt = { id: ++sequence, at: now };
-      keys.forEach(([map, key], index) => map.set(key, [...lists[index]!, attempt]));
+      keys.forEach(([map, key], index) => {
+        if (!map.has(key) && map.size >= capacity) map.delete(map.keys().next().value!);
+        map.delete(key);
+        map.set(key, [...lists[index]!, attempt]);
+      });
       let done = false;
       return { allowed: true, retryAfter: 0, finish(success: boolean) {
         if (done) return;
         done = true;
-        if (success) keys.forEach(([map, key]) => { const remaining = (map.get(key) ?? []).filter((a) => a.id !== attempt.id); if (remaining.length) map.set(key, remaining); else map.delete(key); });
+        if (success) keys.forEach(([map, key]) => { const remaining = (map.get(key) ?? []).filter((a) => a.id !== attempt.id); map.delete(key); if (remaining.length) map.set(key, remaining); });
       } };
     }
   };

@@ -51,7 +51,7 @@ export function makeStudentPasscodeRepo(db: Db) {
             .where(and(eq(studentSessions.userId, user.id), isNull(studentSessions.revokedAt))).run();
         }
         return true;
-      });
+      }, { behavior: "immediate" });
     },
     touchUsed(id: string) {
       db.update(studentPasscodes).set({ lastUsedAt: nowIso() }).where(eq(studentPasscodes.id, id)).run();
