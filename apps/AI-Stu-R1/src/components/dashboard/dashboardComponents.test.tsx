@@ -65,7 +65,8 @@ describe("dashboard components", () => {
     );
     expect(bookMarkup).toContain("學習導論");
     expect(bookMarkup).toContain("/books/book-1");
-    expect(answerMarkup).toContain("剩餘體驗：0");
+    expect(answerMarkup).toContain("訪客剩餘次數：0");
+    expect(answerMarkup).toContain("此為本裝置／目前網路的訪客剩餘次數，不是個人帳號額度");
     expect(answerMarkup).not.toContain("citation");
     expect(answerMarkup).not.toContain("引用來源");
   });

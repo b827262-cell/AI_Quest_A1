@@ -153,7 +153,7 @@ export function useGuestQuestion({
         });
       }
       navigate("/guest-answer", {
-        state: { guestResponse: publicGuestAnswerForHistory(result) }
+        state: { guestResponse: publicGuestAnswerForHistory({ ...result, question: result.question || trimmed }) }
       });
     } catch (err) {
       if (controller.signal.aborted) return;

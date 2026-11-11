@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { GuestRemainingHint } from "../../components/GuestRemainingHint";
 import { StudentAnswerRenderer } from "../../components/GuestAnswerRenderer";
 import type { GuestAskResponse } from "../../studentClient";
 
@@ -62,9 +63,7 @@ export function GuestAnswer({
         </div>
       ) : null}
       <div className="guest-answer-footer">
-        <span>
-          剩餘訪客體驗次數：{response.remainingGuestQuestions ?? "—"}
-        </span>
+        <GuestRemainingHint remaining={response.remainingGuestQuestions} />
         <Link className="public-login-button" to="/login">學員登入</Link>
       </div>
     </section>
