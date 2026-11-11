@@ -121,6 +121,7 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
 }
 
 const app = express();
+app.set("trust proxy", "loopback");
 app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
 app.use(express.json());
 

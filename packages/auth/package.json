@@ -21,6 +21,7 @@
       "import": "./src/server.ts",
       "default": "./src/server.ts"
     },
+    "./passcode": { "types": "./src/passcode.ts", "import": "./src/passcode.ts", "default": "./src/passcode.ts" },
     "./express": {
       "types": "./src/express.ts",
       "import": "./src/express.ts",
@@ -40,6 +41,7 @@
   },
   "dependencies": {
     "@ai-smartbook/db": "workspace:*",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "zod": "4.4.3"
   }
 }

@@ -315,6 +315,16 @@ const STATEMENTS = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS student_passcodes (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    passcode_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('active', 'disabled')),
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_used_at TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS student_sessions (
     id TEXT PRIMARY KEY,
     token_digest TEXT NOT NULL UNIQUE,

@@ -53,6 +53,7 @@ import { createAdminOriginMiddleware } from "./ai/admin-origin";
 import { adminActorId, createAdminRouteBoundary } from "./admin-route-boundary";
 import { createExamSnapshotRouter } from "./exam-snapshot/admin-router";
 import { createBooksRouter } from "./books-router";
+import { createStudentPasscodesRouter } from "./student-passcodes-router";
 import { createAccountsRouter } from "./accounts-router";
 import { createLearningHistoryRouter } from "./learning-history-router";
 import { createStudentQuestionsRouter } from "./student-questions-router";
@@ -145,6 +146,7 @@ export function createAdminApp(dependencies: AdminAppDependencies): express.Expr
   const ctx: BookCoreContext = { repos: bookRepos, ai, prompts: bookPromptBuilders };
   const studentAuthConfig = resolveStudentAuthConfig(env);
   const studentAuth = createStudentAuthService(studentAuthConfig, {
+    passcodes: repos.studentPasscodes,
     users: repos.studentUsers,
     sessions: repos.studentSessions,
     oauthStates: repos.studentOAuthStates
@@ -1886,6 +1888,8 @@ app.get("/api/admin/dashboard/stats", (req, res) => {
       asOf: new Date().toISOString(), isSynthetic: false });
   }
 });
+
+app.use(createStudentPasscodesRouter(repos));
 
 app.use(createAccountsRouter({
   repos, onlineWindowMs: ONLINE_WINDOW_MS, lastSeenBySession, sessionLastActivityMs, describeIpLocation, fail

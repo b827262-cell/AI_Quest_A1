@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 
 const PAGE_NAMES: Record<string, string> = {
   "/login": "登入", "/admin": "首頁", "/admin/accounts": "帳戶管理",
+  "/admin/student-passcodes": "學生通行",
   "/admin/learning-history": "學習紀錄管理", "/admin/appearance": "介面設定",
   "/admin/site-config": "網站首頁設定", "/admin/exam-snapshots": "高普考資料快照",
   "/admin/ai-analytics": "AI 執行分析", "/admin/ai-providers": "AI Provider／金鑰",

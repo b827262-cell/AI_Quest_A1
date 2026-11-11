@@ -243,6 +243,12 @@ describe("Student Auth Foundation", () => {
     expect(() => assertStudentAuthConfig({ ...production, accessCertsUrl: env.STUDENT_ACCESS_CERTS_URL })).toThrow();
   });
 
+  it("supports passcode-only production without Access configuration", () => {
+    const config = resolveStudentAuthConfig({ NODE_ENV: "production", STUDENT_PASSCODE_LOGIN: "true", STUDENT_SESSION_SECRET: "a-test-value-that-is-longer-than-thirty-two-characters" });
+    expect(() => assertStudentAuthConfig(config)).not.toThrow();
+    expect(() => assertStudentAuthConfig({ ...config, accessTeamDomain: "team" })).toThrow();
+  });
+
   it("requires Access config in production without Google client credentials", () => {
     const config = resolveStudentAuthConfig({ NODE_ENV: "production", STUDENT_SESSION_SECRET: "a-secret-that-is-longer-than-thirty-two-characters", STUDENT_ACCESS_TEAM_DOMAIN: "team", STUDENT_ACCESS_AUD: "aud" });
     expect(() => assertStudentAuthConfig(config)).not.toThrow();

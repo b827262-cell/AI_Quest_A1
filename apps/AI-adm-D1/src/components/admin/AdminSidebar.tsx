@@ -27,6 +27,7 @@ export function AdminSidebar({
         <NavLink end to="/admin/accounts" className={NAV_CLASS}>
           帳戶管理
         </NavLink>
+        <NavLink end to="/admin/student-passcodes" className={NAV_CLASS}>學生通行</NavLink>
         <NavLink end to="/admin/learning-history" className={NAV_CLASS}>
           學習紀錄管理
         </NavLink>

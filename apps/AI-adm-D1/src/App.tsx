@@ -6,6 +6,7 @@ import { AppearanceProvider } from "./appearance";
 import { AdminAuthProvider, RequireAdmin } from "./admin-auth";
 import { AdminShell } from "./components/admin/AdminShell";
 const AdminDashboardPage = lazy(async () => ({ default: (await import("./pages/AdminDashboardPage")).AdminDashboardPage }));
+const StudentPasscodesPage = lazy(async () => ({ default: (await import("./pages/StudentPasscodesPage")).StudentPasscodesPage }));
 const AdminAccountsPage = lazy(async () => ({ default: (await import("./pages/AdminAccountsPage")).AdminAccountsPage }));
 const AdminLearningHistoryPage = lazy(async () => ({ default: (await import("./pages/AdminLearningHistoryPage")).AdminLearningHistoryPage }));
 const AppearanceSettingsPage = lazy(async () => ({ default: (await import("./pages/AppearanceSettingsPage")).AppearanceSettingsPage }));
@@ -45,6 +46,7 @@ function ProtectedAdminRoutes() {
           <RouteLoading key={location.pathname}><Routes>
             <Route path="/" element={<Navigate to="/admin" replace />} />
             <Route path="/admin" element={<AdminDashboardPage />} />
+            <Route path="/admin/student-passcodes" element={<StudentPasscodesPage />} />
             <Route path="/admin/accounts" element={<AdminAccountsPage />} />
             <Route path="/admin/learning-history" element={<AdminLearningHistoryPage />} />
             <Route path="/admin/appearance" element={<AppearanceSettingsPage />} />

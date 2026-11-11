@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rawHttpRequest, startStudentTestApp, type StudentTestApp } from "./testApp";
-import { createRepositories } from "../../../packages/db/src";
+import { createDbHandle, createRepositories } from "../../../packages/db/src";
+import { hashStudentPasscode } from "@ai-smartbook/auth/passcode";
 
 let app: StudentTestApp | null = null;
 afterEach(async () => { await app?.close(); app = null; });
@@ -160,5 +161,91 @@ describe("Student Cloudflare Access HTTP integration", () => {
     const matches = users.findByEmail("new@example.test");
     expect(matches).toHaveLength(1);
     expect(matches[0].email).toBe("new@example.test");
+  });
+});
+
+
+describe("student passcode login", () => {
+  it("issues, signs in, syncs history and revokes on disable and reset", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, secureCookies: false, mountTestAdmin: true });
+    const url = (path: string) => new URL(`${app!.baseUrl}${path}`);
+    const post = (path: string, body: unknown, headers: Record<string, string> = {}) => rawHttpRequest(url(path), {
+      method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body)
+    });
+    const admin = { authorization: "Bearer test-only-admin-token" };
+    expect((await post("/api/student/auth/passcode/login", { email: "a@example.test", passcode: "wrong" })).status).toBe(404);
+    app.config.passcodeLoginEnabled = true;
+    const issued = await post("/api/admin/student-passcodes", { email: "A@example.test" }, admin);
+    expect(issued.status).toBe(201);
+    const code = JSON.parse(issued.bodyText).passcode;
+    const list = await rawHttpRequest(url("/api/admin/student-passcodes"), { headers: admin });
+    expect(list.bodyText).not.toContain(code);
+    expect(list.bodyText).not.toContain("passcodeHash");
+    const row = JSON.parse(list.bodyText).passcodes[0];
+    const signed = await post("/api/student/auth/passcode/login", { email: "a@example.test", passcode: code });
+    expect(signed.status).toBe(200);
+    const cookie = signed.headers["set-cookie"]![0].split(";", 1)[0];
+    const me = await rawHttpRequest(url("/api/student/auth/me"), { headers: { cookie } });
+    expect(JSON.parse(me.bodyText).authenticated).toBe(true);
+    const profile = await rawHttpRequest(url("/api/student/auth/profile"), { method: "PATCH", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Test", schoolName: "School", gradeLevel: "1" }) });
+    expect(profile.status).toBe(200);
+    const history = await post("/api/student/learning-history", { entries: [{ id: "passcode-entry", askedAt: "2026-10-16T10:24:00.000Z", question: "hello", category: "auto", sourceType: "manual", strategy: "google-ai", syncVersion: 1 }] }, { cookie, origin: "https://student.example.test" });
+    expect(history.status).toBe(200);
+    const adminHistory = await rawHttpRequest(url("/api/admin/learning-history"), { headers: admin });
+    expect(adminHistory.bodyText).toContain("passcode-entry");
+    const disabled = await rawHttpRequest(url(`/api/admin/student-passcodes/${row.id}/status`), { method: "PATCH", headers: { ...admin, "content-type": "application/json" }, body: JSON.stringify({ status: "disabled" }) });
+    expect(disabled.status).toBe(200);
+    expect(JSON.parse((await rawHttpRequest(url("/api/student/auth/me"), { headers: { cookie } })).bodyText).authenticated).toBe(false);
+    expect((await post("/api/student/auth/passcode/login", { email: row.email, passcode: code })).status).toBe(401);
+    await rawHttpRequest(url(`/api/admin/student-passcodes/${row.id}/status`), { method: "PATCH", headers: { ...admin, "content-type": "application/json" }, body: JSON.stringify({ status: "active" }) });
+    const reset = await post(`/api/admin/student-passcodes/${row.id}/reset`, {}, admin);
+    expect(reset.status).toBe(200);
+    expect((await post("/api/student/auth/passcode/login", { email: row.email, passcode: code })).status).toBe(401);
+    expect((await post("/api/student/auth/passcode/login", { email: row.email, passcode: JSON.parse(reset.bodyText).passcode })).status).toBe(200);
+  });
+});
+
+it("returns 429 for the sixth email attempt and eleventh IP attempt", async () => {
+  app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+  app.config.passcodeLoginEnabled = true;
+  const attempt = (email: string) => rawHttpRequest(new URL(`${app!.baseUrl}/api/student/auth/passcode/login`), {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, passcode: "bad" })
+  });
+  for (let i = 0; i < 5; i++) expect((await attempt("one@example.test")).status).toBe(401);
+  const sixth = await attempt("one@example.test");
+  expect(sixth.status).toBe(429);
+  expect(Number(sixth.headers["retry-after"]?.[0])).toBeGreaterThan(0);
+  for (let i = 0; i < 5; i++) expect((await attempt(`${i}@example.test`)).status).toBe(401);
+  expect((await attempt("last@example.test")).status).toBe(429);
+});
+
+
+describe("passcode transaction across SQLite connections", () => {
+  it.each(["disable", "reset"] as const)("rejects login if %s occurs after verification", async (action) => {
+    let update = () => {};
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, beforePasscodeCommit: () => update() });
+    app.config.passcodeLoginEnabled = true;
+    const other = createDbHandle(app.runtime.dbHandle.sqlite.name);
+    try {
+      const repos = createRepositories(other.db);
+      const row = repos.studentPasscodes.create({ email: "race@example.test", passcodeHash: hashStudentPasscode("ABCDE-FGHJK") });
+      update = () => { repos.studentPasscodes.changeAndRevoke(row.id, action === "disable" ? { status: "disabled" } : { passcodeHash: hashStudentPasscode("ZZZZZ-ZZZZZ") }); };
+      const response = await rawHttpRequest(new URL(`${app.baseUrl}/api/student/auth/passcode/login`), {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: row.email, passcode: "ABCDE-FGHJK" })
+      });
+      expect(response.status).toBe(401);
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(other.sqlite.prepare("SELECT COUNT(*) AS count FROM student_sessions WHERE revoked_at IS NULL").get()).toEqual({ count: 0 });
+    } finally { other.sqlite.close(); }
+  });
+  it.each(["disable", "reset"] as const)("%s revokes every session across users sharing the same normalized email", async (action) => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    const repos = createRepositories(app.runtime.dbHandle.db);
+    const row = repos.studentPasscodes.create({ email: "multi@example.test", passcodeHash: hashStudentPasscode("ABCDE-FGHJK") });
+    const user1 = repos.studentUsers.create({ googleSubject: "one", email: "multi@example.test", displayName: "one" });
+    const user2 = repos.studentUsers.create({ googleSubject: "two", email: " MULTI@EXAMPLE.TEST ", displayName: "two" });
+    for (const [index, user] of [user1, user1, user2].entries()) repos.studentSessions.create({ tokenDigest: `digest-${index}`, userId: user.id, expiresAt: "2099-01-01T00:00:00.000Z" });
+    repos.studentPasscodes.changeAndRevoke(row.id, action === "disable" ? { status: "disabled" } : { passcodeHash: hashStudentPasscode("ZZZZZ-ZZZZZ") });
+    for (let index = 0; index < 3; index++) expect(repos.studentSessions.findActiveByTokenDigest(`digest-${index}`)).toBeUndefined();
   });
 });

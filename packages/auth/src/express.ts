@@ -1,5 +1,8 @@
 import type { Request, RequestHandler, Response, Router } from "express";
 import express from "express";
+import { isIP } from "node:net";
+import { z } from "zod";
+import { createStudentPasscodeThrottle } from "./passcode";
 import {
   clearStudentSessionCookieOptions,
   readStudentCookie,
@@ -90,9 +93,20 @@ export function createStudentSessionMiddleware(
   };
 }
 
+export function studentClientIp(req: Request): string | undefined {
+  const remote = req.socket.remoteAddress;
+  const loopback = remote === "::1" || Boolean(remote && /^(?:::ffff:)?127\./i.test(remote));
+  if (loopback) {
+    const cf = req.header("cf-connecting-ip")?.trim();
+    if (cf && isIP(cf)) return cf;
+  }
+  return req.ip || undefined;
+}
+
 export function createStudentAuthRouter(
   auth: StudentAuthService,
-  config: StudentAuthConfig = resolveStudentAuthConfig()
+  config: StudentAuthConfig = resolveStudentAuthConfig(),
+  passcodeThrottle = createStudentPasscodeThrottle()
 ): Router {
   const router = express.Router();
 
@@ -118,6 +132,33 @@ export function createStudentAuthRouter(
       else if (error instanceof AccessUnavailableError) res.status(503).json({ error: "ACCESS_UNAVAILABLE" });
       else if (error instanceof AccessInvalidTokenError) res.status(401).json({ error: "ACCESS_ASSERTION_INVALID" });
       else res.status(503).json({ error: "ACCESS_UNAVAILABLE" });
+    }
+  });
+
+  router.post("/passcode/login", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (!config.passcodeLoginEnabled) { res.status(404).end(); return; }
+    if (rejectOrigin(req, res, config)) return;
+    const parsed = z.object({ email: z.string().max(320), passcode: z.string().max(128), returnTo: z.string().max(2048).optional() }).safeParse(req.body);
+    if (!parsed.success) { res.status(401).json({ error: "INVALID_CREDENTIALS" }); return; }
+    const clientIp = studentClientIp(req);
+    const reservation = passcodeThrottle.reserve(clientIp || "unknown", parsed.data.email);
+    if (!reservation.allowed) {
+      const capacity = reservation.reason === "capacity";
+      if (capacity) console.warn("Student passcode throttle capacity exhausted");
+      res.setHeader("Retry-After", String(reservation.retryAfter));
+      res.status(429).json({ error: capacity ? "RATE_LIMITED_CAPACITY" : "RATE_LIMITED" });
+      return;
+    }
+    try {
+      const result = await auth.completePasscodeLogin({ ...parsed.data, ipAddress: clientIp || null, userAgent: req.header("user-agent") || null });
+      setStudentSessionCookie(res, config, result.sessionToken);
+      reservation.finish(true);
+      const redirectTo = result.profile.profileCompleted ? result.returnTo : `/profile-completion?next=${encodeURIComponent(result.returnTo)}`;
+      res.json({ redirectTo });
+    } catch {
+      reservation.finish(false);
+      res.status(401).json({ error: "INVALID_CREDENTIALS" });
     }
   });
 
