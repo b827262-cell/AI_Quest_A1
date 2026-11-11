@@ -1,3 +1,4 @@
+import { resolveClientIp } from "./client-ip";
 import { createStudentBooksRouter, type ReaderProgressEventType, type ReaderProgressEvent } from "./student-books-router";
 import { createAiEvaluationsRouter } from "./ai-evaluations-router";
 import { failValidation } from "./validation-error";
@@ -1128,38 +1129,6 @@ type ClientInfo = {
 function headerValue(req: Request, name: string): string {
   const value = req.headers[name];
   return Array.isArray(value) ? value.join(", ") : typeof value === "string" ? value : "";
-}
-
-// ---- Server-side IP resolution -------------------------------------------
-// We never trust a client-supplied IP. When TRUST_PROXY=true (e.g. behind
-// Nginx / Cloudflare) we honour the standard forwarding headers in a fixed
-// priority order; otherwise we only trust the raw socket address.
-const TRUST_PROXY = String(process.env.TRUST_PROXY).toLowerCase() === "true";
-
-/** Normalize IPv6 localhost and IPv4-mapped IPv6 to their IPv4 form. */
-function normalizeIp(raw: string): string {
-  let ip = raw.trim();
-  if (ip === "") return "";
-  if (ip === "::1") return "127.0.0.1";
-  // Strip an IPv4-mapped IPv6 prefix, e.g. ::ffff:127.0.0.1 -> 127.0.0.1.
-  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (mapped) ip = mapped[1];
-  return ip;
-}
-
-/** Resolve the client IP and record which source it came from. */
-function resolveClientIp(req: Request): { ip: string | null; source: string | null } {
-  if (TRUST_PROXY) {
-    const cf = headerValue(req, "cf-connecting-ip").trim();
-    if (cf) return { ip: normalizeIp(cf), source: "cf-connecting-ip" };
-    const xff = headerValue(req, "x-forwarded-for").split(",")[0]?.trim();
-    if (xff) return { ip: normalizeIp(xff), source: "x-forwarded-for" };
-    const xreal = headerValue(req, "x-real-ip").trim();
-    if (xreal) return { ip: normalizeIp(xreal), source: "x-real-ip" };
-  }
-  const socket = req.socket?.remoteAddress ?? "";
-  const ip = normalizeIp(socket);
-  return { ip: ip || null, source: ip ? "socket" : null };
 }
 
 /** Private/loopback/link-local IPv4 or IPv6 — never sent to external geo. */

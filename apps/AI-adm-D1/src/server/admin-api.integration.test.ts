@@ -93,6 +93,21 @@ describe("Admin API HTTP authentication and quota behavior", () => {
     dbHandle.sqlite.close();
   });
 
+  it("keeps guest quotas independent for distinct Cloudflare client IPs", async () => {
+    const { app, dbHandle } = buildTestApp();
+    try {
+      const ask = (ip: string) => request(app).post("/api/public/guest-ask")
+        .set("CF-Connecting-IP", ip).send({ question: "測試題目" });
+      const first = await ask("203.0.113.41");
+      const second = await ask("203.0.113.42");
+      expect(first.body.remainingGuestQuestions).toBe(2);
+      expect(second.body.remainingGuestQuestions).toBe(2);
+      const repeat = await ask("203.0.113.41");
+      expect(repeat.status).toBe(429);
+      expect(repeat.body).toMatchObject({ status: "rate_limited", remainingGuestQuestions: 2 });
+    } finally { dbHandle.sqlite.close(); }
+  });
+
   it("returns safe validation fields for an authenticated admin request", async () => {
     const { app, dbHandle } = buildTestApp();
     const session = await login(app);
