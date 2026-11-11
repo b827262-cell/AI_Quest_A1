@@ -105,10 +105,10 @@ export function studentClientIp(req: Request): string | undefined {
 
 export function createStudentAuthRouter(
   auth: StudentAuthService,
-  config: StudentAuthConfig = resolveStudentAuthConfig()
+  config: StudentAuthConfig = resolveStudentAuthConfig(),
+  passcodeThrottle = createStudentPasscodeThrottle()
 ): Router {
   const router = express.Router();
-  const passcodeThrottle = createStudentPasscodeThrottle();
 
   router.get(["/google/start", "/google/callback"], (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -143,7 +143,13 @@ export function createStudentAuthRouter(
     if (!parsed.success) { res.status(401).json({ error: "INVALID_CREDENTIALS" }); return; }
     const clientIp = studentClientIp(req);
     const reservation = passcodeThrottle.reserve(clientIp || "unknown", parsed.data.email);
-    if (!reservation.allowed) { res.setHeader("Retry-After", String(reservation.retryAfter)); res.status(429).json({ error: "RATE_LIMITED" }); return; }
+    if (!reservation.allowed) {
+      const capacity = reservation.reason === "capacity";
+      if (capacity) console.warn("Student passcode throttle capacity exhausted");
+      res.setHeader("Retry-After", String(reservation.retryAfter));
+      res.status(429).json({ error: capacity ? "RATE_LIMITED_CAPACITY" : "RATE_LIMITED" });
+      return;
+    }
     try {
       const result = await auth.completePasscodeLogin({ ...parsed.data, ipAddress: clientIp || null, userAgent: req.header("user-agent") || null });
       setStudentSessionCookie(res, config, result.sessionToken);

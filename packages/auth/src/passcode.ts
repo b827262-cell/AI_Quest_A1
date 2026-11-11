@@ -71,7 +71,7 @@ export function createStudentPasscodeThrottle(maxKeys = 10_000) {
         }
         return null;
       });
-      if (victims.includes(null)) return { allowed: false, retryAfter: 1, finish: (_success: boolean) => {} };
+      if (victims.includes(null)) return { allowed: false, reason: "capacity" as const, retryAfter: 1, finish: (_success: boolean) => {} };
       const attempt = { id: ++sequence, at: now };
       keys.forEach(([map, key], index) => {
         const victim = victims[index];

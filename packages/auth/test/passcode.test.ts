@@ -62,6 +62,30 @@ describe("student passcodes", () => {
     expect(throttle.reserve("ip", "locked@test", 2).allowed).toBe(false);
     expect(throttle.reserve("other", "new@test", 900_002).allowed).toBe(true);
   });
+  it("evicts an unlocked bucket while preserving a locked bucket", () => {
+    const throttle = createStudentPasscodeThrottle(4);
+    for (let i = 0; i < 5; i++) expect(throttle.reserve("ip", "locked@test", 1).allowed).toBe(true);
+    expect(throttle.reserve("ip", "unlocked@test", 2).allowed).toBe(true);
+    expect(throttle.reserve("ip", "new@test", 3).allowed).toBe(true);
+    expect(throttle.reserve("ip", "locked@test", 4)).toMatchObject({ allowed: false });
+    expect(throttle.reserve("ip", "unlocked@test", 4).allowed).toBe(true);
+  });
+  it("accepts the risk that evicting a 4/5 bucket resets its attempts", () => {
+    const throttle = createStudentPasscodeThrottle(4);
+    for (let i = 0; i < 4; i++) expect(throttle.reserve("ip", "four@test", 1).allowed).toBe(true);
+    expect(throttle.reserve("ip", "other@test", 2).allowed).toBe(true);
+    expect(throttle.reserve("ip", "new@test", 3).allowed).toBe(true);
+    // Accepted risk: an unlocked 4/5 bucket can be evicted and starts over.
+    for (let i = 0; i < 5; i++) expect(throttle.reserve("ip2", "four@test", 4).allowed).toBe(true);
+    expect(throttle.reserve("ip2", "four@test", 4).allowed).toBe(false);
+  });
+  it("reuses capacity occupied by expired buckets", () => {
+    const throttle = createStudentPasscodeThrottle(2);
+    for (let i = 0; i < 5; i++) throttle.reserve("ip", "locked@test", 1);
+    expect(throttle.reserve("new", "new@test", 2)).toMatchObject({ allowed: false, reason: "capacity" });
+    expect(throttle.reserve("new", "new@test", 900_001).allowed).toBe(true);
+    expect(throttle.keyCount()).toBe(2);
+  });
   it("uses a separate unknown IP bucket", () => {
     const throttle = createStudentPasscodeThrottle();
     for (let i = 0; i < 10; i++) expect(throttle.reserve("", `u${i}`, 1).allowed).toBe(true);
