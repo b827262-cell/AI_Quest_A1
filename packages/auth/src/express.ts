@@ -1,5 +1,6 @@
 import type { Request, RequestHandler, Response, Router } from "express";
 import express from "express";
+import { isIP } from "node:net";
 import { z } from "zod";
 import { createStudentPasscodeThrottle } from "./passcode";
 import {
@@ -92,6 +93,16 @@ export function createStudentSessionMiddleware(
   };
 }
 
+export function studentClientIp(req: Request): string | undefined {
+  const remote = req.socket.remoteAddress;
+  const loopback = remote === "::1" || Boolean(remote && /^(?:::ffff:)?127\./i.test(remote));
+  if (loopback) {
+    const cf = req.header("cf-connecting-ip")?.trim();
+    if (cf && isIP(cf)) return cf;
+  }
+  return req.ip || undefined;
+}
+
 export function createStudentAuthRouter(
   auth: StudentAuthService,
   config: StudentAuthConfig = resolveStudentAuthConfig()
@@ -130,12 +141,13 @@ export function createStudentAuthRouter(
     if (rejectOrigin(req, res, config)) return;
     const parsed = z.object({ email: z.string().max(320), passcode: z.string().max(128), returnTo: z.string().max(2048).optional() }).safeParse(req.body);
     if (!parsed.success) { res.status(401).json({ error: "INVALID_CREDENTIALS" }); return; }
-    const reservation = passcodeThrottle.reserve(req.ip || "unknown", parsed.data.email);
+    const clientIp = studentClientIp(req);
+    const reservation = passcodeThrottle.reserve(clientIp || "unknown", parsed.data.email);
     if (!reservation.allowed) { res.setHeader("Retry-After", String(reservation.retryAfter)); res.status(429).json({ error: "RATE_LIMITED" }); return; }
     try {
-      const result = await auth.completePasscodeLogin({ ...parsed.data, ipAddress: req.ip || null, userAgent: req.header("user-agent") || null });
-      reservation.finish(true);
+      const result = await auth.completePasscodeLogin({ ...parsed.data, ipAddress: clientIp || null, userAgent: req.header("user-agent") || null });
       setStudentSessionCookie(res, config, result.sessionToken);
+      reservation.finish(true);
       const redirectTo = result.profile.profileCompleted ? result.returnTo : `/profile-completion?next=${encodeURIComponent(result.returnTo)}`;
       res.json({ redirectTo });
     } catch {

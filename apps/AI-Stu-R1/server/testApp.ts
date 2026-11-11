@@ -132,6 +132,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   const dataSource = createMemoryDataSource();
 
   const app: Express = express();
+  app.set("trust proxy", "loopback");
   app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
   app.use(express.json());
   // Same placement as stu-api.ts: public probes before the auth boundary.

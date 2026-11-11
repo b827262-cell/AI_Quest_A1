@@ -21,7 +21,7 @@ describe("student passcodes", () => {
     expect(throttle.keyCount()).toBeLessThanOrEqual(8);
     expect(throttle.reserve("fresh-ip", "another@example.test", 2).allowed).toBe(true);
     expect(throttle.reserve("new-ip", "new@example.test", 900_003).allowed).toBe(true);
-    expect(throttle.keyCount()).toBe(2);
+    expect(throttle.keyCount()).toBeLessThanOrEqual(8);
     expect(throttle.reserve("ip", "x".repeat(321), 900_003).allowed).toBe(false);
   });
   it("evicts the least recently updated keys independently and keeps recently updated keys", () => {
@@ -54,6 +54,24 @@ describe("student passcodes", () => {
     expect(throttle.reserve("fresh", "hot@test", 5).allowed).toBe(false);
     expect(throttle.reserve("fresh", "old@test", 6).allowed).toBe(true);
     expect(throttle.keyCount()).toBeLessThanOrEqual(4);
+  });
+  it("does not evict locked buckets and fails closed when all slots are locked", () => {
+    const throttle = createStudentPasscodeThrottle(2);
+    for (let i = 0; i < 5; i++) expect(throttle.reserve("ip", "locked@test", 1).allowed).toBe(true);
+    expect(throttle.reserve("other", "new@test", 2).allowed).toBe(false);
+    expect(throttle.reserve("ip", "locked@test", 2).allowed).toBe(false);
+    expect(throttle.reserve("other", "new@test", 900_002).allowed).toBe(true);
+  });
+  it("uses a separate unknown IP bucket", () => {
+    const throttle = createStudentPasscodeThrottle();
+    for (let i = 0; i < 10; i++) expect(throttle.reserve("", `u${i}`, 1).allowed).toBe(true);
+    expect(throttle.reserve("unknown", "new", 1).allowed).toBe(false);
+    expect(throttle.reserve("known", "new", 1).allowed).toBe(true);
+  });
+  it("bounds the default capacity at 10000 keys", () => {
+    const throttle = createStudentPasscodeThrottle();
+    for (let i = 0; i < 5001; i++) throttle.reserve(`ip${i}`, `email${i}`, 1);
+    expect(throttle.keyCount()).toBe(10000);
   });
   it("returns the next available slot time and uses the later blocked bucket", () => {
     const throttle = createStudentPasscodeThrottle();
