@@ -329,7 +329,6 @@ function matchesStoredRasterSignature(mimeType: string, filePath: string): boole
 }
 
 const app = express();
-app.set("trust proxy", "loopback");
 app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
 app.use(express.json({ limit: "2mb" }));
   app.use("/api/student/auth", createStudentAuthRouter(studentAuth, studentAuthConfig));

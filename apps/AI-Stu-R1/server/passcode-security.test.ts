@@ -6,7 +6,6 @@ import type { AddressInfo } from "node:net";
 describe("student login security boundaries", () => {
   it("trusts forwarded IPs only from loopback and prefers a valid Cloudflare IP", async () => {
     const app = express();
-    app.set("trust proxy", "loopback");
     app.get("/", (req, res) => res.json({ ip: studentClientIp(req) }));
     const server = app.listen(0, "127.0.0.1");
     try {

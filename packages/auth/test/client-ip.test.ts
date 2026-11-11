@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveClientIp } from "@ai-smartbook/auth/express";
+import { resolveClientIp } from "../src/express";
 
 function request(remote: string | undefined, headers: Record<string, string>) {
   return { socket: { remoteAddress: remote }, header: (name: string) => headers[name] } as never;
