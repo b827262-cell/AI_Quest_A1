@@ -262,17 +262,29 @@ export const studentClient = {
 
   getPublicSiteConfig: () => http<PublicSiteConfig>("/api/public/site-config"),
 
-  askAsGuest: (body: {
+  askAsGuest: async (body: {
     question: string;
     category: GuestQuestionCategory;
     sourceType: "manual" | "image" | "file";
     providerPreference?: GuestProviderPreference;
-  }, signal?: AbortSignal) =>
-    http<GuestAskResponse>("/api/public/guest-ask", {
+  }, signal?: AbortSignal): Promise<GuestAskResponse> => {
+    const res = await fetch("/api/public/guest-ask", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       body: JSON.stringify(body),
       signal
-    }),
+    });
+    const data = await res.json().catch(() => ({})) as Partial<GuestAskResponse> & { error?: string | { code?: string; message?: string } };
+    if (res.status === 429 && (data.status === "limit_reached" || data.status === "rate_limited")) {
+      return { ...data, requestId: data.requestId ?? "", status: data.status };
+    }
+    if (!res.ok) {
+      const error = typeof data.error === "object" ? data.error : undefined;
+      throw new StudentApiError(res.status, error?.code || (typeof data.error === "string" ? data.error : "STUDENT_API_ERROR"), data.message || error?.message || `${res.status} ${res.statusText}`);
+    }
+    return data as GuestAskResponse;
+  },
 
   // Restore a saved guest answer. The recovery token is sent via a header
   // (never in the URL query string) and authorizes the restore; IP is not an

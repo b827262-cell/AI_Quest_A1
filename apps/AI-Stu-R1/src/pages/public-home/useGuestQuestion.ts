@@ -39,6 +39,7 @@ export function useGuestQuestion({
   const [strategy, setStrategy] = useState<AnswerStrategy>("google-ai");
   const [providerPreference, setProviderPreference] = useState<GuestProviderPreference>("auto");
   const [response, setResponse] = useState<GuestAskResponse | null>(null);
+  const [guestRemaining, setGuestRemaining] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
@@ -140,6 +141,11 @@ export function useGuestQuestion({
         providerPreference
       }, controller.signal);
       if (controller.signal.aborted) return;
+      setGuestRemaining(result.remainingGuestQuestions ?? null);
+      if (result.status === "rate_limited") {
+        setError(result.message || (result.retryAfterSeconds ? `請約 ${result.retryAfterSeconds} 秒後再試。` : "請稍後再試。"));
+        return;
+      }
       setResponse(result);
       if (result.status === "success" && result.answer) {
         setLearningHistory(updateLearningHistoryAnswer(historyRecord.entry.id, result.answer));
@@ -153,7 +159,7 @@ export function useGuestQuestion({
         });
       }
       navigate("/guest-answer", {
-        state: { guestResponse: publicGuestAnswerForHistory(result) }
+        state: { guestResponse: publicGuestAnswerForHistory({ ...result, question: result.question || trimmed }) }
       });
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -235,6 +241,7 @@ export function useGuestQuestion({
     providerPreference,
     setProviderPreference,
     response,
+    guestRemaining,
     busy,
     error,
     feedback,

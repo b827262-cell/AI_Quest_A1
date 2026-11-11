@@ -29,6 +29,12 @@ describe("dashboard components", () => {
     expect(markup).not.toContain("目前沒有可用資料");
   });
 
+  it("shows the unavailable message instead of the description for a null guest count", () => {
+    const markup = renderToStaticMarkup(<MetricCards metrics={[{ id: "guest-remaining", label: "訪客剩餘提問", value: null, description: "此為目前網路（IP）的訪客剩餘次數，不是個人帳號額度" }]} />);
+    expect(markup).toContain("目前沒有可用資料");
+    expect(markup).not.toContain("此為目前網路（IP）的訪客剩餘次數");
+  });
+
   it("renders SmartBook empty, loading and error states without throwing", () => {
     const loading = renderToStaticMarkup(
       <MemoryRouter><SmartBookSection books={[]} status="loading" error={null} onRetry={() => undefined} /></MemoryRouter>
@@ -65,7 +71,8 @@ describe("dashboard components", () => {
     );
     expect(bookMarkup).toContain("學習導論");
     expect(bookMarkup).toContain("/books/book-1");
-    expect(answerMarkup).toContain("剩餘體驗：0");
+    expect(answerMarkup).toContain("訪客剩餘次數：0");
+    expect(answerMarkup).toContain("此為目前網路（IP）的訪客剩餘次數，不是個人帳號額度");
     expect(answerMarkup).not.toContain("citation");
     expect(answerMarkup).not.toContain("引用來源");
   });

@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { GuestRemainingHint } from "../../components/GuestRemainingHint";
 import { HomeAIComposer } from "../../components/HomeAIComposer";
 import type { PublicSiteConfig } from "../../studentClient";
 import { GuestAnswer } from "./GuestAnswer";
@@ -54,6 +55,7 @@ export function PublicHero({
             <span>{guest.strategy === "google-ai" ? "搜尋好朋友／谷哥不需 API 金鑰 · 每題最多 2,000 字" : `訪客每日可體驗 ${config.guestDailyLimit} 題 · 每題最多 2,000 字`}</span>
             <span>目前模式：{guest.category === "auto" ? "自動判斷" : guest.category}</span>
           </div>
+          {guest.strategy === "api" ? <p><GuestRemainingHint remaining={guest.guestRemaining} /></p> : null}
           {guest.strategy === "google-ai" ? <p className="public-google-confirm-hint">{GOOGLE_CONFIRM_HINT}</p> : null}
           {guest.error ? <p className="public-form-error" role="alert">{guest.error}</p> : null}
           {intake.googleStatus ? <p className="public-google-status" role="status" aria-live="polite">{intake.googleStatus}</p> : null}

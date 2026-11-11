@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { GuestAnswerStatus, GuestAskResponse } from "../../studentClient";
+import { GuestRemainingHint } from "../GuestRemainingHint";
 import { StudentAnswerRenderer } from "../GuestAnswerRenderer";
 
 type GuestSectionStatus = "idle" | "loading" | "success" | "error";
@@ -118,9 +119,7 @@ export function GuestAnswerSection({
           <div className="dashboard-answer-meta">
             <span className="dashboard-answer-badge">AI 學習助教</span>
             {response.mode === "mock" ? <span className="dashboard-answer-mode">Mock 示範</span> : null}
-            {response.remainingGuestQuestions !== undefined ? (
-              <span>剩餘體驗：{response.remainingGuestQuestions}</span>
-            ) : null}
+            <GuestRemainingHint remaining={response.remainingGuestQuestions} />
           </div>
           <div className="dashboard-question-echo">
             <span>你的問題</span>
