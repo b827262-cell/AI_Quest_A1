@@ -94,18 +94,52 @@ describe("Admin API HTTP authentication and quota behavior", () => {
   });
 
   it("keeps guest quotas independent for distinct Cloudflare client IPs", async () => {
-    const { app, dbHandle } = buildTestApp();
+    const { app, dependencies, dbHandle } = buildTestApp();
+    const gateway = vi.spyOn(dependencies.aiGateway, "run").mockResolvedValue({
+      result: { provider: "mock", model: "test", answer: "這是測試答案。", latencyMs: 0 }
+    } as Awaited<ReturnType<typeof dependencies.aiGateway.run>>);
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
       const ask = (ip: string) => request(app).post("/api/public/guest-ask")
         .set("CF-Connecting-IP", ip).send({ question: "測試題目" });
       const first = await ask("203.0.113.41");
       const second = await ask("203.0.113.42");
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
       expect(first.body.remainingGuestQuestions).toBe(2);
       expect(second.body.remainingGuestQuestions).toBe(2);
-      const repeat = await ask("203.0.113.41");
-      expect(repeat.status).toBe(429);
-      expect(repeat.body).toMatchObject({ status: "rate_limited", remainingGuestQuestions: 2 });
+      now += 21_000;
+      const again = await ask("203.0.113.41");
+      expect(again.status).toBe(200);
+      expect(again.body.remainingGuestQuestions).toBe(1);
+      const otherAgain = await ask("203.0.113.42");
+      expect(otherAgain.status).toBe(200);
+      expect(otherAgain.body.remainingGuestQuestions).toBe(1);
+    } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
+  });
+
+  it("uses the Cloudflare IP for admin login throttling and session audit", async () => {
+    const { app, dbHandle } = buildTestApp();
+    try {
+      const loginFrom = (ip: string, username: string, password: string) => request(app)
+        .post("/api/admin/auth/login").set("Origin", "http://127.0.0.1:5174")
+        .set("CF-Connecting-IP", ip).set("X-Forwarded-For", "198.51.100.99")
+        .send({ username, password });
+      for (let i = 0; i < 20; i++) expect((await loginFrom("203.0.113.51", `user${i}`, "wrong")).status).toBe(401);
+      expect((await loginFrom("203.0.113.51", "another", "wrong")).status).toBe(429);
+      expect((await loginFrom("203.0.113.52", "admin", "test-password")).status).toBe(200);
+      expect(dbHandle.sqlite.prepare("SELECT ip_address FROM admin_sessions").get()).toEqual({ ip_address: "203.0.113.52" });
     } finally { dbHandle.sqlite.close(); }
+  });
+
+  it("warns once at startup when obsolete TRUST_PROXY is configured", () => {
+    process.env.TRUST_PROXY = "false";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { dbHandle } = buildTestApp();
+    try {
+      expect(warn).toHaveBeenCalledExactlyOnceWith("TRUST_PROXY is no longer used for client IP resolution; only loopback Cloudflare headers are trusted.");
+    } finally { warn.mockRestore(); dbHandle.sqlite.close(); }
   });
 
   it("returns safe validation fields for an authenticated admin request", async () => {

@@ -1,4 +1,3 @@
-import { resolveClientIp } from "./client-ip";
 import { createStudentBooksRouter, type ReaderProgressEventType, type ReaderProgressEvent } from "./student-books-router";
 import { createAiEvaluationsRouter } from "./ai-evaluations-router";
 import { failValidation } from "./validation-error";
@@ -12,6 +11,7 @@ import {
   resolveStudentAuthConfig
 } from "@ai-smartbook/auth/server";
 import {
+  resolveClientIp,
   createStudentAuthRouter,
   createStudentSessionMiddleware,
   createStudentLearningHistoryRouter,
@@ -143,6 +143,7 @@ export function createAdminApp(dependencies: AdminAppDependencies): express.Expr
     uploadRoot,
     appearanceUploadDir
   } = dependencies;
+  if (env.TRUST_PROXY !== undefined) console.warn("TRUST_PROXY is no longer used for client IP resolution; only loopback Cloudflare headers are trusted.");
   const bookRepos: BookRepositories = repos;
   const ctx: BookCoreContext = { repos: bookRepos, ai, prompts: bookPromptBuilders };
   const studentAuthConfig = resolveStudentAuthConfig(env);
@@ -366,7 +367,8 @@ const adminLoginThrottle = createAdminLoginThrottle();
 app.post("/api/admin/auth/login", async (req, res) => {
   const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
-  const reservation = adminLoginThrottle.reserve(req.ip || "unknown", username);
+  const clientIp = resolveClientIp(req).ip;
+  const reservation = adminLoginThrottle.reserve(clientIp || "unknown", username);
   if (!reservation.allowed) {
     repos.aiProviders.audit("admin.auth.login.throttled", "admin_session", undefined, { username: username.slice(0, 80) });
     res.setHeader("Cache-Control", "no-store");
@@ -390,7 +392,7 @@ app.post("/api/admin/auth/login", async (req, res) => {
     csrfTokenDigest: digestAdminSecret(csrfToken),
     username,
     expiresAt,
-    ipAddress: req.ip || null,
+    ipAddress: clientIp,
     userAgent: req.header("user-agent") || null
   });
   setAdminSessionCookies(res, adminAuthConfig, sessionToken, csrfToken);
