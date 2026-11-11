@@ -1,4 +1,4 @@
-export const GUEST_REMAINING_SCOPE = "此為本裝置／目前網路的訪客剩餘次數，不是個人帳號額度。";
+export const GUEST_REMAINING_SCOPE = "此為目前網路（IP）的訪客剩餘次數，不是個人帳號額度。";
 
 export function GuestRemainingHint({ remaining }: { remaining?: number | null }) {
   return (

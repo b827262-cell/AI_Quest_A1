@@ -113,7 +113,7 @@ export function DashboardShell({
       id: "guest-remaining",
       label: "訪客剩餘提問",
       value: guestRemaining,
-      description: "此為本裝置／目前網路的訪客剩餘次數，不是個人帳號額度；完成公開問答後更新。",
+      description: "此為目前網路（IP）的訪客剩餘次數，不是個人帳號額度；完成公開問答後更新。",
       tone: "purple"
     },
     {

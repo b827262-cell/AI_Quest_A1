@@ -8,7 +8,7 @@ describe("guest remaining hint", () => {
   it.each([0, 2])("shows the returned count %i with its scope", (remaining) => {
     const markup = renderToStaticMarkup(<MemoryRouter><GuestAnswer question="問題" response={{ requestId: "guest", status: "success", remainingGuestQuestions: remaining }} onFeedback={() => {}} onReset={() => {}} onRetry={() => {}} /></MemoryRouter>);
     expect(markup).toContain(`訪客剩餘次數：${remaining}`);
-    expect(markup).toContain("此為本裝置／目前網路的訪客剩餘次數，不是個人帳號額度");
+    expect(markup).toContain("此為目前網路（IP）的訪客剩餘次數，不是個人帳號額度");
   });
   it("does not invent a count when the API has not returned one", () => {
     const markup = renderToStaticMarkup(<GuestRemainingHint />);
