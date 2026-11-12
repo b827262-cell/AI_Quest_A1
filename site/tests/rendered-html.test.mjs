@@ -2,15 +2,23 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-async function render() {
+async function loadWorker() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
+  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-${Math.random()}`);
   const { default: worker } = await import(workerUrl.href);
+  return worker;
+}
+
+const workerEnv = { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } };
+const workerCtx = { waitUntil() {}, passThroughOnException() {} };
+
+async function render() {
+  const worker = await loadWorker();
 
   return worker.fetch(
     new Request("http://localhost/", { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
+    workerEnv,
+    workerCtx,
   );
 }
 
@@ -52,6 +60,74 @@ test("renders the AI-SmartBook learning homepage", async () => {
   assert.doesNotMatch(html, /改以資訊科試解/);
   assert.doesNotMatch(html, /改以會計科試解/);
   assert.doesNotMatch(html, /完整解題（Google）/);
+});
+
+// vinext 1.4 serves "/" and "/admin" with `s-maxage=31536000` and a cache key
+// that ignores the query string. That is only safe while those pages render the
+// same server-side HTML for every visitor: personalising them without an
+// explicit `force-dynamic` would hand one user's data to the next visitor.
+const SYNTHETIC_IDENTITY_A = "test-a@example.invalid";
+const SYNTHETIC_IDENTITY_B = "test-b@example.invalid";
+
+test("cached public pages never embed per-user identity", async () => {
+  const worker = await loadWorker();
+  const fetchPage = (path, headers = {}) =>
+    worker.fetch(
+      new Request(`http://localhost${path}`, { headers: { accept: "text/html", ...headers } }),
+      workerEnv,
+      workerCtx,
+    );
+
+  const variants = [
+    ["anonymous", {}],
+    ["synthetic identity A", { "oai-authenticated-user-email": SYNTHETIC_IDENTITY_A }],
+    ["synthetic identity B", { "oai-authenticated-user-email": SYNTHETIC_IDENTITY_B }],
+    ["random query", {}],
+  ];
+
+  for (const path of ["/", "/admin"]) {
+    // Fill the shared page cache first, so every measured request reads the copy
+    // that a real visitor would receive.
+    await (await fetchPage(path)).text();
+
+    const bodies = [];
+    for (const [label, headers] of variants) {
+      const target = label === "random query" ? `${path}?probe=${Math.random().toString(36).slice(2)}` : path;
+      const response = await fetchPage(target, headers);
+      assert.equal(response.status, 200, `${path} ${label}: status`);
+      assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i, `${path} ${label}: content type`);
+      if (response.headers.has("set-cookie")) {
+        assert.notEqual(
+          response.headers.get("x-vinext-cache"),
+          "HIT",
+          `${path} ${label}: a response that sets cookies must not come from the shared page cache`,
+        );
+      }
+
+      const html = await response.text();
+      assert.ok(!html.includes(SYNTHETIC_IDENTITY_A), `${path} ${label}: HTML leaked synthetic identity A`);
+      assert.ok(!html.includes(SYNTHETIC_IDENTITY_B), `${path} ${label}: HTML leaked synthetic identity B`);
+      bodies.push([label, html]);
+    }
+
+    for (const [label, html] of bodies.slice(1)) {
+      assert.equal(html, bodies[0][1], `${path}: ${label} received different HTML than anonymous`);
+    }
+  }
+});
+
+test("per-user API responses are never shared-cacheable", async () => {
+  const worker = await loadWorker();
+  for (const path of ["/api/health", "/api/student/me"]) {
+    const response = await worker.fetch(
+      new Request(`http://localhost${path}`, { headers: { accept: "application/json" } }),
+      workerEnv,
+      workerCtx,
+    );
+    const cacheControl = response.headers.get("cache-control") ?? "";
+    assert.match(cacheControl, /no-store/i, `${path}: cache-control must include no-store (got "${cacheControl}")`);
+    assert.notEqual(response.headers.get("x-vinext-cache"), "HIT", `${path}: must not be served as a shared-cache HIT`);
+  }
 });
 
 // H3 accessibility remediation: normal text must clear WCAG 2.1 AA (>=4.5:1)
