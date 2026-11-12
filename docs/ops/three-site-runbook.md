@@ -25,6 +25,8 @@
 | `GIT_SHA` | 同一個完整 commit SHA | 健康檢查的 `gitSha` 來源。三站必須相同，且不得為 `unknown`。 |
 | `ADMIN_EMAILS` | 逗號分隔的位址清單（主站必填） | 管理員 allowlist。格式為 `位址1,位址2`；每項會去除前後空白、不分大小寫、以完全相等比對。未設定或為空時，沒有任何人會是管理員（fail-closed）。次站不需要此變數。 |
 
+`SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是非 secret 的拓撲值，可由 §6 的逐站建置提供；執行期的值會覆蓋建置值。沒有 role/site 的建置預設才會是 `standalone`。本表只把 `ADMIN_EMAILS` 列為主站必須的執行期設定。
+
 缺漏與錯誤時的行為（一律 fail closed）：
 
 - 上述變數皆未設定：站點為 `standalone`，沿用舊的本地行為，不代理任何請求。
@@ -72,12 +74,12 @@ Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalT
 ## 5. 部署順序
 
 1. 在本地確認目標 commit 通過 `cd site && npm ci && npm run typecheck && npm test`，以及 `npm run environment:align:production`。
-2. 先設定三站的執行期變數，再部署程式碼。三站的 `GIT_SHA` 都填同一個 commit。**主站部署前必須先設定 `ADMIN_EMAILS`**，否則上線後沒有任何人能登入管理端（fail-closed）。
-3. 先部署主站，並完成第 6 節的驗證。主站的 API 行為對既有次站相容，因此可以先上線。
+2. 先設定三站的執行期變數，再部署程式碼。三站的 `GIT_SHA` 都填同一個 commit。**主站部署前必須先設定 `ADMIN_EMAILS`**，否則上線後沒有任何人能登入管理端（fail-closed）。`SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是非 secret 的拓撲值，可由 §6 的逐站建置提供；執行期的值會覆蓋建置值。
+3. 先部署主站，並完成第 7 節的驗證。主站的 API 行為對既有次站相容，因此可以先上線。
 4. 依序部署學生次站與管理次站，每站部署後各自驗證。
 5. 三站上線後，capture 才會與新契約一致。是否寫回 production manifest 須由 Owner 指示；本手冊不要求執行。
 
-注意：次站若只部署程式碼、未設定 `SITE_ROLE` 與 `PRIMARY_ORIGIN`，會退回本地 standalone 行為，且沒有 D1，使頁面 API 出錯。部署前必須先設定變數。主站若未設定 `ADMIN_EMAILS`，管理端會 fail-closed 而無人可登入；`/api/health` 的 `adminAllowlist` 為 `unset` 即為此徵兆。
+注意：次站若只部署程式碼、未設定 `SITE_ROLE` 與 `PRIMARY_ORIGIN`，會退回本地 standalone 行為，且沒有 D1，使頁面 API 出錯。只有沒有 role/site 的建置預設才會是 `standalone`；部署前必須先設定變數。主站若未設定 `ADMIN_EMAILS`，管理端會 fail-closed 而無人可登入；`/api/health` 的 `adminAllowlist` 為 `unset` 即為此徵兆。
 
 ## 6. 建置與部署前檢查
 
@@ -112,7 +114,7 @@ SITE_TARGET=<同一站> npm run site:preflight
 
 1. `SITE_TARGET` 必填且為 `backend`、`student` 或 `admin` 之一。
 2. 建置產物 `dist/server` 中嵌入的 `SITE_ROLE` 與 `SITE_NAME`（透過載入 Worker 並呼叫其 `/api/health` 讀取 JSON 回應）必須與 `site/deploy/targets.json` 中該 target 的 `role` 與 `site` 一致。
-3. `site/.openai/hosting.json` 的 `project_id` 必須等於 `site/deploy/targets.json` 中該 target 的 `project_id`。否則以非零 exit 結束並印出原因（只印 `project_id` 與站名，不印其他設定）。
+3. `site/.openai/hosting.json` 的 `project_id` 必須等於 `site/deploy/targets.json` 中該 target 的 `project_id`。否則以非零 exit 結束，並印出 role/site 或 project_id 的差異；不輸出 PRIMARY_ORIGIN、GIT_SHA 等其他設定或 secret。
 
 ### 6.3 已知限制
 
@@ -122,7 +124,7 @@ SITE_TARGET=<同一站> npm run site:preflight
 
 ### 6.4 執行期 env 與建置值的關係
 
-建置時寫入的 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是預設值。執行期若有對應的 env 值，會覆蓋建置值。執行期的空字串會被視為無效，站點將 fail-closed（例如 `SITE_ROLE=""` 會導致站點視為 `misconfigured`，除了 `/api/health` 外所有 `/api/*` 回 503）。
+建置時寫入的 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是預設值。執行期若有對應的 env 值，會覆蓋建置值，不會回退到建置值；執行期的空字串會覆蓋建置值並被解析為未設定。`SITE_ROLE` 與 `SITE_NAME` 都未設定（例如兩者都是空字串）時為 `standalone`；只有一方仍有效或配對不符時才是 `misconfigured`，除 `/api/health` 外的 `/api/*` 回 503。有效的 secondary 若 `PRIMARY_ORIGIN` 為空或無效，其自有 API 回 503 `backend_disabled`。`GIT_SHA` 不參與站點角色判定。
 
 ## 7. 部署後驗證（只使用 GET）
 
