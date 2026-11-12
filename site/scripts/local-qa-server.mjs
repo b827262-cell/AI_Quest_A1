@@ -1,7 +1,13 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { register } from "node:module";
 import { fileURLToPath } from "node:url";
+
+// dist/server/index.js re-exports a worker entry that statically imports
+// "cloudflare:workers", which Node cannot resolve. Register the shared loader
+// hooks before importing the bundle; this server supplies its own env below.
+register("./cloudflare-workers-hooks.mjs", import.meta.url);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const siteDir = path.resolve(__dirname, "..");

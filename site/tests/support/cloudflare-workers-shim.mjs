@@ -1,16 +1,9 @@
-// Node-only test loader: the Worker bundle imports "cloudflare:workers", which
-// Node's ESM loader cannot resolve. Tests pass their own env to worker.fetch, so
-// an undefined `env` binding is enough to exercise the same fallback paths.
-import { registerHooks } from "node:module";
+// Node-only test entry: registers the shared `cloudflare:workers` loader hooks.
+//
+// Uses `module.register()` with a separate hooks module instead of
+// `module.registerHooks()`, because the latter needs Node >= 22.15 while
+// site/package.json keeps engines at >= 22.13. See
+// scripts/cloudflare-workers-hooks.mjs for the hook itself.
+import { register } from "node:module";
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "cloudflare:workers") {
-      return {
-        url: "data:text/javascript,export const env = undefined;",
-        shortCircuit: true,
-      };
-    }
-    return nextResolve(specifier, context);
-  },
-});
+register("../../scripts/cloudflare-workers-hooks.mjs", import.meta.url);

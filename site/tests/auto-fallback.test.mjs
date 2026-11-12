@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import {
   buildGoogleAiModeUrl,
@@ -102,10 +102,18 @@ test("P0-FIX-4: built isolated-worker factory stays Vite-owned and emits its wor
   const chunks = readdirSync(new URL("../dist/client/_next/static/chunks/", import.meta.url))
     .filter((name) => name.endsWith(".js"));
   const built = chunks.map((name) => readFileSync(new URL(`../dist/client/_next/static/chunks/${name}`, import.meta.url), "utf8"));
-  const factory = built.find((source) => /new Worker\(/.test(source) && /_next\/static\/workers\//.test(source));
+  const factory = built.find((source) => /createLocalInferenceWorker/.test(source) && /_next\/static\/workers\//.test(source));
   assert.ok(factory, "page lazy-loads the browser-only Vite worker factory");
   assert.match(factory, /new Worker\(/, "Vite emits a worker constructor factory");
-  assert.match(factory, /_next\/static\/workers\/[\w.-]+\.js/, "factory references Vite's emitted worker asset");
+  assert.match(factory, /name:\s*[`"']local-inference[`"']/, "factory names the local-inference worker");
+  const workerAsset = factory.match(/_next\/static\/workers\/([\w.-]+\.js)/)?.[1];
+  assert.ok(workerAsset, "factory references Vite's emitted worker asset");
+  const workerPath = new URL(`../dist/client/_next/static/workers/${workerAsset}`, import.meta.url);
+  assert.ok(existsSync(workerPath), `worker asset ${workerAsset} is emitted`);
+  const workerSource = readFileSync(workerPath, "utf8");
+  for (const marker of ["local fallback loading", "local model download", "local model ready", "preloaded"]) {
+    assert.match(workerSource, new RegExp(marker), `worker asset carries the local-inference marker: ${marker}`);
+  }
   assert.doesNotMatch(factory, /file:\/\/\/ROOT\//, "worker factory never derives a browser URL from a file URL");
 });
 
