@@ -102,6 +102,43 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
     expect(overPayload).not.toContain("SENTINEL_DO_NOT_ECHO");
     expect(overPayload).not.toContain("PayloadTooLargeError");
   });
+  it("answers malformed JSON with a JSON 400 instead of Express' HTML error page", async () => {
+    const started = await startStudentTestApp({ sessionTtlMs: 3_600_000 });
+    app = started;
+    const post = (path: string, body: string) =>
+      originalFetch(`${started.baseUrl}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: STUDENT_TEST_ORIGIN },
+        body
+      });
+
+    // Truncated JSON: the parser raises entity.parse.failed before any route or
+    // session check runs, so the answer must be a client error, not a page.
+    const malformed = '{"key":';
+    for (const path of ["/api/student/books/b1/rag-ask", "/api/student/learning-history", "/API/Student/Books/B1/Rag-Ask"]) {
+      const response = await post(path, malformed);
+      expect(response.status, path).toBe(400);
+      expect(response.headers.get("content-type"), path).toContain("application/json");
+      const payload = await response.text();
+      expect(JSON.parse(payload), path).toEqual({ error: "INVALID_JSON" });
+      expect(payload, path).not.toContain("<!DOCTYPE");
+      expect(payload, path).not.toContain("SyntaxError");
+      expect(payload, path).not.toContain("Unexpected end of JSON input");
+      expect(payload, path).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+    }
+
+    // Oversize bodies keep their own 413 contract.
+    const oversize = await post("/api/student/books/b1/rag-ask", JSON.stringify({ pad: "x".repeat(200 * 1024) }));
+    expect(oversize.status).toBe(413);
+    expect(await oversize.json()).toEqual({ error: "PAYLOAD_TOO_LARGE" });
+
+    // A well-formed body still reaches the route: 401 comes from the session
+    // gate, which proves the parser handed the request on.
+    const valid = await post("/api/student/books/b1/rag-ask", JSON.stringify({ question: "hi" }));
+    expect(valid.status).toBe(401);
+    expect((await valid.json()).error).toBe("AUTH_REQUIRED");
+  });
+
   it("answers a generic 413 for oversize bodies outside the learning-history endpoints", async () => {
     const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
     // The global parser limit is 100 KB; this body is deliberately over it.

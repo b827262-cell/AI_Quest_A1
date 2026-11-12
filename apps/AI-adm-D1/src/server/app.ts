@@ -17,6 +17,7 @@ import {
   createStudentSessionMiddleware,
   createStudentLearningHistoryRouter,
   oversizeJsonBodyHandler,
+  invalidJsonBodyHandler,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
 import multer from "multer";
@@ -3129,6 +3130,11 @@ app.post("/api/admin/appearance-settings/upload", appearanceUpload.single("file"
 // cannot tell the two apart. The shared handler keeps BATCH_TOO_LARGE meaning
 // "learning history batch too large"; every other oversize body is generic.
 app.use(oversizeJsonBodyHandler());
+
+// A body that is not valid JSON is a client error, not an internal one: answer
+// 400 INVALID_JSON before the 500 boundary below claims it. The parser's own
+// message can echo the request body, so it is never forwarded.
+app.use(invalidJsonBodyHandler());
 
 // Do not let Express' development error page expose stack traces or request
 // details. Provider and credential errors are already sanitised above; this is

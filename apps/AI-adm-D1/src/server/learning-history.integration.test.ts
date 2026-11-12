@@ -83,6 +83,50 @@ describe("student learning history sync and admin visibility", () => {
     expect(over.body).toEqual({ error: "BATCH_TOO_LARGE" });
   });
 
+  it("answers malformed JSON with a JSON 400 instead of the 500 boundary", async () => {
+    const { app } = fixture();
+    // Truncated JSON: the parser raises entity.parse.failed before any route
+    // runs. Every parser in the app shares the same answer, on the global 2 MB
+    // parser and on the 256 KiB learning-history parser alike.
+    const malformed = '{"key":';
+    for (const path of ["/api/public/guest-feedback", "/api/student/learning-history", "/API/Public/Guest-Feedback"]) {
+      const response = await request(app)
+        .post(path)
+        .set("Origin", origin)
+        .set("Content-Type", "application/json")
+        .send(malformed);
+      expect(response.status, path).toBe(400);
+      expect(response.headers["content-type"], path).toContain("application/json");
+      expect(response.body, path).toEqual({ error: "INVALID_JSON" });
+      // No HTML error page, no stack trace, no parser message or body echo.
+      expect(response.text, path).not.toContain("<!DOCTYPE");
+      expect(response.text, path).not.toContain("SyntaxError");
+      expect(response.text, path).not.toContain("Unexpected end of JSON input");
+      expect(response.text, path).not.toContain("internal server error");
+      expect(response.text, path).not.toMatch(/\bat .+\(.+:\d+:\d+\)/);
+    }
+
+    // Oversize bodies keep their own contract: the new handler must not claim
+    // entity.too.large, so 413 and its codes are unchanged.
+    const oversize = await request(app)
+      .post("/api/public/guest-feedback")
+      .set("Origin", origin)
+      .set("Content-Type", "application/json")
+      .send(JSON.stringify({ pad: "x".repeat(2 * 1024 * 1024 + 10) }));
+    expect(oversize.status).toBe(413);
+    expect(oversize.body).toEqual({ error: "PAYLOAD_TOO_LARGE" });
+
+    // A well-formed body still reaches the route: the answer below is the
+    // route's own validation, not the parser's.
+    const valid = await request(app)
+      .post("/api/public/guest-feedback")
+      .set("Origin", origin)
+      .set("Content-Type", "application/json")
+      .send(JSON.stringify({ question: "hi" }));
+    expect(valid.status).toBe(400);
+    expect(valid.body.code).toBe("invalid_request");
+  });
+
   it("answers oversize non-learning-history bodies with the generic 413 code only", async () => {
     const { app } = fixture();
     const sentinel = "SENTINEL_DO_NOT_ECHO";
