@@ -132,6 +132,10 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    // New plugin defaults to worker source maps, whose prompt-api-polyfill map leaks FIREBASE_CONFIG and fails Gate 11.
+    build: {
+      sourcemap: false,
+    },
     server: {
       allowedHosts: ["b827262-e500-g9-ws760t.tailc359df.ts.net"],
       ...(isCodexSeatbeltSandbox
