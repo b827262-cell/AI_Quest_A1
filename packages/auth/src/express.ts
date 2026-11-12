@@ -1,6 +1,7 @@
 import type { Request, RequestHandler, Response, Router } from "express";
 import express from "express";
-import { isIP } from "node:net";
+import { resolveClientIp } from "./client-ip";
+export { resolveClientIp } from "./client-ip";
 import { z } from "zod";
 import { createStudentPasscodeThrottle } from "./passcode";
 import {
@@ -94,13 +95,7 @@ export function createStudentSessionMiddleware(
 }
 
 export function studentClientIp(req: Request): string | undefined {
-  const remote = req.socket.remoteAddress;
-  const loopback = remote === "::1" || Boolean(remote && /^(?:::ffff:)?127\./i.test(remote));
-  if (loopback) {
-    const cf = req.header("cf-connecting-ip")?.trim();
-    if (cf && isIP(cf)) return cf;
-  }
-  return req.ip || undefined;
+  return resolveClientIp(req).ip ?? undefined;
 }
 
 export function createStudentAuthRouter(
@@ -121,7 +116,7 @@ export function createStudentAuthRouter(
       const result = await auth.completeAccessLogin({
         assertion: req.header("Cf-Access-Jwt-Assertion"),
         returnTo: typeof req.query.returnTo === "string" ? req.query.returnTo : undefined,
-        ipAddress: req.ip || null,
+        ipAddress: resolveClientIp(req).ip,
         userAgent: req.header("user-agent") || null
       });
       setStudentSessionCookie(res, config, result.sessionToken);

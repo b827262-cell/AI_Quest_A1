@@ -72,7 +72,7 @@ export const chatSessions = sqliteTable("chat_sessions", {
   lastIpCountry: text("last_ip_country"),
   lastIpRegion: text("last_ip_region"),
   lastIpCity: text("last_ip_city"),
-  // How the IP was resolved (e.g. cf-connecting-ip / x-forwarded-for / socket).
+  // How the IP was resolved (e.g. cf-connecting-ip / socket).
   lastIpSource: text("last_ip_source"),
   // Admin security controls: risk marking and block state.
   riskLevel: text("risk_level").notNull().default("safe"),

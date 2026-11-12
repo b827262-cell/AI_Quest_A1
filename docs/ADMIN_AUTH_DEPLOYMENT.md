@@ -43,6 +43,30 @@ explicitly clearing `X-Admin-Token` and `Authorization`; browser requests
 therefore cannot inherit a permanent management token. The proxy must run
 behind HTTPS so the session cookie remains valid.
 
+### Client IP trust and nginx topologies
+
+The admin and student APIs accept `CF-Connecting-IP` only from a loopback
+socket. The nginx example overwrites that header with nginx's `$remote_addr`,
+so its real-IP configuration and network access controls are part of the
+security boundary. Verify the resulting client address before exposing traffic.
+
+- **Cloudflare Tunnel:** the example trusts only loopback as the Tunnel source
+  and uses `CF-Connecting-IP` to restore the visitor address. Keep the Tunnel
+  listener private and ensure untrusted local processes cannot reach it.
+- **Cloudflare orange-cloud proxy:** replace the loopback trust entries with
+  Cloudflare's [official IP ranges](https://www.cloudflare.com/ips/) and keep
+  them current. Restrict origin access to those ranges; verify real-IP handling
+  before enabling traffic.
+- **Direct clients:** do not trust a public client's forwarding headers. Keep
+  the real-IP module configured to trust only actual, protected proxy sources;
+  nginx then overwrites the header with the direct socket address. Configure
+  and verify real-IP handling before exposing nginx directly. **Never expose
+  nginx directly without configuring real_ip.**
+
+`TRUST_PROXY` no longer changes application client-IP resolution. The services
+warn at startup if it is present; X-Forwarded-For and X-Real-IP are not used
+for this purpose.
+
 The browser origin must be listed in `ADMIN_ALLOWED_ORIGINS`. Unsafe session
 requests also require the matching CSRF header, so a cross-origin page cannot
 reuse the cookie for state changes.

@@ -11,6 +11,7 @@ import {
   resolveStudentAuthConfig
 } from "@ai-smartbook/auth/server";
 import {
+  resolveClientIp,
   createStudentAuthRouter,
   createStudentSessionMiddleware,
   createStudentLearningHistoryRouter,
@@ -142,6 +143,7 @@ export function createAdminApp(dependencies: AdminAppDependencies): express.Expr
     uploadRoot,
     appearanceUploadDir
   } = dependencies;
+  if (env.TRUST_PROXY !== undefined) console.warn("TRUST_PROXY is no longer used for client IP resolution; only loopback Cloudflare headers are trusted.");
   const bookRepos: BookRepositories = repos;
   const ctx: BookCoreContext = { repos: bookRepos, ai, prompts: bookPromptBuilders };
   const studentAuthConfig = resolveStudentAuthConfig(env);
@@ -327,7 +329,6 @@ function matchesStoredRasterSignature(mimeType: string, filePath: string): boole
 }
 
 const app = express();
-app.set("trust proxy", "loopback");
 app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
 app.use(express.json({ limit: "2mb" }));
   app.use("/api/student/auth", createStudentAuthRouter(studentAuth, studentAuthConfig));
@@ -365,7 +366,8 @@ const adminLoginThrottle = createAdminLoginThrottle();
 app.post("/api/admin/auth/login", async (req, res) => {
   const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
-  const reservation = adminLoginThrottle.reserve(req.ip || "unknown", username);
+  const clientIp = resolveClientIp(req).ip;
+  const reservation = adminLoginThrottle.reserve(clientIp || "unknown", username);
   if (!reservation.allowed) {
     repos.aiProviders.audit("admin.auth.login.throttled", "admin_session", undefined, { username: username.slice(0, 80) });
     res.setHeader("Cache-Control", "no-store");
@@ -389,7 +391,7 @@ app.post("/api/admin/auth/login", async (req, res) => {
     csrfTokenDigest: digestAdminSecret(csrfToken),
     username,
     expiresAt,
-    ipAddress: req.ip || null,
+    ipAddress: clientIp,
     userAgent: req.header("user-agent") || null
   });
   setAdminSessionCookies(res, adminAuthConfig, sessionToken, csrfToken);
@@ -1128,38 +1130,6 @@ type ClientInfo = {
 function headerValue(req: Request, name: string): string {
   const value = req.headers[name];
   return Array.isArray(value) ? value.join(", ") : typeof value === "string" ? value : "";
-}
-
-// ---- Server-side IP resolution -------------------------------------------
-// We never trust a client-supplied IP. When TRUST_PROXY=true (e.g. behind
-// Nginx / Cloudflare) we honour the standard forwarding headers in a fixed
-// priority order; otherwise we only trust the raw socket address.
-const TRUST_PROXY = String(process.env.TRUST_PROXY).toLowerCase() === "true";
-
-/** Normalize IPv6 localhost and IPv4-mapped IPv6 to their IPv4 form. */
-function normalizeIp(raw: string): string {
-  let ip = raw.trim();
-  if (ip === "") return "";
-  if (ip === "::1") return "127.0.0.1";
-  // Strip an IPv4-mapped IPv6 prefix, e.g. ::ffff:127.0.0.1 -> 127.0.0.1.
-  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (mapped) ip = mapped[1];
-  return ip;
-}
-
-/** Resolve the client IP and record which source it came from. */
-function resolveClientIp(req: Request): { ip: string | null; source: string | null } {
-  if (TRUST_PROXY) {
-    const cf = headerValue(req, "cf-connecting-ip").trim();
-    if (cf) return { ip: normalizeIp(cf), source: "cf-connecting-ip" };
-    const xff = headerValue(req, "x-forwarded-for").split(",")[0]?.trim();
-    if (xff) return { ip: normalizeIp(xff), source: "x-forwarded-for" };
-    const xreal = headerValue(req, "x-real-ip").trim();
-    if (xreal) return { ip: normalizeIp(xreal), source: "x-real-ip" };
-  }
-  const socket = req.socket?.remoteAddress ?? "";
-  const ip = normalizeIp(socket);
-  return { ip: ip || null, source: ip ? "socket" : null };
 }
 
 /** Private/loopback/link-local IPv4 or IPv6 — never sent to external geo. */

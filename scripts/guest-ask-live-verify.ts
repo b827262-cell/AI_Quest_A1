@@ -95,8 +95,7 @@ async function start() {
       AI_ALLOW_MOCK_FALLBACK: "false",
       AI_DEFAULT_PROVIDER: provider,
       AI_MAX_RETRIES: "1",
-      SQLITE_PATH: dbPath,
-      TRUST_PROXY: "true"
+      SQLITE_PATH: dbPath
     }
   });
   child.stderr?.on("data", () => undefined);
@@ -130,7 +129,7 @@ async function run(): Promise<number> {
   // 1. POST the four-subtopic question from one IP.
   const askRes = await request("/api/public/guest-ask", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.42" },
+    headers: { "content-type": "application/json", "cf-connecting-ip": "198.51.100.42" },
     body: JSON.stringify({ question: QUESTION })
   });
   assert(askRes.status === 200, `guest-ask POST status ${askRes.status}`);
@@ -153,7 +152,7 @@ async function run(): Promise<number> {
 
   // 2. Recovery with the correct token (same IP).
   const correctRes = await request(`/api/public/guest-ask/${created.requestId}`, {
-    headers: { "x-guest-recovery-token": created.recoveryToken || "", "x-forwarded-for": "198.51.100.42" }
+    headers: { "x-guest-recovery-token": created.recoveryToken || "", "cf-connecting-ip": "198.51.100.42" }
   });
   assert(correctRes.status === 200, `correct-token recovery status ${correctRes.status}`);
   const restored = (await correctRes.json()) as { answer?: string; recoveryToken?: string };
@@ -162,19 +161,19 @@ async function run(): Promise<number> {
 
   // 3. Recovery with correct token from a DIFFERENT IP must still work (token-only auth).
   const diffIpRes = await request(`/api/public/guest-ask/${created.requestId}`, {
-    headers: { "x-guest-recovery-token": created.recoveryToken || "", "x-forwarded-for": "203.0.113.99" }
+    headers: { "x-guest-recovery-token": created.recoveryToken || "", "cf-connecting-ip": "203.0.113.99" }
   });
   record("different IP + correct token restores (token-only auth)", diffIpRes.status === 200 ? "PASS" : "FAIL", `status=${diffIpRes.status}`);
 
   // 4. Wrong token must not restore (generic 404).
   const wrongRes = await request(`/api/public/guest-ask/${created.requestId}`, {
-    headers: { "x-guest-recovery-token": "deadbeef".repeat(8), "x-forwarded-for": "198.51.100.42" }
+    headers: { "x-guest-recovery-token": "deadbeef".repeat(8), "cf-connecting-ip": "198.51.100.42" }
   });
   record("wrong token rejected (404)", wrongRes.status === 404 ? "PASS" : "FAIL", `status=${wrongRes.status}`);
 
   // 5. Missing token must not restore (generic 404).
   const missingRes = await request(`/api/public/guest-ask/${created.requestId}`, {
-    headers: { "x-forwarded-for": "198.51.100.42" }
+    headers: { "cf-connecting-ip": "198.51.100.42" }
   });
   record("missing token rejected (404)", missingRes.status === 404 ? "PASS" : "FAIL", `status=${missingRes.status}`);
 

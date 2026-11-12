@@ -120,8 +120,10 @@ function resolveExistingPdfPath(file: StudentBookPdfFile): { path: string | null
   return { path: null, checkedPaths };
 }
 
+if (process.env.TRUST_PROXY !== undefined) {
+  console.warn("TRUST_PROXY is no longer used for client IP resolution; only loopback Cloudflare headers are trusted.");
+}
 const app = express();
-app.set("trust proxy", "loopback");
 app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
 app.use(express.json());
 
