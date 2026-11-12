@@ -39,7 +39,7 @@ function buildTestApp() {
   process.env = { ...process.env, ...env, SQLITE_PATH: join(directory, "admin.db") };
   delete process.env.ADMIN_PASSWORD_HASH;
   const dependencies = createAdminTestDependencies(process.env, dbHandle);
-  return { app: createAdminApp(dependencies), dependencies, dbHandle, token };
+  return { app: createAdminApp(dependencies, undefined, () => "2026-11-12"), dependencies, dbHandle, token };
 }
 
 function seedCredential(dependencies: ReturnType<typeof createAdminTestDependencies>) {
@@ -120,11 +120,11 @@ describe("Admin API HTTP authentication and quota behavior", () => {
     } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
   });
 
-  it("returns the existing limit response when all guest quota slots are exhausted", async () => {
+  it("returns busy at capacity and evicts an exhausted IP after one hour", async () => {
     const { dependencies, dbHandle } = buildTestApp();
     const warning = vi.fn();
     const store = createGuestUsageStore({ capacity: 1, warn: warning });
-    const app = createAdminApp(dependencies, store);
+    const app = createAdminApp(dependencies, store, () => "2026-11-12");
     const gateway = vi.spyOn(dependencies.aiGateway, "run").mockResolvedValue({
       result: { provider: "mock", model: "test", answer: "測試答案。", latencyMs: 0 }
     } as Awaited<ReturnType<typeof dependencies.aiGateway.run>>);
@@ -137,12 +137,16 @@ describe("Admin API HTTP authentication and quota behavior", () => {
         now += 21_000;
       }
       const denied = await ask("203.0.113.62");
-      expect(denied.status).toBe(429);
-      expect(denied.body).toEqual({ status: "limit_reached", message: "今日訪客體驗額度已使用完畢。", remainingGuestQuestions: 0, requiresLoginForMore: true });
+      expect(denied.status).toBe(503);
+      expect(denied.body).toEqual({ status: "busy", message: "訪客服務目前繁忙，請稍後再試或登入使用" });
       const original = await ask("203.0.113.61");
       expect(original.status).toBe(429);
       expect(original.body.remainingGuestQuestions).toBe(0);
       expect(warning).toHaveBeenCalledOnce();
+      now += 3_600_001;
+      const admitted = await ask("203.0.113.62");
+      expect(admitted.status).toBe(200);
+      expect(admitted.body.remainingGuestQuestions).toBe(2);
     } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
   });
 

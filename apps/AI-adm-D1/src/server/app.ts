@@ -1,4 +1,4 @@
-import { createGuestUsageStore, type GuestUsage } from "./guest-usage-store";
+import { createGuestUsageStore } from "./guest-usage-store";
 import { createStudentBooksRouter, type ReaderProgressEventType, type ReaderProgressEvent } from "./student-books-router";
 import { createAiEvaluationsRouter } from "./ai-evaluations-router";
 import { failValidation } from "./validation-error";
@@ -128,7 +128,7 @@ export interface AdminAppDependencies {
   appearanceUploadDir: string;
 }
 
-export function createAdminApp(dependencies: AdminAppDependencies, guestUsageByIp = createGuestUsageStore()): express.Express {
+export function createAdminApp(dependencies: AdminAppDependencies, guestUsageByIp = createGuestUsageStore(), guestDayKey = todayTaipei): express.Express {
   const {
     env,
     repos,
@@ -978,10 +978,6 @@ function requireAdminAccess(req: Request, res: Response): boolean {
     return false;
   }
   return true;
-}
-
-function guestDayKey(): string {
-  return todayTaipei();
 }
 
 function guestIdentity(req: Request): string {
@@ -1893,10 +1889,10 @@ app.post("/api/public/guest-ask", async (req, res) => {
   const identity = guestIdentity(req);
   const day = guestDayKey();
   const current = guestUsageByIp.get(identity, day);
-  const usage: GuestUsage = current?.day === day ? current : { day, count: 0, lastAt: 0 };
-  const remainingBefore = Math.max(0, config.guestDailyLimit - usage.count);
+  const remainingBefore = Math.max(0, config.guestDailyLimit - (current?.count ?? 0));
 
   if (remainingBefore <= 0) {
+    guestUsageByIp.touch(identity, day, Date.now());
     return res.status(429).json({
       status: "limit_reached",
       message: "今日訪客體驗額度已使用完畢。",
@@ -1906,8 +1902,9 @@ app.post("/api/public/guest-ask", async (req, res) => {
   }
 
   const retryAfterSeconds = 20;
-  const elapsed = Date.now() - usage.lastAt;
-  if (usage.lastAt > 0 && elapsed < retryAfterSeconds * 1000) {
+  const elapsed = Date.now() - (current?.lastAt ?? 0);
+  if (current && current.lastAt > 0 && elapsed < retryAfterSeconds * 1000) {
+    guestUsageByIp.touch(identity, day, Date.now());
     const retryAfter = Math.max(1, Math.ceil((retryAfterSeconds * 1000 - elapsed) / 1000));
     res.setHeader("Retry-After", String(retryAfter));
     return res.status(429).json({
@@ -1921,15 +1918,9 @@ app.post("/api/public/guest-ask", async (req, res) => {
 
   // Count this request against the daily quota before calling the gateway so a
   // gateway failure still consumes the attempt (matches prior mock behaviour).
-  usage.count += 1;
-  usage.lastAt = Date.now();
-  if (!guestUsageByIp.set(identity, usage, config.guestDailyLimit)) {
-    return res.status(429).json({
-      status: "limit_reached",
-      message: "今日訪客體驗額度已使用完畢。",
-      remainingGuestQuestions: 0,
-      requiresLoginForMore: true
-    });
+  const usage = guestUsageByIp.consume(identity, day, config.guestDailyLimit, Date.now());
+  if (!usage) {
+    return res.status(503).json({ status: "busy", message: "訪客服務目前繁忙，請稍後再試或登入使用" });
   }
   const remainingGuestQuestions = Math.max(0, config.guestDailyLimit - usage.count);
 
@@ -2102,7 +2093,7 @@ app.get("/api/public/guest-ask/:requestId", (req, res) => {
   );
   const day = guestDayKey();
   const usage = guestUsageByIp.get(guestIdentity(req), day);
-  const remaining = Math.max(0, loadSiteConfig().guestDailyLimit - (usage?.day === day ? usage.count : 0));
+  const remaining = Math.max(0, loadSiteConfig().guestDailyLimit - (usage?.count ?? 0));
   const mode = saved.mode === "mock" ? "mock" : "live";
   res.json({
     requestId: saved.requestId,

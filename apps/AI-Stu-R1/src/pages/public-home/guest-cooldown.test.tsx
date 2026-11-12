@@ -12,6 +12,7 @@ import { DEFAULT_CONFIG } from "./constants";
 describe("guest cooldown", () => {
   it.each([
     { status: "rate_limited" as const, remainingGuestQuestions: 2, path: "/", message: "請等 12 秒" },
+    { status: "busy" as const, remainingGuestQuestions: undefined, path: "/", message: "訪客服務目前繁忙，請稍後再試或登入使用" },
     { status: "limit_reached" as const, remainingGuestQuestions: 0, path: "/guest-answer", message: "額度已用完" }
   ])("handles $status without confusing cooldown and exhaustion", async ({ status, remainingGuestQuestions, path, message }) => {
     const spy = vi.spyOn(studentClient, "askAsGuest").mockResolvedValue({ requestId: "", status, remainingGuestQuestions, message });
@@ -28,8 +29,8 @@ describe("guest cooldown", () => {
       await act(async () => { container.querySelectorAll("button")[0].click(); });
       await act(async () => { container.querySelectorAll("button")[1].click(); });
       expect(container.querySelector("[data-path]")?.getAttribute("data-path")).toBe(path);
-      expect(container.querySelector("[data-path]")?.getAttribute("data-remaining")).toBe(String(remainingGuestQuestions));
-      if (status === "rate_limited") expect(container.textContent).toContain(message);
+      expect(container.querySelector("[data-path]")?.getAttribute("data-remaining")).toBe(remainingGuestQuestions === undefined ? null : String(remainingGuestQuestions));
+      if (status === "rate_limited" || status === "busy") expect(container.textContent).toContain(message);
     } finally {
       await act(async () => root.unmount());
       container.remove();

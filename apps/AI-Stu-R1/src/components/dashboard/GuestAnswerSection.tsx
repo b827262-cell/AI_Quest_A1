@@ -17,6 +17,8 @@ function responseMessage(status: GuestAnswerStatus): string | null {
   switch (status) {
     case "limit_reached":
       return "訪客體驗次數已用完；登入後可繼續使用個人化學習功能。";
+    case "busy":
+      return "訪客服務目前繁忙，請稍後再試或登入使用";
     case "rate_limited":
       return "目前請求較多，請稍後再試。";
     case "disabled":
