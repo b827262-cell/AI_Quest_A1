@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const repoRoot = join(process.cwd(), "..", "..");
+const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const nginxConf = readFileSync(join(repoRoot, "deploy/nginx/ai-admin-r1.conf"), "utf8");
 const systemdUnit = readFileSync(join(repoRoot, "deploy/systemd/ai-adm-d1.service"), "utf8");
 const adminEnvExample = readFileSync(join(repoRoot, "deploy/systemd/admin.env.example"), "utf8");

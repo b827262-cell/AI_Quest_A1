@@ -1,10 +1,9 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("production server bundle contract", () => {
   it("declares every esbuild external as a direct dependency", () => {
-    const appPackage = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
+    const appPackage = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
       scripts: Record<string, string>;
       dependencies: Record<string, string>;
     };

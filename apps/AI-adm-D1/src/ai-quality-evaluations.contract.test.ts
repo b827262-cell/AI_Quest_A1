@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,9 +24,8 @@ import { AiQualityEvaluationsPage } from "./pages/AiQualityEvaluationsPage";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// happy-dom gives `import.meta.url` an http URL, so source files are read from the app root.
 function readSource(relativePath: string) {
-  return readFileSync(join(process.cwd(), "src", relativePath), "utf8");
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
 const appSource = readSource("App.tsx");
