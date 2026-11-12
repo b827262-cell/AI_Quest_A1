@@ -1,6 +1,7 @@
 import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
 import { defineConfig } from "vite";
+import { resolveSiteBuildEnv } from "./scripts/site-build-env";
 import hostingConfig from "./.openai/hosting.json";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
@@ -131,7 +132,9 @@ export default defineConfig(async () => {
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
+  const siteBuildEnv = resolveSiteBuildEnv(process.env.SITE_TARGET, process.env.GIT_SHA);
   return {
+    define: { __A01_SITE_BUILD_ENV__: JSON.stringify(siteBuildEnv) },
     // New plugin defaults to worker source maps, whose prompt-api-polyfill map leaks FIREBASE_CONFIG and fails Gate 11.
     build: {
       sourcemap: false,

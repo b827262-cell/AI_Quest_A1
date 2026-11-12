@@ -4,6 +4,8 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { gatePrimaryApiRequest } from "../lib/relay-edge-gate";
 
+declare const __A01_SITE_BUILD_ENV__: { SITE_ROLE: string; SITE_NAME: string; PRIMARY_ORIGIN: string; GIT_SHA: string } | null;
+
 interface Env {
   // Static-assets binding; only fetch() is used, typed with the DOM Request/Response
   // the rest of this file uses (workers-types' Fetcher has its own, incompatible ones).
@@ -64,7 +66,12 @@ const worker = {
       env.RELEASE_VALIDATION_SECRET;
     (globalThis as unknown as { SYNC_IMPORT_SECRET?: string }).SYNC_IMPORT_SECRET = env.SYNC_IMPORT_SECRET;
     (globalThis as unknown as { SYNC_MAX_PDF_BYTES?: string }).SYNC_MAX_PDF_BYTES = env.SYNC_MAX_PDF_BYTES;
-    const runtimeGlobals = globalThis as unknown as Partial<Env>;
+    const runtimeGlobals = globalThis as unknown as Partial<Env> & { __env__?: Record<string, unknown> };
+    // Only the four allowlisted, non-secret build values are embedded. Runtime
+    // values below take precedence; absent runtime values fall back to __env__.
+    if (typeof __A01_SITE_BUILD_ENV__ !== "undefined" && __A01_SITE_BUILD_ENV__) {
+      runtimeGlobals.__env__ = { ...runtimeGlobals.__env__, ...__A01_SITE_BUILD_ENV__ };
+    }
     runtimeGlobals.GIT_SHA = env.GIT_SHA;
     runtimeGlobals.SITE_ROLE = env.SITE_ROLE;
     runtimeGlobals.SITE_NAME = env.SITE_NAME;

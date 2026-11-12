@@ -138,3 +138,20 @@ clear support or model-download message.
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
 - [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+
+### Explicit site topology builds (local verification only)
+
+For a per-site build, provide `SITE_TARGET=backend|student|admin` and a full
+40-character hexadecimal `GIT_SHA` to `npm run build`. The four non-secret
+values are selected from `deploy/targets.json` and embedded in the Worker;
+runtime bindings override them when present. A runtime empty string also overrides
+the build value and is treated as invalid (fail-closed), not as a fallback to
+the build value. Invalid target, SHA or secondary
+origin fails the build. Without `SITE_TARGET` the existing standalone default
+is preserved. `GIT_SHA` is a supplied identifier, not proof of artifact provenance.
+
+Each target produces a different artifact. This does not configure a Sites
+project or its D1/R2 bindings: the existing hosting manifest and build binding
+configuration remain unchanged. Before any deployment, separately verify the
+selected project's identity, isolated bindings and origin; do not deploy a
+secondary using the primary's bindings. Runtime secrets remain runtime-only.
