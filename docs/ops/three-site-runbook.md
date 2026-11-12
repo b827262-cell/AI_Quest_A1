@@ -15,15 +15,15 @@
 - 只有主站綁定 D1 與 R2。次站若回報 D1 或 R2 已綁定，即視為設定錯誤。
 - 瀏覽器只與自己所屬的次站通訊。資料只存在主站的 D1 與 R2 中。
 
-## 2. 執行期變數（每站必填）
+## 2. 站點設定值(建置預設/執行期覆蓋)
 
-| 變數 | 值 | 說明 |
+| 變數 | 必填來源 | 說明 |
 | --- | --- | --- |
-| `SITE_ROLE` | `primary` 或 `secondary` | 宣告角色。Worker 不會從主機名稱推斷角色。 |
-| `SITE_NAME` | `backend`、`student` 或 `admin` | 必須與角色成對：`primary` 對 `backend`，`secondary` 對 `student` 或 `admin`。 |
-| `PRIMARY_ORIGIN` | `https://...`（次站必填） | 只能是純 https origin：不得含路徑、帳號密碼，可帶單一結尾 `/`。主站忽略此值。 |
-| `GIT_SHA` | 同一個完整 commit SHA | 健康檢查的 `gitSha` 來源。三站必須相同，且不得為 `unknown`。 |
-| `ADMIN_EMAILS` | 逗號分隔的位址清單（主站必填） | 管理員 allowlist。格式為 `位址1,位址2`；每項會去除前後空白、不分大小寫、以完全相等比對。未設定或為空時，沒有任何人會是管理員（fail-closed）。次站不需要此變數。 |
+| `SITE_ROLE` | §6 建置提供，執行期可覆蓋 | 宣告角色：`primary` 或 `secondary`。Worker 不會從主機名稱推斷角色。 |
+| `SITE_NAME` | §6 建置提供，執行期可覆蓋 | `backend`、`student` 或 `admin`；必須與角色成對：`primary` 對 `backend`，`secondary` 對 `student` 或 `admin`。 |
+| `PRIMARY_ORIGIN` | §6 建置提供，執行期可覆蓋 | 只能是純 https origin：不得含路徑、帳號密碼，可帶單一結尾 `/`。主站忽略此值。 |
+| `GIT_SHA` | 建置或執行期提供 | 健康檢查的 `gitSha` 來源。三站必須相同，且不得為 `unknown`。 |
+| `ADMIN_EMAILS` | 主站必須的執行期設定 | 管理員 allowlist。格式為 `位址1,位址2`；每項會去除前後空白、不分大小寫、以完全相等比對。未設定或為空時，沒有任何人會是管理員（fail-closed）。次站不需要此變數。 |
 
 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是非 secret 的拓撲值，可由 §6 的逐站建置提供；執行期的值會覆蓋建置值。沒有 role/site 的建置預設才會是 `standalone`。本表只把 `ADMIN_EMAILS` 列為主站必須的執行期設定。
 
@@ -74,7 +74,7 @@ Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalT
 ## 5. 部署順序
 
 1. 在本地確認目標 commit 通過 `cd site && npm ci && npm run typecheck && npm test`，以及 `npm run environment:align:production`。
-2. 先設定三站的執行期變數，再部署程式碼。三站的 `GIT_SHA` 都填同一個 commit。**主站部署前必須先設定 `ADMIN_EMAILS`**，否則上線後沒有任何人能登入管理端（fail-closed）。`SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是非 secret 的拓撲值，可由 §6 的逐站建置提供；執行期的值會覆蓋建置值。
+2. 執行期若有設定覆蓋值，必須與該站的建置值一致；`GIT_SHA` 可由建置或執行期提供，三站必須是同一個 commit。**主站仍必須在執行期設定 `ADMIN_EMAILS`**，否則上線後沒有任何人能登入管理端（fail-closed）。
 3. 先部署主站，並完成第 7 節的驗證。主站的 API 行為對既有次站相容，因此可以先上線。
 4. 依序部署學生次站與管理次站，每站部署後各自驗證。
 5. 三站上線後，capture 才會與新契約一致。是否寫回 production manifest 須由 Owner 指示；本手冊不要求執行。
@@ -124,7 +124,7 @@ SITE_TARGET=<同一站> npm run site:preflight
 
 ### 6.4 執行期 env 與建置值的關係
 
-建置時寫入的 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是預設值。執行期若有對應的 env 值，會覆蓋建置值，不會回退到建置值；執行期的空字串會覆蓋建置值並被解析為未設定。`SITE_ROLE` 與 `SITE_NAME` 都未設定（例如兩者都是空字串）時為 `standalone`；只有一方仍有效或配對不符時才是 `misconfigured`，除 `/api/health` 外的 `/api/*` 回 503。有效的 secondary 若 `PRIMARY_ORIGIN` 為空或無效，其自有 API 回 503 `backend_disabled`。`GIT_SHA` 不參與站點角色判定。
+建置時寫入的 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是預設值。執行期若有對應的 env 值，會覆蓋建置值，不會回退到建置值；執行期的空字串會覆蓋建置值並被解析為未設定。`SITE_ROLE` 與 `SITE_NAME` 都未設定（例如兩者都是空字串）時為 `standalone`；只有一方仍有效或配對不符時才是 `misconfigured`，除 `/api/health` 外的 `/api/*` 回 503。在 production 模式下，有效的 secondary 若 `PRIMARY_ORIGIN` 為空或無效，其自有 API 回 503 `backend_disabled`；非 production 不代理。`GIT_SHA` 不參與站點角色判定。
 
 ## 7. 部署後驗證（只使用 GET）
 
