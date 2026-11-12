@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { classifyApiPath, gateApiRequest } from "../app/api/backend-client.ts";
 import { verifySiteTarget } from "../scripts/verify-site-target.mjs";
@@ -13,6 +14,7 @@ import { verifySiteTarget } from "../scripts/verify-site-target.mjs";
 // health route together, without any network access.
 const PRIMARY_ORIGIN = "https://ai-quest-a1-backend.example.test";
 const GIT_SHA = "5f3c2a1b9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a";
+const siteDir = fileURLToPath(new URL("..", import.meta.url));
 const HOSTS = {
   primary: "ai-quest-a1-backend.example.test",
   student: "ai-quest-a1-student.example.test",
@@ -367,7 +369,7 @@ test("deploy targets agree with the production manifest, the hosting declaration
 test("verify-site-target: SITE_TARGET missing fails", async () => {
   const targets = JSON.parse(fs.readFileSync(new URL("../deploy/targets.json", import.meta.url), "utf8")).targets;
   const hosting = JSON.parse(fs.readFileSync(new URL("../.openai/hosting.json", import.meta.url), "utf8"));
-  const result = await verifySiteTarget({ targets: { targets }, hosting, distServerDir: path.join(process.cwd(), "dist", "server") });
+  const result = await verifySiteTarget({ targets: { targets }, hosting, distServerDir: path.join(siteDir, "dist", "server") });
   assert.equal(result.ok, false);
   assert.match(result.errors[0], /SITE_TARGET is required/);
 });
@@ -375,22 +377,22 @@ test("verify-site-target: SITE_TARGET missing fails", async () => {
 test("verify-site-target: invalid SITE_TARGET fails", async () => {
   const targets = JSON.parse(fs.readFileSync(new URL("../deploy/targets.json", import.meta.url), "utf8")).targets;
   const hosting = JSON.parse(fs.readFileSync(new URL("../.openai/hosting.json", import.meta.url), "utf8"));
-  const result = await verifySiteTarget({ siteTarget: "frontend", targets: { targets }, hosting, distServerDir: path.join(process.cwd(), "dist", "server") });
+  const result = await verifySiteTarget({ siteTarget: "frontend", targets: { targets }, hosting, distServerDir: path.join(siteDir, "dist", "server") });
   assert.equal(result.ok, false);
   assert.match(result.errors[0], /invalid SITE_TARGET: frontend/);
 });
 
 test("verify-site-target: real student build reads secondary/student and project_id mismatch fails", async () => {
-  const distServerDir = path.join(process.cwd(), "dist", "server");
+  const distServerDir = path.join(siteDir, "dist", "server");
   const targetsFile = new URL("../deploy/targets.json", import.meta.url);
   const hostingFile = new URL("../.openai/hosting.json", import.meta.url);
   const SHA = "a".repeat(40);
 
-  // Build with SITE_TARGET=student, GIT_SHA = 40 a's
-  const buildEnv = { ...process.env, SITE_TARGET: "student", GIT_SHA: SHA };
-  execFileSync("npm", ["run", "build"], { cwd: process.cwd(), env: buildEnv, stdio: "pipe" });
-
   try {
+    // Build with SITE_TARGET=student, GIT_SHA = 40 a's
+    const buildEnv = { ...process.env, SITE_TARGET: "student", GIT_SHA: SHA };
+    execFileSync("npm", ["run", "build"], { cwd: siteDir, env: buildEnv, stdio: "pipe" });
+
     const targets = JSON.parse(fs.readFileSync(targetsFile, "utf8")).targets;
     const hosting = JSON.parse(fs.readFileSync(hostingFile, "utf8"));
 
@@ -404,6 +406,6 @@ test("verify-site-target: real student build reads secondary/student and project
     assert.ok(!result.errors.some((e) => e.includes("role/site mismatch")), "role/site must match secondary/student");
   } finally {
     // Rebuild without SITE_TARGET so dist returns to standalone for other tests
-    execFileSync("npm", ["run", "build"], { cwd: process.cwd(), env: { ...process.env, SITE_TARGET: undefined }, stdio: "pipe" });
+    execFileSync("npm", ["run", "build"], { cwd: siteDir, env: { ...process.env, SITE_TARGET: undefined }, stdio: "pipe" });
   }
 });
