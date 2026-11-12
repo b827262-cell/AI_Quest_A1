@@ -42,6 +42,6 @@
   "dependencies": {
     "@ai-smartbook/db": "workspace:*",
     "express": "^4.19.2",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   }
 }
