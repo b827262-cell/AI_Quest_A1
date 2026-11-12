@@ -144,11 +144,16 @@ clear support or model-download message.
 For a per-site build, provide `SITE_TARGET=backend|student|admin` and a full
 40-character hexadecimal `GIT_SHA` to `npm run build`. The four non-secret
 values are selected from `deploy/targets.json` and embedded in the Worker;
-runtime bindings override them when present. A runtime empty string also overrides
-the build value and is treated as invalid (fail-closed), not as a fallback to
-the build value. Invalid target, SHA or secondary
-origin fails the build. Without `SITE_TARGET` the existing standalone default
-is preserved. `GIT_SHA` is a supplied identifier, not proof of artifact provenance.
+runtime bindings override them when present. A runtime empty string overrides
+the build value and is parsed as unset, not as a fallback to the build value.
+`SITE_ROLE` and `SITE_NAME` both unset yields `standalone`; only one side
+valid or a role/site mismatch yields `misconfigured`, and all `/api/*` except
+`/api/health` return 503. In production mode, a valid secondary with an empty
+or invalid `PRIMARY_ORIGIN` answers its own APIs with 503 `backend_disabled`;
+outside production, secondaries do not proxy. `GIT_SHA` does not take part in
+site role determination. Invalid target, SHA or secondary origin fails the
+build. Without `SITE_TARGET` the existing standalone default is preserved.
+`GIT_SHA` is a supplied identifier, not proof of artifact provenance.
 
 Each target produces a different artifact. This does not configure a Sites
 project or its D1/R2 bindings: the existing hosting manifest and build binding
