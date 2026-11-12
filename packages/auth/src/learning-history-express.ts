@@ -11,6 +11,13 @@ export const MAX_LEARNING_HISTORY_BODY_BYTES = 256 * 1024;
 const LEARNING_HISTORY_BODY_PATHS = ["/api/student/learning-history", "/api/admin/learning-history"];
 
 /**
+ * body-parser errors raised while decoding a request body, i.e. the client sent
+ * something the parser could not read. `entity.too.large` is deliberately
+ * absent: it keeps its own 413 contract below.
+ */
+const INVALID_BODY_ERROR_TYPES = new Set(["entity.parse.failed", "encoding.unsupported", "charset.unsupported"]);
+
+/**
  * Turns body-parser's `entity.too.large` into a stable JSON response.
  *
  * Express' default error page is HTML and prints a stack trace in development,
@@ -31,6 +38,30 @@ export function oversizeJsonBodyHandler(): ErrorRequestHandler {
     // reaches the batch parser but is labelled as a generic payload error.
     const isLearningHistory = LEARNING_HISTORY_BODY_PATHS.some((base) => path === base || path.startsWith(`${base}/`));
     res.status(413).json({ error: isLearningHistory ? "BATCH_TOO_LARGE" : "PAYLOAD_TOO_LARGE" });
+  };
+}
+
+/**
+ * Turns body-parser's malformed-body errors into a stable JSON 400.
+ *
+ * Without it a truncated JSON body (`{"key":`) reaches Express' default error
+ * page, which is HTML and prints a stack trace in development; a global 500
+ * boundary turns it into `internal server error`, which blames the server for a
+ * client mistake. Both apps answer the same opaque `INVALID_JSON` instead: the
+ * parser's message can echo the request body, so it is never forwarded.
+ *
+ * Only parser-typed 4xx errors are claimed here. Oversize bodies keep the 413
+ * contract in `oversizeJsonBodyHandler`, and anything else falls through to
+ * whatever boundary the app already has.
+ */
+export function invalidJsonBodyHandler(): ErrorRequestHandler {
+  return (error, _req, res, next) => {
+    if (res.headersSent) return next(error);
+    const failure = error as { type?: unknown; status?: unknown; statusCode?: unknown } | null | undefined;
+    if (typeof failure?.type !== "string" || !INVALID_BODY_ERROR_TYPES.has(failure.type)) return next(error);
+    const status = Number(failure.status ?? failure.statusCode);
+    if (!Number.isFinite(status) || status < 400 || status >= 500) return next(error);
+    res.status(400).json({ error: "INVALID_JSON" });
   };
 }
 

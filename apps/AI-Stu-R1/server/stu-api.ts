@@ -20,6 +20,7 @@ import {
   createStudentSessionMiddleware,
   createStudentLearningHistoryRouter,
   oversizeJsonBodyHandler,
+  invalidJsonBodyHandler,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
@@ -322,8 +323,10 @@ if (existsSync(publicDir)) {
 // Last error boundary: oversize JSON bodies answer a stable JSON 413 instead of
 // Express' HTML page (which prints a stack trace in development). Only the
 // learning-history endpoints use BATCH_TOO_LARGE; every other route answers the
-// generic PAYLOAD_TOO_LARGE. Non-parser errors keep the default behaviour.
+// generic PAYLOAD_TOO_LARGE. A body that is not valid JSON answers JSON 400, and
+// non-parser errors keep the default behaviour.
 app.use(oversizeJsonBodyHandler());
+app.use(invalidJsonBodyHandler());
 
 app.listen(config.apiPort, () => {
   console.log(

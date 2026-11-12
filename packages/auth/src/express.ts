@@ -19,6 +19,7 @@ export {
   createStudentLearningHistoryRouter,
   safeLearningSourceUrl,
   oversizeJsonBodyHandler,
+  invalidJsonBodyHandler,
   MAX_LEARNING_HISTORY_BATCH,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "./learning-history-express";
