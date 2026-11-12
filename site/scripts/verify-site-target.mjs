@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { register } from "node:module";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const siteDir = path.resolve(scriptDir, "..");
@@ -24,40 +25,24 @@ function readJson(filePath) {
   }
 }
 
-export function extractEmbeddedEnv(distServerDir) {
-  let siteRole = null;
-  let siteName = null;
-  let files = [];
-  try {
-    files = fs.readdirSync(distServerDir);
-  } catch {
-    return { siteRole: null, siteName: null };
+register("./cloudflare-workers-hooks.mjs", import.meta.url);
+
+export async function readEmbeddedRoleSite() {
+  const workerUrl = new URL(`../dist/server/index.js`, import.meta.url);
+  const { default: worker } = await import(workerUrl.href);
+  const ctx = { waitUntil() {}, passThroughOnException() {} };
+  const res = await worker.fetch(new Request("https://preflight.invalid/api/health"), {}, ctx);
+  if (!res.ok) {
+    fail(`worker /api/health returned ${res.status}`);
   }
-  const roleRe = /(?:["'])SITE_ROLE["']\s*:\s*["`]([^"`]+)["`]/;
-  const nameRe = /(?:["'])SITE_NAME["']\s*:\s*["`]([^"`]+)["`]/;
-  for (const file of files) {
-    if (!file.endsWith(".js")) continue;
-    const fullPath = path.join(distServerDir, file);
-    let content;
-    try {
-      content = fs.readFileSync(fullPath, "utf8");
-    } catch {
-      continue;
-    }
-    const roleMatch = content.match(roleRe);
-    const nameMatch = content.match(nameRe);
-    if (roleMatch) siteRole = roleMatch[1];
-    if (nameMatch) siteName = nameMatch[1];
-    if (siteRole && siteName) break;
-  }
-  return { siteRole, siteName };
+  const body = await res.json();
+  return { siteRole: body.role ?? null, siteName: body.site ?? null };
 }
 
-export function verifySiteTarget(options) {
+export async function verifySiteTarget(options) {
   const siteTarget = options.siteTarget;
   const targets = options.targets ?? readJson(options.targetsPath ?? path.join(siteDir, "deploy", "targets.json"));
   const hosting = options.hosting ?? readJson(options.hostingPath ?? path.join(siteDir, ".openai", "hosting.json"));
-  const distServerDir = options.distServerDir ?? path.join(siteDir, "dist", "server");
 
   const errors = [];
 
@@ -76,7 +61,7 @@ export function verifySiteTarget(options) {
     return { ok: false, errors, projectId: hosting.project_id, site: null };
   }
 
-  const { siteRole, siteName } = extractEmbeddedEnv(distServerDir);
+  const { siteRole, siteName } = await readEmbeddedRoleSite();
 
   const projectId = hosting.project_id;
   const expectedProjectId = targetConfig.project_id;
@@ -92,8 +77,8 @@ export function verifySiteTarget(options) {
   return { ok: errors.length === 0, errors, projectId, site: siteName };
 }
 
-function main() {
-  const result = verifySiteTarget({ siteTarget: process.env.SITE_TARGET });
+async function main() {
+  const result = await verifySiteTarget({ siteTarget: process.env.SITE_TARGET });
   if (!result.ok) {
     for (const err of result.errors) {
       console.error(err);
