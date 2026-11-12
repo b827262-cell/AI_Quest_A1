@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -68,46 +69,99 @@ test("renders the AI-SmartBook learning homepage", async () => {
 // explicit `force-dynamic` would hand one user's data to the next visitor.
 const SYNTHETIC_IDENTITY_A = "test-a@example.invalid";
 const SYNTHETIC_IDENTITY_B = "test-b@example.invalid";
+const SYNTHETIC_COOKIE_A = "n-r476-cookie-a";
+const SYNTHETIC_COOKIE_B = "n-r476-cookie-b";
 
-test("cached public pages never embed per-user identity", async () => {
-  const worker = await loadWorker();
-  const fetchPage = (path, headers = {}) =>
-    worker.fetch(
-      new Request(`http://localhost${path}`, { headers: { accept: "text/html", ...headers } }),
-      workerEnv,
-      workerCtx,
-    );
+// Dynamic responses can echo the request query in RSC metadata, so strip the
+// random probe before comparing two otherwise identical documents.
+function stripProbe(html, probe) {
+  if (!probe) return html;
+  return html.split(probe).join("").replace(/[?&]probe=/g, "");
+}
 
+// The page cache is process-wide and keyed by pathname only, so an earlier test
+// in this file can already have warmed it. Run the probe in a fresh child
+// process instead: NODE_ENV=production matches the deployment mode, the cache
+// starts cold, and the first request must MISS while every later one must HIT.
+const CACHE_PROBE_SCRIPT = `
+const { default: worker } = await import(process.env.N_R476_DIST);
+const variants = JSON.parse(process.env.N_R476_VARIANTS);
+const env = { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } };
+const ctx = { waitUntil() {}, passThroughOnException() {} };
+const fetchPage = (url, headers) =>
+  worker.fetch(new Request(url, { headers: { accept: "text/html", ...headers } }), env, ctx);
+const headersOf = (response) => ({
+  status: response.status,
+  contentType: response.headers.get("content-type"),
+  cache: response.headers.get("x-vinext-cache"),
+  cacheControl: response.headers.get("cache-control"),
+  setCookie: response.headers.get("set-cookie"),
+});
+const pages = [];
+for (const path of ["/", "/admin"]) {
+  const warmup = await fetchPage("http://localhost" + path, {});
+  const warmupHeaders = headersOf(warmup);
+  await warmup.text();
+  const rows = [];
+  for (const variant of variants) {
+    const url = "http://localhost" + path + (variant.probe ? "?probe=" + variant.probe : "");
+    const response = await fetchPage(url, variant.headers);
+    const html = await response.text();
+    rows.push({ label: variant.label, probe: variant.probe, ...headersOf(response), html });
+  }
+  pages.push({ path, warmup: warmupHeaders, rows });
+}
+process.stdout.write(JSON.stringify(pages));
+`;
+
+test("cached public pages never embed per-user identity", () => {
   const variants = [
-    ["anonymous", {}],
-    ["synthetic identity A", { "oai-authenticated-user-email": SYNTHETIC_IDENTITY_A }],
-    ["synthetic identity B", { "oai-authenticated-user-email": SYNTHETIC_IDENTITY_B }],
-    ["random query", {}],
-  ];
+    ["anonymous", {}, null],
+    ["synthetic identity A", { "oai-authenticated-user-email": SYNTHETIC_IDENTITY_A }, null],
+    ["synthetic identity B", { "oai-authenticated-user-email": SYNTHETIC_IDENTITY_B }, null],
+    ["cookie A", { cookie: `session=${SYNTHETIC_COOKIE_A}` }, null],
+    ["cookie B", { cookie: `session=${SYNTHETIC_COOKIE_B}` }, null],
+    [
+      "synthetic identity A + cookie A",
+      { "oai-authenticated-user-email": SYNTHETIC_IDENTITY_A, cookie: `session=${SYNTHETIC_COOKIE_A}` },
+      null,
+    ],
+    ["random query", {}, Math.random().toString(36).slice(2)],
+  ].map(([label, headers, probe]) => ({ label, headers, probe }));
 
-  for (const path of ["/", "/admin"]) {
-    // Fill the shared page cache first, so every measured request reads the copy
-    // that a real visitor would receive.
-    await (await fetchPage(path)).text();
+  const output = execFileSync(process.execPath, ["--import", new URL("./support/cloudflare-workers-shim.mjs", import.meta.url).href, "--input-type=module", "-e", CACHE_PROBE_SCRIPT], {
+    cwd: process.cwd(),
+    env: {
+      PATH: process.env.PATH,
+      NODE_ENV: "production",
+      N_R476_DIST: new URL("../dist/server/index.js", import.meta.url).href,
+      N_R476_VARIANTS: JSON.stringify(variants),
+    },
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  const pages = JSON.parse(output);
+
+  for (const { path, warmup, rows } of pages) {
+    assert.equal(warmup.status, 200, `${path}: warmup status`);
+    assert.equal(warmup.cache, "MISS", `${path}: the first request must fill the cache, not read it`);
 
     const bodies = [];
-    for (const [label, headers] of variants) {
-      const target = label === "random query" ? `${path}?probe=${Math.random().toString(36).slice(2)}` : path;
-      const response = await fetchPage(target, headers);
-      assert.equal(response.status, 200, `${path} ${label}: status`);
-      assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i, `${path} ${label}: content type`);
-      if (response.headers.has("set-cookie")) {
-        assert.notEqual(
-          response.headers.get("x-vinext-cache"),
-          "HIT",
-          `${path} ${label}: a response that sets cookies must not come from the shared page cache`,
-        );
-      }
+    for (const row of rows) {
+      assert.equal(row.status, 200, `${path} ${row.label}: status`);
+      assert.match(row.contentType ?? "", /^text\/html\b/i, `${path} ${row.label}: content type`);
+      assert.equal(row.cache, "HIT", `${path} ${row.label}: expected the shared page cache to serve this request`);
+      assert.match(row.cacheControl ?? "", /s-maxage=31536000/, `${path} ${row.label}: cached page must advertise the shared TTL`);
+      // No route in this app emits Set-Cookie today (no cookies()/set-cookie in
+      // app/, lib/ or worker/), so there is no cookie-setting page to exercise.
+      // A cached public page must never set one; if such a route is added, this
+      // assertion keeps it out of the shared cache.
+      assert.equal(row.setCookie, null, `${path} ${row.label}: cached page must not set cookies`);
 
-      const html = await response.text();
-      assert.ok(!html.includes(SYNTHETIC_IDENTITY_A), `${path} ${label}: HTML leaked synthetic identity A`);
-      assert.ok(!html.includes(SYNTHETIC_IDENTITY_B), `${path} ${label}: HTML leaked synthetic identity B`);
-      bodies.push([label, html]);
+      for (const value of [SYNTHETIC_IDENTITY_A, SYNTHETIC_IDENTITY_B, SYNTHETIC_COOKIE_A, SYNTHETIC_COOKIE_B]) {
+        assert.ok(!row.html.includes(value), `${path} ${row.label}: HTML leaked ${value}`);
+      }
+      bodies.push([row.label, stripProbe(row.html, row.probe)]);
     }
 
     for (const [label, html] of bodies.slice(1)) {
