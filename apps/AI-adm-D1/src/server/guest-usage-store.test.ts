@@ -59,4 +59,27 @@ describe("bounded guest usage", () => {
     expect(store.consume("new", day, 3, 104)?.count).toBe(1);
     expect(store.get("old", day)).toBeUndefined();
   });
+  it("keeps the saturation cache while exhausted keys are touched", () => {
+    const store = createGuestUsageStore({ capacity: 2, sweepEvery: 1000, warn: () => {} });
+    store.consume("a", day, 1, 100);
+    store.consume("b", day, 1, 100);
+    expect(store.consume("new", day, 1, 101)).toBeUndefined();
+    const iterator = vi.spyOn(Map.prototype, Symbol.iterator);
+    try {
+      for (let i = 0; i < 10; i++) {
+        store.touch("a", day, 200 + i);
+        expect(store.consume(`new${i}`, day, 1, 200 + i)).toBeUndefined();
+      }
+      expect(iterator).not.toHaveBeenCalled();
+    } finally { iterator.mockRestore(); }
+    expect(store.consume("new", day, 1, 3_600_101)?.count).toBe(1);
+  });
+  it("never increments an exhausted key or creates one with zero limit", () => {
+    const store = createGuestUsageStore({ capacity: 1 });
+    expect(store.consume("zero", day, 0, 1)).toBeUndefined();
+    expect(store.size()).toBe(0);
+    expect(store.consume("a", day, 1, 2)?.count).toBe(1);
+    expect(store.consume("a", day, 1, 3)).toBeUndefined();
+    expect(store.get("a", day)?.count).toBe(1);
+  });
 });

@@ -141,7 +141,7 @@ export function useGuestQuestion({
         providerPreference
       }, controller.signal);
       if (controller.signal.aborted) return;
-      setGuestRemaining(result.remainingGuestQuestions ?? null);
+      if (result.status !== "busy") setGuestRemaining(result.remainingGuestQuestions ?? null);
       if (result.status === "rate_limited" || result.status === "busy") {
         setError(result.message || (result.status === "busy" ? "訪客服務目前繁忙，請稍後再試或登入使用" : result.retryAfterSeconds ? `請約 ${result.retryAfterSeconds} 秒後再試。` : "請稍後再試。"));
         return;

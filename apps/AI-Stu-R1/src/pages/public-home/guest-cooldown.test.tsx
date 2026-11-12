@@ -38,4 +38,24 @@ describe("guest cooldown", () => {
       spy.mockRestore();
     }
   });
+  it("retains the previously known remaining count during busy", async () => {
+    const spy = vi.spyOn(studentClient, "askAsGuest")
+      .mockResolvedValueOnce({ requestId: "", status: "rate_limited", remainingGuestQuestions: 2, message: "稍後再試" })
+      .mockResolvedValueOnce({ requestId: "", status: "busy", message: "訪客服務目前繁忙，請稍後再試或登入使用" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    function Harness() {
+      const guest = useGuestQuestion({ config: DEFAULT_CONFIG, setLearningHistory: () => {}, setGoogleStatus: () => {} });
+      return <><button onClick={() => guest.setQuestion("問題")}>輸入</button><button onClick={() => void guest.submitGuestQuestion("manual")}>送出</button><div data-remaining={guest.guestRemaining}>{guest.error}</div></>;
+    }
+    try {
+      await act(async () => root.render(<MemoryRouter><Harness /></MemoryRouter>));
+      await act(async () => { container.querySelectorAll("button")[0].click(); });
+      await act(async () => { container.querySelectorAll("button")[1].click(); });
+      await act(async () => { container.querySelectorAll("button")[1].click(); });
+      expect(container.querySelector("[data-remaining]")?.getAttribute("data-remaining")).toBe("2");
+      expect(container.textContent).toContain("訪客服務目前繁忙");
+    } finally { await act(async () => root.unmount()); container.remove(); localStorage.clear(); spy.mockRestore(); }
+  });
 });

@@ -138,6 +138,7 @@ describe("Admin API HTTP authentication and quota behavior", () => {
       }
       const denied = await ask("203.0.113.62");
       expect(denied.status).toBe(503);
+      expect(denied.headers["retry-after"]).toBe("60");
       expect(denied.body).toEqual({ status: "busy", message: "訪客服務目前繁忙，請稍後再試或登入使用" });
       const original = await ask("203.0.113.61");
       expect(original.status).toBe(429);

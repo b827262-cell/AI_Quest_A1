@@ -77,6 +77,12 @@ describe("dashboard components", () => {
     expect(answerMarkup).not.toContain("引用來源");
   });
 
+  it("shows a busy notice in the dashboard without claiming zero remaining", () => {
+    const markup = renderToStaticMarkup(<GuestAnswerSection response={{ requestId: "", status: "busy" }} status="success" error={null} onAsk={async () => undefined} />);
+    expect(markup).toContain("訪客服務目前繁忙，請稍後再試或登入使用");
+    expect(markup).not.toContain("訪客剩餘次數：0");
+  });
+
   it("keeps guest loading, error and partial-answer states local to the section", () => {
     const loading = renderToStaticMarkup(
       <GuestAnswerSection

@@ -29,10 +29,11 @@ export function createGuestUsageStore(options: { capacity?: number; sweepEvery?:
     get,
     touch(key: string, day: string, now: number) {
       const entry = entries.get(key);
-      if (entry?.day === day) { entry.lastAttemptAt = now; saturated = undefined; }
+      if (entry?.day === day) entry.lastAttemptAt = now;
     },
     consume(key: string, day: string, limit: number, now: number): GuestUsage | undefined {
       const existing = entries.get(key);
+      if (limit <= 0 || (existing?.day === day && existing.count >= limit)) return undefined;
       if (!existing && entries.size >= capacity) {
         if (saturated?.day === day && saturated.limit === limit && now < saturated.until) return undefined;
         sweep(day);

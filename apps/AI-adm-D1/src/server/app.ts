@@ -1920,6 +1920,7 @@ app.post("/api/public/guest-ask", async (req, res) => {
   // gateway failure still consumes the attempt (matches prior mock behaviour).
   const usage = guestUsageByIp.consume(identity, day, config.guestDailyLimit, Date.now());
   if (!usage) {
+    res.setHeader("Retry-After", "60");
     return res.status(503).json({ status: "busy", message: "訪客服務目前繁忙，請稍後再試或登入使用" });
   }
   const remainingGuestQuestions = Math.max(0, config.guestDailyLimit - usage.count);
