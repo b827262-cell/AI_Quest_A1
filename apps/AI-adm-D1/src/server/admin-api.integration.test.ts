@@ -5,6 +5,7 @@ import { join } from "node:path";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAdminApp } from "./app";
+import { createGuestUsageStore } from "./guest-usage-store";
 import { createAdminTestDependencies } from "./dependencies";
 import { createDbHandle, type DbHandle } from "@ai-smartbook/db";
 import { createAdminSessionSecrets, digestAdminSecret } from "./ai/admin-auth";
@@ -116,6 +117,32 @@ describe("Admin API HTTP authentication and quota behavior", () => {
       const otherAgain = await ask("203.0.113.42");
       expect(otherAgain.status).toBe(200);
       expect(otherAgain.body.remainingGuestQuestions).toBe(1);
+    } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
+  });
+
+  it("returns the existing limit response when all guest quota slots are exhausted", async () => {
+    const { dependencies, dbHandle } = buildTestApp();
+    const warning = vi.fn();
+    const store = createGuestUsageStore({ capacity: 1, warn: warning });
+    const app = createAdminApp(dependencies, store);
+    const gateway = vi.spyOn(dependencies.aiGateway, "run").mockResolvedValue({
+      result: { provider: "mock", model: "test", answer: "測試答案。", latencyMs: 0 }
+    } as Awaited<ReturnType<typeof dependencies.aiGateway.run>>);
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const ask = (ip: string) => request(app).post("/api/public/guest-ask").set("CF-Connecting-IP", ip).send({ question: "測試題目" });
+      for (let i = 0; i < 3; i++) {
+        expect((await ask("203.0.113.61")).status).toBe(200);
+        now += 21_000;
+      }
+      const denied = await ask("203.0.113.62");
+      expect(denied.status).toBe(429);
+      expect(denied.body).toEqual({ status: "limit_reached", message: "今日訪客體驗額度已使用完畢。", remainingGuestQuestions: 0, requiresLoginForMore: true });
+      const original = await ask("203.0.113.61");
+      expect(original.status).toBe(429);
+      expect(original.body.remainingGuestQuestions).toBe(0);
+      expect(warning).toHaveBeenCalledOnce();
     } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
   });
 

@@ -1,3 +1,4 @@
+import { createGuestUsageStore, type GuestUsage } from "./guest-usage-store";
 import { createStudentBooksRouter, type ReaderProgressEventType, type ReaderProgressEvent } from "./student-books-router";
 import { createAiEvaluationsRouter } from "./ai-evaluations-router";
 import { failValidation } from "./validation-error";
@@ -127,7 +128,7 @@ export interface AdminAppDependencies {
   appearanceUploadDir: string;
 }
 
-export function createAdminApp(dependencies: AdminAppDependencies): express.Express {
+export function createAdminApp(dependencies: AdminAppDependencies, guestUsageByIp = createGuestUsageStore()): express.Express {
   const {
     env,
     repos,
@@ -942,8 +943,6 @@ const guestFeedbackRequestSchema = z.object({
   helpful: z.boolean()
 });
 
-type GuestUsage = { day: string; count: number; lastAt: number };
-const guestUsageByIp = new Map<string, GuestUsage>();
 
 /** Load appearance settings merged over defaults (never throws / never blank). */
 function loadAppearance() {
@@ -1893,7 +1892,7 @@ app.post("/api/public/guest-ask", async (req, res) => {
 
   const identity = guestIdentity(req);
   const day = guestDayKey();
-  const current = guestUsageByIp.get(identity);
+  const current = guestUsageByIp.get(identity, day);
   const usage: GuestUsage = current?.day === day ? current : { day, count: 0, lastAt: 0 };
   const remainingBefore = Math.max(0, config.guestDailyLimit - usage.count);
 
@@ -1924,7 +1923,14 @@ app.post("/api/public/guest-ask", async (req, res) => {
   // gateway failure still consumes the attempt (matches prior mock behaviour).
   usage.count += 1;
   usage.lastAt = Date.now();
-  guestUsageByIp.set(identity, usage);
+  if (!guestUsageByIp.set(identity, usage, config.guestDailyLimit)) {
+    return res.status(429).json({
+      status: "limit_reached",
+      message: "今日訪客體驗額度已使用完畢。",
+      remainingGuestQuestions: 0,
+      requiresLoginForMore: true
+    });
+  }
   const remainingGuestQuestions = Math.max(0, config.guestDailyLimit - usage.count);
 
   const requestId = `guest_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -2095,7 +2101,7 @@ app.get("/api/public/guest-ask/:requestId", (req, res) => {
     publicStudentAnswer(buildStudentAnswer(saved.question, saved.answer))
   );
   const day = guestDayKey();
-  const usage = guestUsageByIp.get(guestIdentity(req));
+  const usage = guestUsageByIp.get(guestIdentity(req), day);
   const remaining = Math.max(0, loadSiteConfig().guestDailyLimit - (usage?.day === day ? usage.count : 0));
   const mode = saved.mode === "mock" ? "mock" : "live";
   res.json({
