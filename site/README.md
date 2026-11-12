@@ -144,7 +144,9 @@ clear support or model-download message.
 For a per-site build, provide `SITE_TARGET=backend|student|admin` and a full
 40-character hexadecimal `GIT_SHA` to `npm run build`. The four non-secret
 values are selected from `deploy/targets.json` and embedded in the Worker;
-runtime bindings override them when present. Invalid target, SHA or secondary
+runtime bindings override them when present. A runtime empty string also overrides
+the build value and is treated as invalid (fail-closed), not as a fallback to
+the build value. Invalid target, SHA or secondary
 origin fails the build. Without `SITE_TARGET` the existing standalone default
 is preserved. `GIT_SHA` is a supplied identifier, not proof of artifact provenance.
 

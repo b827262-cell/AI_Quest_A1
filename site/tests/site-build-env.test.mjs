@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { resolveSiteBuildEnv } from "../scripts/site-build-env.ts";
@@ -17,6 +17,28 @@ test("build inputs reject invalid targets, SHA and origins", () => {
     copy.student.primary_origin = origin;
     assert.throws(() => resolveSiteBuildEnv("student", SHA, copy));
   }
+});
+
+test("build inputs reject mismatched role and site declarations", () => {
+  for (const [field, value] of [["role", "primary"], ["site", "admin"]]) {
+    const copy = structuredClone(targets);
+    copy.student[field] = value;
+    assert.throws(() => resolveSiteBuildEnv("student", SHA, copy), /Invalid site target declaration/);
+  }
+});
+
+test("backend declaration rejects a primary origin", () => {
+  const copy = structuredClone(targets);
+  copy.backend.primary_origin = "https://example.test";
+  assert.throws(() => resolveSiteBuildEnv("backend", SHA, copy), /Primary target must not specify/);
+});
+
+test("invalid SITE_TARGET fails Vite build config resolution", () => {
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", "import { resolveConfig } from 'vite'; await resolveConfig({}, 'build');"], {
+    cwd: process.cwd(), env: { ...process.env, SITE_TARGET: "invalid", GIT_SHA: SHA }, encoding: "utf8"
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SITE_TARGET must be backend, student or admin/);
 });
 
 function verifyBuildArtifacts(directory) {
@@ -53,15 +75,17 @@ async function checkHealthServer(expected) {
 
 test("site builds expose only the chosen topology and honor runtime overrides", async () => {
   const cases = [
-    [undefined, { role: "standalone", site: null, primaryOrigin: null, gitSha: "unknown" }],
     ["backend", { role: "primary", site: "backend", primaryOrigin: null, gitSha: SHA }],
     ["student", { role: "secondary", site: "student", primaryOrigin: targets.student.primary_origin, gitSha: SHA }],
     ["admin", { role: "secondary", site: "admin", primaryOrigin: targets.admin.primary_origin, gitSha: SHA }]
   ];
+  verifyBuildArtifacts("dist");
+  await checkHealthServer({ role: "standalone", site: null, primaryOrigin: null, gitSha: "unknown" });
+  renameSync("dist", "dist-site-build-env-backup");
   try {
     for (const [target, expected] of cases) {
     const env = { ...process.env, GIT_SHA: SHA };
-    if (target === undefined) delete env.SITE_TARGET; else env.SITE_TARGET = target;
+    env.SITE_TARGET = target;
     execFileSync("npm", ["run", "build"], { cwd: process.cwd(), env, stdio: "pipe" });
     verifyBuildArtifacts("dist");
     await checkHealthServer(expected);
@@ -78,13 +102,11 @@ test("site builds expose only the chosen topology and honor runtime overrides", 
       const result = JSON.parse(output.trim().split("\n").at(-1));
       assert.deepEqual(result, ["primary", "backend", "2222222222222222222222222222222222222222", "secondary", "student", SHA, null, "unknown"]);
     }
-      console.log(`site build ${target ?? "standalone"}: ${JSON.stringify(expected)}`);
+      console.log(`site build ${target}: ${JSON.stringify(expected)}`);
     }
   } finally {
-    // Other suites consume dist too; always restore the default standalone build.
-    const env = { ...process.env };
-    delete env.SITE_TARGET;
-    delete env.GIT_SHA;
-    execFileSync("npm", ["run", "build"], { cwd: process.cwd(), env, stdio: "pipe" });
+    // Restore the standalone artifact created by npm test, even on failure.
+    rmSync("dist", { recursive: true, force: true });
+    renameSync("dist-site-build-env-backup", "dist");
   }
 });
