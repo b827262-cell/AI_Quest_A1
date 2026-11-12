@@ -98,7 +98,11 @@ test("site builds expose only the chosen topology and honor runtime overrides", 
         const b=await check({});
         const c=await check({SITE_ROLE:'secondary',SITE_NAME:'student',PRIMARY_ORIGIN:'http://bad.example',GIT_SHA:'invalid'});
         console.log(JSON.stringify([a.role,a.site,a.gitSha,b.role,b.site,b.gitSha,c.primaryOrigin,c.gitSha]));`;
-      const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), env: { PATH: process.env.PATH, NODE_ENV: "test" }, encoding: "utf8" });
+      // dist/server/index.js re-exports a worker entry that statically imports
+      // "cloudflare:workers", which Node cannot resolve on its own; load the same
+      // hooks the test runner and local-qa-server use.
+      const shim = new URL("../tests/support/cloudflare-workers-shim.mjs", import.meta.url).href;
+      const output = execFileSync(process.execPath, ["--import", shim, "--input-type=module", "-e", script], { cwd: process.cwd(), env: { PATH: process.env.PATH, NODE_ENV: "test" }, encoding: "utf8" });
       const result = JSON.parse(output.trim().split("\n").at(-1));
       assert.deepEqual(result, ["primary", "backend", "2222222222222222222222222222222222222222", "secondary", "student", SHA, null, "unknown"]);
     }
