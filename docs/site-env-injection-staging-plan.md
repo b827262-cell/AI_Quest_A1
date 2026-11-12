@@ -4,11 +4,12 @@
 
 ## 程式來源與缺值行為
 
-- `site/worker/index.ts` 的 `fetch(request, env, ctx)` 每次請求都把 `env.SITE_ROLE`、`env.SITE_NAME`、`env.PRIMARY_ORIGIN`、`env.GIT_SHA` 複製到 `globalThis`，包含 `undefined`；`backend-client.ts` 每次讀取 global，未有值才回落 `globalThis.__env__`。不是從 hostname 或 `process.env` 直接推斷站別。`/api/health` 對這些欄位依序讀 global、`__env__`、`env` 的 global 容器；這些 fallback 的存在**不能證明** Sites 會提供它們。
+- `site/worker/index.ts` 的 `fetch(request, env, ctx)` 每次請求都把 `env.SITE_ROLE`、`env.SITE_NAME`、`env.PRIMARY_ORIGIN`、`env.GIT_SHA` 複製到 `globalThis`，包含 `undefined`。`/api/health` 的 `gitSha` 與 `d1`／`r2` 透過 `runtimeBinding` 依序讀取 `globalThis` → `globalThis.__env__` → `globalThis.env`；`role`、`site`、`primaryOrigin` 則由 `readSiteDeclaration` 只讀取 `globalThis` → `globalThis.__env__`，不讀 `globalThis.env`。因此若只有 `globalThis.env` 注入這些值，health 可以顯示 `gitSha`，角色仍是 `standalone`。站別不是從 hostname 或 `process.env` 直接推斷；fallback 的存在**不能證明** Sites 會提供它們。
+- fetch 只覆寫直接掛在 `globalThis` 上的四個值，不會覆寫 build-time 寫入 `globalThis.__env__` 容器的值；是否能以此實作安全可靠的 build-time 注入仍須另行驗證。
 - `site/.openai/hosting.json` 宣告一個 project ID 及 D1／R2 binding 名稱，沒有這四個值。`site/deploy/targets.json` 與 `docs/ops/three-site-runbook.md` 是三站期望配置：backend 為 `primary/backend`、student 和 admin 為對應 `secondary`，次站的 `primary_origin` 是指定主站 origin；這些檔案不是 Worker 執行期自動注入的證據，也不得把其中 production 值用作本測試。
 - `SITE_ROLE` 與 `SITE_NAME` 都缺少時進入 `standalone`、不代理；**這不是全面 fail-closed**，仍使用既有本地行為。只缺一個、或角色與站名不成對時為 `misconfigured`；除 health 外的 API 回 503 `site_misconfigured`。`/api/health` 仍回 200，不能只看 HTTP 狀態判斷配置正確。
 - primary/backend 忽略 `PRIMARY_ORIGIN`。secondary/student 或 secondary/admin 需要純 HTTPS origin；缺少或不合法時 health 的 `primaryOrigin` 為 `null`，production 的次站代理請求回 503 `backend_disabled`，不對外轉送；非 production 原本不執行代理。
-- `GIT_SHA` 供 health 識別，必須是 7–40 位十六進位；否則退回注入的 build identity，再無有效值為 `unknown`。它不會令路由 fail-closed，也不是單憑回傳值證明實際 build SHA 的不可偽造憑據。
+- `GIT_SHA` 供 health 識別，必須是 7–40 位十六進位；否則退回注入的 build identity，再無有效值為 `unknown`。`identitySource=environment` 只表示 identity 的 env 輸入中有非空值，不代表 SHA 有效；判讀時必須檢查 `gitSha` 本身。它不會令路由 fail-closed，也不是單憑回傳值證明實際 build SHA 的不可偽造憑據。
 
 ## 本機證據（不代表 Sites 行為）
 
@@ -37,6 +38,6 @@
 
 ## 判準與回滾
 
-- **執行期注入有證據**：同一份 artifact 在 A、B 間沒有重新建置，平台確認變更的來源是 runtime configuration，且多次 health 顯示各自正確 role/site/origin 與同一有效 SHA；平台 revision／artifact 身分與操作紀錄可追溯。只有健康頁顯示固定 A 值，不能證明注入時機。
-- **未證實或失敗**：值維持舊值、`standalone`／`misconfigured`、`primaryOrigin=null`、`gitSha=unknown`／不符、意外 production 資源綁定，或無法證明使用同一 artifact 時，停止並回報；若平台只支援 build-time 值，標為待設計，不得假設可用：目前 Worker 在每次請求會用缺失的 `env` 值覆寫 global，build-time 方案仍需另行設計及測試。
+- **執行期注入有證據**：同一份 artifact 在 A、B 間沒有重新建置，平台確認變更的來源是 runtime configuration，且多次 health 顯示各自正確 role/site/origin 與同一有效 SHA；A、B 兩次測試前後都要記錄 `dist` 的 `PACKAGE_SHA` 與平台 revision，確認 artifact 沒有變，且平台 revision／artifact 身分與操作紀錄可追溯；若平台無法驗證已部署 artifact 與本地 hash 的關係，不能僅憑本地 hash 視為已證實。只有健康頁顯示固定 A 值，不能證明注入時機。
+- **未證實或失敗**：值維持舊值、`standalone`／`misconfigured`、`primaryOrigin=null`、`gitSha=unknown`／不符、意外 production 資源綁定，或無法證明使用同一 artifact 時，停止並回報；若平台只支援 build-time 值，標為待設計，不得假設可用：目前 Worker 在每次請求會用缺失的 `env` 值覆寫直接掛在 `globalThis` 的值，但不覆寫 `globalThis.__env__` 容器；build-time 方案仍需另行設計及測試。
 - **回滾**：Owner 以事前記錄的 staging revision／artifact 和非秘密設定恢復，驗證 health 與隔離綁定；如無法安全恢復，停止 staging 流量並回報 Owner。不要刪除 production 變數或改 production routing。測試不要求登入、部署命令、寫入資料或執行 migration 在本階段發生。
