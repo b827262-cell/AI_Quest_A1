@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { classifyApiPath, gateApiRequest } from "../app/api/backend-client.ts";
+import { verifySiteTarget } from "../scripts/verify-site-target.mjs";
 
 // Three sites in one process. Every request carries the runtime declaration its
 // site would receive from Sites (SITE_ROLE, SITE_NAME, PRIMARY_ORIGIN, GIT_SHA).
@@ -359,4 +362,103 @@ test("deploy targets agree with the production manifest, the hosting declaration
     false,
     "the legacy repo-root hosting manifest must stay removed",
   );
+});
+
+function makeFixtureDir(overrides = {}) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "n-r472-"));
+  const deployDir = path.join(tmpDir, "deploy");
+  const openaiDir = path.join(tmpDir, ".openai");
+  const distServerDir = path.join(tmpDir, "dist", "server");
+  fs.mkdirSync(deployDir, { recursive: true });
+  fs.mkdirSync(openaiDir, { recursive: true });
+  fs.mkdirSync(distServerDir, { recursive: true });
+  const targets = {
+    targets: {
+      backend: { site: "backend", role: "primary", project_id: "proj_backend" },
+      student: { site: "student", role: "secondary", project_id: "proj_student" },
+      admin: { site: "admin", role: "secondary", project_id: "proj_admin" },
+    },
+  };
+  const hosting = { project_id: "proj_backend" };
+  const distContent = overrides.distContent ?? `{"SITE_ROLE":"primary","SITE_NAME":"backend"}`;
+  if (overrides.targets) Object.assign(targets, overrides.targets);
+  if (overrides.hosting) Object.assign(hosting, overrides.hosting);
+  fs.writeFileSync(path.join(distServerDir, "index.js"), distContent);
+  fs.writeFileSync(path.join(deployDir, "targets.json"), JSON.stringify(targets));
+  fs.writeFileSync(path.join(openaiDir, "hosting.json"), JSON.stringify(hosting));
+  return { tmpDir, deployDir, openaiDir, distServerDir, targets, hosting };
+}
+
+test("verify-site-target: consistent target passes", () => {
+  const { tmpDir, deployDir, openaiDir, distServerDir } = makeFixtureDir({
+    distContent: `{"SITE_ROLE":"secondary","SITE_NAME":"student"}`,
+    hosting: { project_id: "proj_student" },
+  });
+  const result = verifySiteTarget({
+    siteTarget: "student",
+    targets: JSON.parse(fs.readFileSync(path.join(deployDir, "targets.json"), "utf8")),
+    hosting: JSON.parse(fs.readFileSync(path.join(openaiDir, "hosting.json"), "utf8")),
+    distServerDir,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.projectId, "proj_student");
+  assert.equal(result.site, "student");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("verify-site-target: project_id mismatch fails", () => {
+  const { tmpDir, deployDir, openaiDir, distServerDir } = makeFixtureDir({
+    distContent: `{"SITE_ROLE":"secondary","SITE_NAME":"student"}`,
+    hosting: { project_id: "WRONG_PROJECT" },
+  });
+  const result = verifySiteTarget({
+    siteTarget: "student",
+    targets: JSON.parse(fs.readFileSync(path.join(deployDir, "targets.json"), "utf8")),
+    hosting: JSON.parse(fs.readFileSync(path.join(openaiDir, "hosting.json"), "utf8")),
+    distServerDir,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.projectId, "WRONG_PROJECT");
+  assert.match(result.errors[0], /project_id mismatch/);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("verify-site-target: role/site mismatch fails", () => {
+  const { tmpDir, deployDir, openaiDir, distServerDir } = makeFixtureDir({
+    distContent: `{"SITE_ROLE":"primary","SITE_NAME":"backend"}`,
+  });
+  const result = verifySiteTarget({
+    siteTarget: "student",
+    targets: JSON.parse(fs.readFileSync(path.join(deployDir, "targets.json"), "utf8")),
+    hosting: JSON.parse(fs.readFileSync(path.join(openaiDir, "hosting.json"), "utf8")),
+    distServerDir,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.errors[0], /role\/site mismatch/);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("verify-site-target: SITE_TARGET missing fails", () => {
+  const { tmpDir, deployDir, openaiDir, distServerDir } = makeFixtureDir();
+  const result = verifySiteTarget({
+    targets: JSON.parse(fs.readFileSync(path.join(deployDir, "targets.json"), "utf8")),
+    hosting: JSON.parse(fs.readFileSync(path.join(openaiDir, "hosting.json"), "utf8")),
+    distServerDir,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.errors[0], /SITE_TARGET is required/);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("verify-site-target: invalid SITE_TARGET fails", () => {
+  const { tmpDir, deployDir, openaiDir, distServerDir } = makeFixtureDir();
+  const result = verifySiteTarget({
+    siteTarget: "frontend",
+    targets: JSON.parse(fs.readFileSync(path.join(deployDir, "targets.json"), "utf8")),
+    hosting: JSON.parse(fs.readFileSync(path.join(openaiDir, "hosting.json"), "utf8")),
+    distServerDir,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.errors[0], /invalid SITE_TARGET: frontend/);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
