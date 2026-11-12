@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const distRoot = join(process.cwd(), "dist");
+const distRoot = fileURLToPath(new URL("../dist/", import.meta.url));
 
 function requireBuiltBundle(): void {
   // Clean-checkout guard: this suite asserts against the PRODUCTION bundle,

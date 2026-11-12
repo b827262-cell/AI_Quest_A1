@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   ADMIN_CSRF_COOKIE,
@@ -180,7 +179,7 @@ describe("admin login async KDF and throttling", () => {
     const throttle = createAdminLoginThrottle({ windowMs: 2_000, sourceLimit: 1, accountLimit: 10 });
     throttle.reserve("192.0.2.1", "admin", 1_000);
     expect(throttle.reserve("192.0.2.1", "other", 1_001)).toMatchObject({ allowed: false, retryAfterSeconds: 2 });
-    const appSource = readFileSync(join(process.cwd(), "src/server/app.ts"), "utf8");
+    const appSource = readFileSync(new URL("../app.ts", import.meta.url), "utf8");
     expect(appSource.indexOf("adminLoginThrottle.reserve")).toBeLessThan(appSource.indexOf("await adminCredentialsMatch"));
     expect(appSource).toContain('res.setHeader("Retry-After"');
   });
@@ -240,7 +239,7 @@ describe("canonical CSRF cookie contract", () => {
   });
 
   it("CSRF-CONTRACT-6: the SPA reads the shared canonical contract", () => {
-    const transportSource = readFileSync(join(process.cwd(), "src/api-transport.ts"), "utf8");
+    const transportSource = readFileSync(new URL("../../api-transport.ts", import.meta.url), "utf8");
     expect(transportSource).toContain('import { ADMIN_CSRF_COOKIE } from "./admin-auth-contract"');
     expect(transportSource).toContain("`${ADMIN_CSRF_COOKIE}=`");
     expect(transportSource).not.toContain('const prefix = "ai_admin_csrf="');

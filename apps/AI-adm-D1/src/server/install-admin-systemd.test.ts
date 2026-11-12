@@ -1,10 +1,11 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const repoRoot = join(process.cwd(), "..", "..");
+const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const installer = join(repoRoot, "deploy/scripts/install-admin-systemd.sh");
 let testRoot = "";
 let binDir = "";
