@@ -79,7 +79,52 @@ Worker 會在每個請求開始時，把這些變數從 `env` 複製到 `globalT
 
 注意：次站若只部署程式碼、未設定 `SITE_ROLE` 與 `PRIMARY_ORIGIN`，會退回本地 standalone 行為，且沒有 D1，使頁面 API 出錯。部署前必須先設定變數。主站若未設定 `ADMIN_EMAILS`，管理端會 fail-closed 而無人可登入；`/api/health` 的 `adminAllowlist` 為 `unset` 即為此徵兆。
 
-## 6. 部署後驗證（只使用 GET）
+## 6. 建置與部署前檢查
+
+每站都必須先建置，再執行部署前檢查，通過後才能部署。
+
+### 6.1 每站的建置指令
+
+```bash
+# 主站
+SITE_TARGET=backend GIT_SHA=<40 位完整 commit SHA> npm run build
+
+# 學生次站
+SITE_TARGET=student GIT_SHA=<40 位完整 commit SHA> npm run build
+
+# 管理次站
+SITE_TARGET=admin GIT_SHA=<40 位完整 commit SHA> npm run build
+```
+
+三站必須使用同一個 commit 的完整 SHA（40 個十六進位字元）。`GIT_SHA` 必須是完整 SHA，不接受短 SHA；`site/scripts/site-build-env.ts` 會拒絕非 40 位的值。
+
+不設 `SITE_TARGET` 時，建置會以 `standalone` 模式進行，不綁定任何 Sites 角色，僅供本地開發使用，不得部署到 production。
+
+### 6.2 部署前檢查
+
+建置完成後，必須對同一站執行：
+
+```bash
+SITE_TARGET=<同一站> npm run site:preflight
+```
+
+檢查通過（exit 0）後才能部署。`site:preflight` 執行 `site/scripts/verify-site-target.mjs`，驗證：
+
+1. `SITE_TARGET` 必填且為 `backend`、`student` 或 `admin` 之一。
+2. 建置產物 `dist/server` 中嵌入的 `SITE_ROLE` 與 `SITE_NAME`（透過載入 Worker 並呼叫其 `/api/health` 讀取 JSON 回應）必須與 `site/deploy/targets.json` 中該 target 的 `role` 與 `site` 一致。
+3. `site/.openai/hosting.json` 的 `project_id` 必須等於 `site/deploy/targets.json` 中該 target 的 `project_id`。否則以非零 exit 結束並印出原因（只印 `project_id` 與站名，不印其他設定）。
+
+### 6.3 已知限制
+
+目前 `site/.openai/hosting.json` 只記錄主站（backend）的 `project_id`。因此 student 與 admin 的 `site:preflight` 一定會失敗於第 6.2 節第 3 點（`project_id` 不符），這是預期的阻擋。
+
+在 Owner 決定次站的部署方式之前，不得部署 student 或 admin 次站。只有主站的 `site:preflight` 目前可通過。
+
+### 6.4 執行期 env 與建置值的關係
+
+建置時寫入的 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA` 是預設值。執行期若有對應的 env 值，會覆蓋建置值。執行期的空字串會被視為無效，站點將 fail-closed（例如 `SITE_ROLE=""` 會導致站點視為 `misconfigured`，除了 `/api/health` 外所有 `/api/*` 回 503）。
+
+## 7. 部署後驗證（只使用 GET）
 
 ```bash
 curl -sS https://ai-quest-a1-backend.b827262.chatgpt.site/api/health
@@ -96,28 +141,28 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://ai-quest-a1-student.b827262.ch
 - 學生次站的 `/api/student/me` 回應帶 `x-data-plane: primary`。
 - 次站的 `/api/internal/sync/runs` 與 `/api/admin/overview` 回 `404`。
 
-## 7. 回滾
+## 8. 回滾
 
 - 三站回到上一個已驗證的 commit。production manifest 目前記錄的 deployed commit 為 `f0085202150c67760040644f1db3d6c479dc2074`，實際回滾目標以 Owner 指定為準。
 - 不建議只移除次站的 `SITE_ROLE` 作為回滾。這會讓次站退回沒有 D1 的本地 standalone 行為。較安全的做法是回滾次站的 commit。
 - 若要暫時停止次站代理，可移除 `PRIMARY_ORIGIN`。次站的 API 會回 503 `backend_disabled`，不會對外呼叫。
 
-## 8. 開放問題與已知限制
+## 9. 開放問題與已知限制
 
 - **O-1 身分轉送已改為簽章（PR #57／#58）。** 次站以每站金鑰對入站的 `oai-*` 做 HMAC-SHA256 簽章，刪除入站 `oai-*`／`x-a01-relay-*` 後帶 `x-a01-relay-*` 轉送；主站驗章通過才採用作身分。上線、驗證、回滾與金鑰輪替見 [`relay-rollout.md`](./relay-rollout.md)。管理員權限仍只由伺服器端 `ADMIN_EMAILS` allowlist 決定：`oai-authenticated-user-role` 與 email 子字串都不授予管理員（issue #47）；`x-admin-key` 僅在非 production 的合成測試有效。**O-1a 仍是上線前閘門**：次站會替入站 `oai-*` 簽章，上線前須先確認 Sites 會在請求抵達 Worker 前清除外來的 `oai-*`，否則直打次站即可偽造身分；未通過前不得進入 `transitional`／`strict`。
-- **O-2 平台注入方式待確認。** 需確認 Sites 是否支援每個專案注入自己的執行期變數與 secret。若只能於建置時寫入，則必須逐站建置，並寫入 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA`（不含 secret）。
+- **O-2 平台注入方式待確認。** 需確認 Sites 是否支援每個專案注入自己的執行期變數與 secret。若只能於建置時寫入，則必須逐站建置，並寫入 `SITE_ROLE`、`SITE_NAME`、`PRIMARY_ORIGIN`、`GIT_SHA`（不含 secret）。方案二已由 PR #134 實作建置時注入原型（`site/scripts/site-build-env.ts`），並由 PR #136 加入部署前檢查（`site/scripts/verify-site-target.mjs`、`npm run site:preflight`）。目前 `site/.openai/hosting.json` 只有 backend 的 project_id，secondary 的 preflight 預期會失敗，待 Owner 決定 secondary 部署方式。
 - **O-3 逐站部署工具未納入本版。** 設計文件第 5 節提到的 `deploy-target.mjs` 與 `npm run deploy:target` 未納入本版。在工具完成前，請依第 5 節手動部署。
 - **O-4 主站直接回應的標籤仍為舊值。** 主站本地路由仍標示 `x-data-plane: shared-backend`，本版未改動各路由。只有次站的代理回應標示 `primary`。
 - **O-5 `x-served-by` 未實作。** 設計文件提到的 `x-served-by` 標頭本版未加入。
 - **O-6 production manifest 仍為舊的 legacy 證據。** `docs/phase4a/environment-source-of-truth.json` 尚未依新契約重新擷取。擷取只能在三站上線後進行，且寫回須經 Owner 指示。
 - **O-7 `site/.openai/hosting.json` 保留。** 它是主站的宣告（project `appgprj_6aa8…`），也是 alignment 門禁讀取的來源，不可刪除。repo 根目錄的舊 `.openai/hosting.json` 已於先前移除，本版測試會確認它不存在。
 
-## 9. 本地驗證
+## 10. 本地驗證
 
 - `cd site && npm ci && npm run typecheck && npm test`。`tests/three-site-topology.test.mjs` 會在同一程序內模擬三站，不需要網路。
 - `npm run environment:align:production`，在 `site/` 目錄執行。
 - 本手冊的步驟不包含對 production 的寫入。所有 production 驗證僅使用 GET。
 
-## 10. 身分轉送簽章上線
+## 11. 身分轉送簽章上線
 
 次站簽章（PR #57）與主站驗章（PR #58）的上線另見 [`relay-rollout.md`](./relay-rollout.md)：概念與三模式行為表、執行期變數清單、上線前閘門（含 O-1a）、部署順序與 `/api/health` 驗證、回滾、金鑰輪替與疑難排解。上線順序為主站 `transitional` → 次站 → 觀察 → 主站 `strict`；每站部署都需 Owner 逐站授權。
