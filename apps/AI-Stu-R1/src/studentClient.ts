@@ -43,6 +43,7 @@ export type GuestAnswerStatus =
   | "incomplete"
   | "limit_reached"
   | "rate_limited"
+  | "busy"
   | "disabled"
   | "error";
 
@@ -276,7 +277,7 @@ export const studentClient = {
       signal
     });
     const data = await res.json().catch(() => ({})) as Partial<GuestAskResponse> & { error?: string | { code?: string; message?: string } };
-    if (res.status === 429 && (data.status === "limit_reached" || data.status === "rate_limited")) {
+    if ((res.status === 429 && (data.status === "limit_reached" || data.status === "rate_limited")) || (res.status === 503 && data.status === "busy")) {
       return { ...data, requestId: data.requestId ?? "", status: data.status };
     }
     if (!res.ok) {

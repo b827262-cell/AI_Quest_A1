@@ -15,6 +15,12 @@ describe("guest quota responses", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "other", message: "拒絕" }), { status: 429 })));
     await expect(studentClient.askAsGuest({ question: "題目", category: "auto", sourceType: "manual" })).rejects.toThrow("拒絕");
   });
+  it("returns the capacity busy response without a remaining count", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "busy", message: "訪客服務目前繁忙，請稍後再試或登入使用" }), { status: 503 })));
+    const response = await studentClient.askAsGuest({ question: "題目", category: "auto", sourceType: "manual" });
+    expect(response).toMatchObject({ status: "busy" });
+    expect(response.remainingGuestQuestions).toBeUndefined();
+  });
   it("continues to reject unrelated failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: "服務失敗" }), { status: 503 })));
     await expect(studentClient.askAsGuest({ question: "題目", category: "auto", sourceType: "manual" })).rejects.toThrow("服務失敗");

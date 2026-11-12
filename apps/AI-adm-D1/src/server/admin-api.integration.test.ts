@@ -5,6 +5,7 @@ import { join } from "node:path";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAdminApp } from "./app";
+import { createGuestUsageStore } from "./guest-usage-store";
 import { createAdminTestDependencies } from "./dependencies";
 import { createDbHandle, type DbHandle } from "@ai-smartbook/db";
 import { createAdminSessionSecrets, digestAdminSecret } from "./ai/admin-auth";
@@ -38,7 +39,7 @@ function buildTestApp() {
   process.env = { ...process.env, ...env, SQLITE_PATH: join(directory, "admin.db") };
   delete process.env.ADMIN_PASSWORD_HASH;
   const dependencies = createAdminTestDependencies(process.env, dbHandle);
-  return { app: createAdminApp(dependencies), dependencies, dbHandle, token };
+  return { app: createAdminApp(dependencies, undefined, () => "2026-11-12"), dependencies, dbHandle, token };
 }
 
 function seedCredential(dependencies: ReturnType<typeof createAdminTestDependencies>) {
@@ -116,6 +117,37 @@ describe("Admin API HTTP authentication and quota behavior", () => {
       const otherAgain = await ask("203.0.113.42");
       expect(otherAgain.status).toBe(200);
       expect(otherAgain.body.remainingGuestQuestions).toBe(1);
+    } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
+  });
+
+  it("returns busy at capacity and evicts an exhausted IP after one hour", async () => {
+    const { dependencies, dbHandle } = buildTestApp();
+    const warning = vi.fn();
+    const store = createGuestUsageStore({ capacity: 1, warn: warning });
+    const app = createAdminApp(dependencies, store, () => "2026-11-12");
+    const gateway = vi.spyOn(dependencies.aiGateway, "run").mockResolvedValue({
+      result: { provider: "mock", model: "test", answer: "測試答案。", latencyMs: 0 }
+    } as Awaited<ReturnType<typeof dependencies.aiGateway.run>>);
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const ask = (ip: string) => request(app).post("/api/public/guest-ask").set("CF-Connecting-IP", ip).send({ question: "測試題目" });
+      for (let i = 0; i < 3; i++) {
+        expect((await ask("203.0.113.61")).status).toBe(200);
+        now += 21_000;
+      }
+      const denied = await ask("203.0.113.62");
+      expect(denied.status).toBe(503);
+      expect(denied.headers["retry-after"]).toBe("60");
+      expect(denied.body).toEqual({ status: "busy", message: "訪客服務目前繁忙，請稍後再試或登入使用" });
+      const original = await ask("203.0.113.61");
+      expect(original.status).toBe(429);
+      expect(original.body.remainingGuestQuestions).toBe(0);
+      expect(warning).toHaveBeenCalledOnce();
+      now += 3_600_001;
+      const admitted = await ask("203.0.113.62");
+      expect(admitted.status).toBe(200);
+      expect(admitted.body.remainingGuestQuestions).toBe(2);
     } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
   });
 
