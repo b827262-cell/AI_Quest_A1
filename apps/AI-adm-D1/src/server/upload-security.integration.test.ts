@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDbHandle } from "@ai-smartbook/db";
@@ -263,6 +263,52 @@ describe("admin upload security boundaries", () => {
     } finally {
       cleanupFailEnabled = false;
       vi.restoreAllMocks();
+    }
+  });
+
+  describe("path traversal upload filenames", () => {
+    const traversalCases = [
+      { name: "dotdot-slash", filename: "../traversal.pdf", bytes: pdf, type: "application/pdf" },
+      { name: "dotdot-backslash", filename: "..\\\\escape.pdf", bytes: pdf, type: "application/pdf" },
+      { name: "url-encoded-dotdot-slash", filename: "%2e%2e%2ftest.pdf", bytes: pdf, type: "application/pdf" },
+      { name: "deep-dotdot", filename: "../../../etc/passwd", bytes: pdf, type: "application/pdf" }
+    ];
+
+    for (const c of traversalCases) {
+      it(`sanitizes ${c.name} filename and keeps resolved path inside upload root`, async () => {
+        const { app, book, uploadDir, token } = fixture();
+        const endpoint = `/api/admin/books/${book.id}/files`;
+        const pendingDir = join(uploadDir, ".pending");
+        const bookDir = join(uploadDir, book.id);
+
+        const response = await request(app).post(endpoint).set("x-admin-token", token)
+          .attach("file", c.bytes, { filename: c.filename, contentType: c.type });
+
+        // Either accepted with sanitized name, or rejected. Never 500 / never escapes.
+        expect([201, 400, 415].includes(response.status), `unexpected status ${response.status} for ${c.name}`).toBe(true);
+
+        const pendingFiles = filesIn(pendingDir);
+        const bookFiles = filesIn(bookDir);
+
+        // No leftover files in pending dir after the request completes.
+        expect(pendingFiles.length).toBe(0);
+
+        // If accepted, the stored file must resolve inside the book upload dir.
+        if (response.status === 201) {
+          const storedName = response.body.file.fileName;
+          const storedPath = response.body.file.filePath;
+          const resolved = resolve(storedPath);
+          const rootResolved = resolve(uploadDir);
+          expect(resolved.startsWith(rootResolved + "/") || resolved === rootResolved,
+            `resolved path escapes upload root: ${resolved}`).toBe(true);
+          // The stored name must not contain path separators that could escape.
+          expect(storedName).not.toMatch(/[\/\\]/);
+          expect(bookFiles.length).toBe(1);
+        } else {
+          // Rejected: no file persisted.
+          expect(bookFiles.length).toBe(0);
+        }
+      });
     }
   });
 });
