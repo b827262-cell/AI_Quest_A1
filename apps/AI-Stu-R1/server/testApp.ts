@@ -24,8 +24,9 @@ import {
 } from "@ai-smartbook/auth/express";
 import type { StudentDataSource } from "@ai-smartbook/student-runtime";
 import type { Book, BookContent } from "@ai-smartbook/schema";
-import { createStudentRagRouter } from "./student-rag";
+import { createStudentRagRouter, type StudentRagEnv } from "./student-rag";
 import { registerHealthRoutes, type HealthReadyCheck } from "./health-routes";
+import { registerStudentBookRoutes } from "./student-book-routes";
 import { startFakeAccessCerts } from "../../../scripts/student-access-fixture";
 
 /**
@@ -114,6 +115,10 @@ export interface StartStudentTestAppOptions {
   readyTimeoutMs?: number;
   mountTestAdmin?: boolean;
   beforePasscodeCommit?: () => void;
+  /** Replaces the in-memory data source (pass `null` to simulate an unavailable one). */
+  dataSource?: StudentDataSource | null;
+  /** RAG environment override, e.g. to exercise provider failures. */
+  ragEnv?: StudentRagEnv;
 }
 
 export async function startStudentTestApp(options: StartStudentTestAppOptions): Promise<StudentTestApp> {
@@ -130,13 +135,14 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
     STUDENT_SESSION_TTL_MS: String(options.sessionTtlMs)
   });
   const runtime = createStudentAuthRuntime(join(directory, "auth.sqlite"), config, Date.now, options.beforePasscodeCommit);
-  const dataSource = createMemoryDataSource();
+  const dataSource = options.dataSource === undefined ? createMemoryDataSource() : options.dataSource;
 
   const app: Express = express();
   app.use("/api/student/learning-history", express.json({ limit: MAX_LEARNING_HISTORY_BODY_BYTES }));
   app.use(express.json());
   // Same placement as stu-api.ts: public probes before the auth boundary.
   registerHealthRoutes(app, options.readyCheck ?? (async () => {
+    if (!dataSource) throw new Error("student data source unavailable");
     await dataSource.listBooks();
   }), { timeoutMs: options.readyTimeoutMs });
   if (options.mountTestAdmin) {
@@ -154,18 +160,15 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   app.use("/api/student", createStudentLearningHistoryRouter(runtime.learningHistory, config));
   app.use("/api/student", createStudentRagRouter({
     getDataSource: () => dataSource,
-    env: { provider: "fake" }
+    env: options.ragEnv ?? { provider: "fake" }
   }));
-  app.get("/api/student/books", async (_req, res) => {
-    res.json({ books: await dataSource.listBooks() });
-  });
-  app.get("/api/student/books/:bookId", async (req, res) => {
-    const book = await dataSource.getBook(String(req.params.bookId));
-    if (!book) return res.status(404).json({ error: "book not found" });
-    res.json({ book });
-  });
-  app.get("/api/student/books/:bookId/contents", async (req, res) => {
-    res.json({ contents: await dataSource.getContents(String(req.params.bookId)) });
+  // Same route module as stu-api.ts, so error-sanitisation cases exercise the
+  // real handlers instead of a copy.
+  registerStudentBookRoutes(app, {
+    getDataSource: () => dataSource,
+    mode: "sqlite-api",
+    chatMode: "keyword",
+    uploadDir: directory
   });
 
   // Mirror the production error boundary: oversize bodies answer JSON 413,
