@@ -1605,9 +1605,17 @@ function resolveStudentSession(
 ): { session: ChatSession; clientInfo: ClientInfo } | null {
   const sessionId = options.sessionIdOverride?.trim() || resolveStudentSessionId(req);
   const existingSession = sessionId ? repos.chat.findSessionById(sessionId) : null;
+  // Sessions are personal. A session owned by another student (or a legacy row
+  // with no owner) is reported as missing rather than forbidden, so a caller
+  // cannot probe which ids exist.
+  const studentId = req.studentAuth?.user.id ?? null;
 
   if (sessionId && !existingSession) {
     fail(res, 401, "invalid session");
+    return null;
+  }
+  if (existingSession && (!studentId || existingSession.userId !== studentId)) {
+    fail(res, 404, "session not found");
     return null;
   }
   if (existingSession && existingSession.bookId !== bookId) {
@@ -1628,6 +1636,7 @@ function resolveStudentSession(
     }
     const created = repos.chat.createSession({
       bookId,
+      userId: studentId,
       title: options.title ?? "Reader session",
       ...enrichSessionClientInfo(null, clientInfo)
     });

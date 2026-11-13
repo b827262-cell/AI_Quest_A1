@@ -133,6 +133,10 @@ export const bookQaLogs = sqliteTable("book_qa_logs", {
 export const smartBookNotes = sqliteTable("smart_book_notes", {
   id: text("id").primaryKey(),
   bookId: text("book_id").notNull(),
+  // Notes are personal: only the student who created a note may read or change
+  // it. NULL marks rows written before ownership existed; they stay readable by
+  // nobody on the student surface (fail-closed) and are never auto-assigned.
+  studentId: text("student_id"),
   chapterId: text("chapter_id"),
   pageNumber: integer("page_number"),
   type: text("type").notNull().default("text"),

@@ -1130,6 +1130,13 @@ export function runMigrations(sqlite: Database.Database): void {
     addColumnIfMissing(sqlite, "books", "category", "category TEXT NOT NULL DEFAULT '未分類'");
     addColumnIfMissing(sqlite, "book_files", "role", "role TEXT NOT NULL DEFAULT 'source_document'");
     addColumnIfMissing(sqlite, "book_files", "related_file_id", "related_file_id TEXT");
+    // Personal note ownership. Legacy rows keep student_id NULL: they are
+    // hidden from every student (fail-closed) and deliberately not backfilled,
+    // because the old schema cannot prove who wrote them.
+    addColumnIfMissing(sqlite, "smart_book_notes", "student_id", "student_id TEXT");
+    // Created here (not in STATEMENTS) because it depends on the column added
+    // just above; databases with the previous schema lack it.
+    sqlite.exec("CREATE INDEX IF NOT EXISTS idx_smart_book_notes_student ON smart_book_notes(student_id, book_id)");
     addColumnIfMissing(sqlite, "ai_usage_logs", "credential_id", "credential_id TEXT");
     // Credential compliance metadata. Legacy rows are deliberately unknown;
     // migration never infers a Personal or production plan from old fields.
