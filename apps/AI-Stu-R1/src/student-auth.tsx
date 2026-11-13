@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import type { StudentProfile, StudentUser } from "@ai-smartbook/auth/browser";
-import { studentClient } from "./studentClient";
+import { resetStudentUnauthorizedNotification, setStudentUnauthorizedHandler, studentClient } from "./studentClient";
 
 type StudentAuthStatus = "loading" | "authenticated" | "anonymous";
 
@@ -21,16 +21,47 @@ export function StudentAuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<StudentAuthStatus>("loading");
   const [user, setUser] = useState<StudentUser | null>(null);
   const [profile, setProfile] = useState<StudentProfile | null>(null);
+  const logoutInFlightRef = useRef(false);
+  const invalidatedRef = useRef(false);
+
+  const clearAuthState = useCallback(() => {
+    setUser(null);
+    setProfile(null);
+    setStatus("anonymous");
+  }, []);
+
+  const handleUnauthorized = useCallback(() => {
+    if (logoutInFlightRef.current || invalidatedRef.current) return;
+    invalidatedRef.current = true;
+    clearAuthState();
+    navigate("/login", { replace: true, state: { reason: "session_expired" } });
+  }, [clearAuthState, navigate]);
+
+  useEffect(() => {
+    setStudentUnauthorizedHandler(handleUnauthorized);
+    return () => setStudentUnauthorizedHandler(null);
+  }, [handleUnauthorized]);
 
   const refresh = useCallback(async () => {
+    if (logoutInFlightRef.current || invalidatedRef.current) return;
     try {
       const result = await studentClient.getStudentMe();
+      if (logoutInFlightRef.current || invalidatedRef.current) return;
       setUser(result.user);
       setProfile(result.profile);
-      setStatus(result.authenticated ? "authenticated" : "anonymous");
+      if (result.authenticated) {
+        invalidatedRef.current = false;
+        resetStudentUnauthorizedNotification();
+        setStatus("authenticated");
+      } else {
+        invalidatedRef.current = true;
+        setStatus("anonymous");
+      }
     } catch {
+      if (logoutInFlightRef.current || invalidatedRef.current) return;
       setUser(null);
       setProfile(null);
+      invalidatedRef.current = true;
       setStatus("anonymous");
     }
   }, []);
@@ -40,20 +71,29 @@ export function StudentAuthProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const logout = useCallback(async () => {
+    if (logoutInFlightRef.current) return;
+    logoutInFlightRef.current = true;
+    invalidatedRef.current = true;
     try {
       await studentClient.logoutStudent();
     } finally {
-      setUser(null);
-      setProfile(null);
-      setStatus("anonymous");
+      clearAuthState();
       navigate("/login", { replace: true });
     }
-  }, [navigate]);
+  }, [clearAuthState, navigate]);
 
   const updateProfile = useCallback(async (input: { displayName: string; schoolName: string; gradeLevel: string }) => {
+    if (logoutInFlightRef.current || invalidatedRef.current) {
+      throw new Error("student session is not active");
+    }
     const result = await studentClient.updateStudentProfile(input);
+    if (logoutInFlightRef.current || invalidatedRef.current) {
+      throw new Error("student session is not active");
+    }
     setProfile(result.profile);
     setUser(result.profile);
+    invalidatedRef.current = false;
+    resetStudentUnauthorizedNotification();
     setStatus("authenticated");
     return result.profile;
   }, []);

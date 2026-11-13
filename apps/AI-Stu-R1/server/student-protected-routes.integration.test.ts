@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   completeAccessLogin,
@@ -329,6 +328,42 @@ describe("Student protected routes over real HTTP (C-1/C-2 negative paths)", () 
     const body = await blocked.json();
     expect(body.error.code).toBe("RAG_INJECTION_BLOCKED");
   });
-});
 
-void rmSync;
+
+  it("keeps a revoked session replay stably 401 when logout races with protected requests", async () => {
+    const { baseUrl, browser } = await startAndLogin({ sessionTtlMs: 3_600_000, completeProfile: true });
+    const cookie = browser.cookie;
+    expect(cookie).toBeTruthy();
+
+    const logout = originalFetch(`${baseUrl}/api/student/auth/logout`, {
+      method: "POST",
+      headers: { origin: STUDENT_TEST_ORIGIN, cookie: cookie! }
+    });
+    const protectedRequests = Array.from({ length: 8 }, () =>
+      originalFetch(`${baseUrl}/api/student/books`, {
+        headers: { cookie: cookie! },
+        redirect: "manual"
+      })
+    );
+
+    const [logoutResponse, ...protectedResponses] = await Promise.all([logout, ...protectedRequests]);
+    expect([204, 401]).toContain(logoutResponse.status);
+
+    // Once revoked, replaying the same session cookie must be stably unauthorized.
+    const replayChecks = await Promise.all(Array.from({ length: 8 }, async () => {
+      const replay = await originalFetch(`${baseUrl}/api/student/books`, {
+        headers: { cookie: cookie! },
+        redirect: "manual"
+      });
+      return replay.status;
+    }));
+    expect(replayChecks).toEqual(Array(8).fill(401));
+
+    // Any protected response that completed after revocation is unauthorized; before revocation it may be 200,
+    // but no replay is ever accepted after the race.
+    for (const response of protectedResponses) {
+      expect([200, 401, 403]).toContain(response.status);
+    }
+  });
+
+});

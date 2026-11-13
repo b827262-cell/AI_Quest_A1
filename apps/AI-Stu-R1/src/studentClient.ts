@@ -137,6 +137,32 @@ export class StudentApiError extends Error {
   }
 }
 
+type StudentUnauthorizedHandler = () => void;
+
+let studentUnauthorizedHandler: StudentUnauthorizedHandler | null = null;
+let studentUnauthorizedNotified = false;
+
+export function setStudentUnauthorizedHandler(handler: StudentUnauthorizedHandler | null): void {
+  studentUnauthorizedHandler = handler;
+  studentUnauthorizedNotified = false;
+}
+
+export function resetStudentUnauthorizedNotification(): void {
+  studentUnauthorizedNotified = false;
+}
+
+function notifyStudentUnauthorized(): void {
+  if (studentUnauthorizedNotified) return;
+  studentUnauthorizedNotified = true;
+  studentUnauthorizedHandler?.();
+}
+
+function maybeNotifyStudentUnauthorized(path: string, status: number): void {
+  if (status === 401 && path.startsWith("/api/student/")) {
+    notifyStudentUnauthorized();
+  }
+}
+
 /** Public success shape of POST /api/student/books/:bookId/rag-ask. */
 export interface BookRagCitation {
   chunkId: string;
@@ -193,6 +219,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!res.ok) {
+    maybeNotifyStudentUnauthorized(path, res.status);
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     throw new StudentApiError(res.status, data.error || "STUDENT_API_ERROR", data.message || data.error || `${res.status} ${res.statusText}`);
   }
@@ -208,6 +235,7 @@ async function httpWithSession<T>(path: string, sessionId: string, init?: Reques
   }
   const res = await fetch(path, { ...init, credentials: "same-origin", headers });
   if (!res.ok) {
+    maybeNotifyStudentUnauthorized(path, res.status);
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     throw new StudentApiError(res.status, data.error || "STUDENT_API_ERROR", data.message || data.error || `${res.status} ${res.statusText}`);
   }
@@ -231,6 +259,7 @@ async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
     cache: "no-store"
   });
   if (!res.ok) {
+    maybeNotifyStudentUnauthorized(path, res.status);
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     throw new Error(data.error || data.message || `${res.status} ${res.statusText}`);
   }
@@ -309,7 +338,8 @@ export const studentClient = {
    * response were already validated server-side and are safe to render.
    */
   askBookRag: async (bookId: string, body: { query: string; conversationId?: string }, signal?: AbortSignal): Promise<BookRagAnswer> => {
-    const res = await fetch(`/api/student/books/${encodeURIComponent(bookId)}/rag-ask`, {
+    const path = `/api/student/books/${encodeURIComponent(bookId)}/rag-ask`;
+    const res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
@@ -318,6 +348,7 @@ export const studentClient = {
     });
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
+      maybeNotifyStudentUnauthorized(path, res.status);
       const envelope = (data.error && typeof data.error === "object" ? data.error : {}) as { code?: unknown; message?: unknown };
       const code = typeof envelope.code === "string"
         ? envelope.code

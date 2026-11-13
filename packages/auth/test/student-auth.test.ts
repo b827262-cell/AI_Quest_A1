@@ -328,4 +328,27 @@ describe("Student Auth Foundation", () => {
     clock += 61_000;
     expect(service.cancelOAuthLogin(expiredState)).toBeUndefined();
   });
+
+
+  it("keeps revoked session replay stably 401 under concurrent logout and protected checks", async () => {
+    let clock = Date.parse("2026-08-05T00:00:00.000Z");
+    const { service } = buildFakeAuth(() => clock, async () => ({ subject: "sub-race", email: "race@example.test", displayName: "Race", avatarUrl: null }));
+    const start = service.beginGoogleLogin();
+    const state = new URL(start.authorizationUrl).searchParams.get("state")!;
+    const result = await service.completeGoogleLogin({ state, code: "code" });
+    expect(service.restoreSession(result.sessionToken)).toBeTruthy();
+
+    const [revoked, ...restores] = await Promise.all([
+      Promise.resolve(service.revokeSession(result.sessionToken)),
+      ...Array.from({ length: 12 }, () => Promise.resolve(service.restoreSession(result.sessionToken)))
+    ]);
+    expect(typeof revoked).toBe("boolean");
+    for (const restored of restores) {
+      expect(restored === undefined || restored.session.id === result.session.id).toBe(true);
+    }
+
+    const replayChecks = await Promise.all(Array.from({ length: 12 }, () => Promise.resolve(service.restoreSession(result.sessionToken))));
+    expect(replayChecks.every((value) => value === undefined)).toBe(true);
+  });
+
 });

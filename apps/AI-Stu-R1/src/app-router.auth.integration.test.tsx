@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, describe } from "vitest";
-import { act } from "react";
+import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { StudentAppRoutes } from "./App";
 import { dashboardProfileFromSession } from "./dashboard/dashboardQueries";
+import { RequireStudent, StudentAuthProvider, useStudentAuth } from "./student-auth";
+import { resetStudentUnauthorizedNotification, studentClient, StudentApiError } from "./studentClient";
 import {
   completeStudentProfileViaRawHttp,
   accessLoginViaRawHttp,
@@ -44,6 +46,7 @@ afterEach(async () => {
   container = null;
   globalThis.fetch = baseFetch;
   sessionCookie = null;
+  resetStudentUnauthorizedNotification();
   localStorage.clear();
   if (app) {
     await app.close();
@@ -244,4 +247,212 @@ describe("Student router + real session boundary (H-4)", () => {
     await renderAt("/dashboard");
     await waitForPath("/login");
   });
+
+
+  it("triggers a single auth-clear/redirect for parallel 401s and does not logout on 403/404/5xx", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT });
+    (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL(`http://127.0.0.1:${TEST_PORT}/`);
+    installBrowserFetch(app.baseUrl);
+    await loginViaRealAccess(app.baseUrl, "Parallel Student");
+
+    // --- parallel 401 storm: single redirect, no retry storm ---
+    let phase: "parallel401" | "non401" = "parallel401";
+    let parallel401Calls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = typeof input === "string" ? new URL(input, app!.baseUrl) : input instanceof URL ? input : new URL(input.url, app!.baseUrl);
+      const headers: Record<string, string> = {};
+      new Headers(init.headers ?? undefined).forEach((value, key) => { headers[key] = value; });
+      if (sessionCookie) headers.cookie = sessionCookie;
+      if (phase === "parallel401" && url.pathname.startsWith("/api/student/books") && url.pathname !== "/api/student/books") {
+        // multiple protected data requests fail with expired session
+      }
+      if (phase === "parallel401" && ["/api/student/books/book-alpha", "/api/student/books/book-alpha/contents", "/api/student/books/book-beta"].includes(url.pathname)) {
+        parallel401Calls += 1;
+        return new Response(JSON.stringify({ error: "SESSION_EXPIRED" }), { status: 401, headers: { "content-type": "application/json" } });
+      }
+      if (phase === "non401" && url.pathname === "/api/student/books/book-alpha") {
+        parallel401Calls += 1;
+        return new Response(JSON.stringify({ error: "FORBIDDEN" }), { status: 403, headers: { "content-type": "application/json" } });
+      }
+      if (phase === "non401" && url.pathname === "/api/student/books/book-beta") {
+        parallel401Calls += 1;
+        return new Response(JSON.stringify({ error: "NOT_FOUND" }), { status: 404, headers: { "content-type": "application/json" } });
+      }
+      if (phase === "non401" && url.pathname === "/api/student/books/book-gamma") {
+        parallel401Calls += 1;
+        return new Response(JSON.stringify({ error: "INTERNAL" }), { status: 500, headers: { "content-type": "application/json" } });
+      }
+      const result = await rawHttpRequest(url, { method: init.method ?? "GET", headers, body: typeof init.body === "string" ? init.body : undefined });
+      const session = (result.headers["set-cookie"] ?? []).find((entry) => entry.startsWith("ai_student_session="));
+      if (session) sessionCookie = session.split(";", 1)[0];
+      const responseHeaders = new Headers();
+      for (const [name, values] of Object.entries(result.headers)) for (const value of values) responseHeaders.append(name, value);
+      return new Response(result.bodyText, { status: result.status, headers: responseHeaders });
+    }) as typeof fetch;
+
+    function Parallel401Page() {
+      const [done, setDone] = useState(false);
+      useEffect(() => {
+        void Promise.allSettled([
+          studentClient.getBook("book-alpha"),
+          studentClient.getContents("book-alpha"),
+          studentClient.getBook("book-beta")
+        ]).then(() => {
+          setDone(true);
+        });
+      }, []);
+      return <div data-testid="parallel401-page">{done ? "done" : "pending"}</div>;
+    }
+
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    await act(async () => {
+      root = createRoot(container as HTMLElement);
+      root?.render(
+        <MemoryRouter initialEntries={["/dashboard"]}>
+          <StudentAuthProvider>
+            <RequireStudent><Parallel401Page /></RequireStudent>
+            <LocationProbe />
+          </StudentAuthProvider>
+        </MemoryRouter>
+      );
+    });
+    await waitForPath("/login");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)); });
+    expect(currentPath()).toBe("/login");
+    expect(parallel401Calls).toBe(3); // no retry storm
+
+    // --- 403/404/5xx must not log out ---
+    if (root) { const mounted = root; await act(async () => mounted.unmount()); root = null; }
+    container?.remove(); container = null;
+    resetStudentUnauthorizedNotification();
+    phase = "non401";
+    parallel401Calls = 0;
+    installBrowserFetch(app.baseUrl); // real fetch again
+    await loginViaRealAccess(app.baseUrl, "Parallel Student");
+    // reinstall custom fetch after login
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = typeof input === "string" ? new URL(input, app!.baseUrl) : input instanceof URL ? input : new URL(input.url, app!.baseUrl);
+      if (phase === "non401" && url.pathname === "/api/student/books/book-alpha") {
+        parallel401Calls += 1;
+        return new Response(JSON.stringify({ error: "FORBIDDEN" }), { status: 403, headers: { "content-type": "application/json" } });
+      }
+      if (phase === "non401" && url.pathname === "/api/student/books/book-beta") {
+        parallel401Calls += 1;
+        return new Response(JSON.stringify({ error: "NOT_FOUND" }), { status: 404, headers: { "content-type": "application/json" } });
+      }
+      if (phase === "non401" && url.pathname === "/api/student/books/book-gamma") {
+        parallel401Calls += 1;
+        return new Response(JSON.stringify({ error: "INTERNAL" }), { status: 500, headers: { "content-type": "application/json" } });
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+
+    function Non401Page() {
+      const { status } = useStudentAuth();
+      const [results, setResults] = useState<number[]>([]);
+      useEffect(() => {
+        void Promise.allSettled([
+          studentClient.getBook("book-alpha"),
+          studentClient.getBook("book-beta"),
+          studentClient.getBook("book-gamma")
+        ]).then((settled) => {
+          setResults(settled.map((item) => (
+            item.status === "rejected" && item.reason instanceof StudentApiError ? item.reason.status : 0
+          )));
+        });
+      }, []);
+      return <div data-testid="non401-page" data-auth={status} data-results={results.join(",")}>{results.length ? "done" : "pending"}</div>;
+    }
+
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    await act(async () => {
+      root = createRoot(container as HTMLElement);
+      root?.render(
+        <MemoryRouter initialEntries={["/dashboard"]}>
+          <StudentAuthProvider>
+            <RequireStudent><Non401Page /></RequireStudent>
+            <LocationProbe />
+          </StudentAuthProvider>
+        </MemoryRouter>
+      );
+    });
+    await waitForPath("/dashboard");
+    await waitForContent("done");
+    expect(currentPath()).toBe("/dashboard");
+    expect(container?.querySelector("[data-testid='non401-page']")?.getAttribute("data-auth")).toBe("authenticated");
+    expect(container?.querySelector("[data-testid='non401-page']")?.getAttribute("data-results")).toBe("403,404,500");
+    expect(parallel401Calls).toBe(3);
+  });
+
+  it("does not restore authenticated state when logout races with /me or data requests", async () => {
+    app = await startStudentTestApp({ sessionTtlMs: 3_600_000, port: TEST_PORT });
+    (window as unknown as { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL(`http://127.0.0.1:${TEST_PORT}/`);
+    installBrowserFetch(app.baseUrl);
+    await loginViaRealAccess(app.baseUrl, "Race Student");
+
+    let releaseMe!: () => void;
+    const meGate = new Promise<void>((resolve) => { releaseMe = resolve; });
+    let meCalls = 0;
+    const baseShim = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = typeof input === "string" ? new URL(input, app!.baseUrl) : input instanceof URL ? input : new URL(input.url, app!.baseUrl);
+      if (url.pathname === "/api/student/auth/me" && meCalls >= 1) {
+        meCalls += 1;
+        await meGate;
+      } else if (url.pathname === "/api/student/auth/me") {
+        meCalls += 1;
+      }
+      if (url.pathname === "/api/student/books/book-alpha") {
+        // delay data request so it can resolve around logout
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      return baseShim(input, init);
+    }) as typeof fetch;
+
+    let doRefresh!: () => Promise<void>;
+    let doLogout!: () => Promise<void>;
+    function RacePage() {
+      const auth = useStudentAuth();
+      doRefresh = auth.refresh;
+      doLogout = auth.logout;
+      return <div data-testid="race-page" data-auth={auth.status}>{auth.profile?.displayName ?? "none"}</div>;
+    }
+
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    await act(async () => {
+      root = createRoot(container as HTMLElement);
+      root?.render(
+        <MemoryRouter initialEntries={["/dashboard"]}>
+          <StudentAuthProvider>
+            <RequireStudent><RacePage /></RequireStudent>
+            <LocationProbe />
+          </StudentAuthProvider>
+        </MemoryRouter>
+      );
+    });
+    await waitForPath("/dashboard");
+    await waitForContent("Race Student");
+
+    // Start a refresh whose /me response will be delayed; start logout and a data request concurrently.
+    const refreshPromise = doRefresh();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    const logoutPromise = doLogout();
+    releaseMe();
+    await act(async () => { await Promise.allSettled([refreshPromise, logoutPromise]); });
+    await waitForPath("/login");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)); });
+    expect(currentPath()).toBe("/login");
+
+    // Remount check: session revoked server-side, cannot re-enter authenticated state.
+    if (root) { const mounted = root; await act(async () => mounted.unmount()); root = null; }
+    container?.remove(); container = null;
+    installBrowserFetch(app.baseUrl);
+    await renderAt("/dashboard");
+    await waitForPath("/login");
+  });
+
 });
