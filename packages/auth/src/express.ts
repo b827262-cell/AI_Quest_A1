@@ -23,6 +23,7 @@ export {
   MAX_LEARNING_HISTORY_BATCH,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "./learning-history-express";
+export { apiNotFoundHandler } from "./api-not-found";
 
 export interface StudentRequestAuth {
   session: { id: string; userId: string; expiresAt: string };

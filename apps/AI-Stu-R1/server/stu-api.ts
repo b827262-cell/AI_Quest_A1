@@ -21,6 +21,7 @@ import {
   createStudentLearningHistoryRouter,
   oversizeJsonBodyHandler,
   invalidJsonBodyHandler,
+  apiNotFoundHandler,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
@@ -319,6 +320,10 @@ if (existsSync(publicDir)) {
     res.sendFile(resolve(publicDir, "index.html"));
   });
 }
+
+// Unmatched `/api/*` requests answer JSON instead of Express' HTML 404 page.
+// Non-API paths fall through to the static/SPA behaviour above.
+app.use(apiNotFoundHandler());
 
 // Last error boundary: oversize JSON bodies answer a stable JSON 413 instead of
 // Express' HTML page (which prints a stack trace in development). Only the

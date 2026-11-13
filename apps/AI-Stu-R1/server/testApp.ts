@@ -20,6 +20,7 @@ import {
   createStudentLearningHistoryRouter,
   oversizeJsonBodyHandler,
   invalidJsonBodyHandler,
+  apiNotFoundHandler,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
 import type { StudentDataSource } from "@ai-smartbook/student-runtime";
@@ -171,6 +172,7 @@ export async function startStudentTestApp(options: StartStudentTestAppOptions): 
   // Mirror the production error boundary: oversize bodies answer JSON 413,
   // BATCH_TOO_LARGE only on the learning-history endpoints, and a body that is
   // not valid JSON answers JSON 400 instead of Express' HTML page.
+  app.use(apiNotFoundHandler());
   app.use(oversizeJsonBodyHandler());
   app.use(invalidJsonBodyHandler());
 
