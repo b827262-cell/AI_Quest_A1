@@ -9,7 +9,7 @@
 | AC-01 | 未授權、偽造與過期登入憑證 | P1 | 已測主要登入與 session 閘門 | HTTP integration + Student auth smoke |
 | AC-02 | Session replay、替換、登出競態 | P1 | replay/expiry/revoke 已測；在途 race 與完整 refresh 語意有缺口 | HTTP integration；race 需 barrier-controlled 測試 |
 | AC-03 | 多個並行 401 造成事件風暴 | P2 | 缺明確並行 UI 驗收 | UI integration + fake timer |
-| AC-04 | IDOR／跨學員、班級、課程、教材 | P1 | RAG book/student scope 有測；teacher/class/course 全域 policy 未證明 | HTTP + package scope integration；新 tenant API 必加 A/B negative tests |
+| AC-04 | IDOR／跨學員、班級、課程、教材 | P1 | RAG book/student scope 有測；G1 notes 未按 studentId 隔離、G2 chat/progress client session 未驗證 owner，狀態：目前缺口（PR #146 修補中，尚未合併 main）；teacher/class/course policy 未證明 | HTTP integration：synthetic A/B 學員對 notes CRUD、chat 與 progress 做負向測試 |
 | AC-05 | Role／權限提升 | P1 | Admin app/allowlist 有測；Sites 平台 identity stripping 未實測 | HTTP + relay unit/integration；平台 staging manual gate |
 | AC-06 | 404/403 業務錯誤被當成 401 | P2 | 主要 Student/RAG 分類有測；全 client 覆蓋不足 | HTTP + UI component integration |
 | AC-07 | Prompt injection、間接注入、tool abuse | P1 | query filter / grounding 有測；間接注入為殘餘風險；無現行任意工具路徑 | AI unit/application integration + fake provider |
@@ -47,11 +47,11 @@
 
 ## AC-04 — IDOR／跨學員、班級、課程或教材
 
-- **前置條件：** 兩個合成 student、兩本 synthetic book；使用 throwaway DB。
-- **重現：** A 登入後對 RAG body 傳入 B 的 `studentId`／偽造 scope；改 route bookId 到未發佈或無權的書；以 A 的 session id 嘗試讀取 B 綁定的 PDF/chat/progress 資源。班級／課程僅在對應 API 存在時執行，不得臆造 endpoint。
-- **預期：** server 從 session + route/resource 關係建立 scope；越權/未知資源不得回傳其他人的內容；錯誤按 contract 回 400/401/403/404，不洩漏存在性以外的敏感資料。
-- **main 現況：** Student RAG 拒絕 body scope override，使用 session 的 userId 與 path bookId；cross-book/unknown-book/scoped retrieval 有測。無完整 teacher/assistant/class/course policy 的證據，通用 `identity` enum 不等於已實作 RBAC。**PARTIAL，新增相關 API 前為阻擋缺口**。
-- **證據／自動化：** `apps/AI-Stu-R1/server/student-rag.ts`; `packages/contracts/src/student-rag.ts`; `apps/AI-Stu-R1/server/student-protected-routes.integration.test.ts`; `packages/ai/test/rag/scope.test.ts`; `packages/contracts/src/identity.ts`。
+- **前置條件：** 兩個合成 student、synthetic book、throwaway DB；以 A/B 帳號隔離測試資料，不使用正式資料。
+- **重現：** (1) 驗證 RAG body 不能覆寫 `studentId`/scope。(2) A 建立筆記後，以 B 讀取同一本書的 notes 並嘗試修改/刪除 A 的 note。(3) A 建立 chat/session 與 progress 後，以 B 提交 A 的 book-session key：chat 透過 body `sessionId`，progress 透過 `x-student-session-id`；檢查是否取得或改動 A 的資料。(4) 僅在實際存在的 API 測跨 book 資源關係，不臆造班級/課程 endpoint。
+- **預期：** Student RAG 由已驗證 server session + route book 建立 scope；notes、chat、progress 也必須綁定目前 Student owner。跨 owner 讀寫應以 documented 403/404 拒絕，且不回傳對方資料；缺少 owner 不得被視為可共享。
+- **main 現況：** Student RAG 拒絕 body scope override，並有 cross-book/unknown-book/scoped retrieval 測試。G1：notes 目前按 published book/note 關係操作，沒有 studentId 所有權維度。G2：chat body sessionId、progress `x-student-session-id` 會選定 book-session，現有檢查沒有驗證它屬於目前 Student owner。G1/G2 狀態：**目前缺口（PR #146 修補中，尚未合併 main）**。Teacher/class/course policy 仍未證明。
+- **證據／自動化：** `apps/AI-Stu-R1/server/student-rag.ts`; `apps/AI-Stu-R1/server/student-protected-routes.integration.test.ts`; `packages/ai/test/rag/scope.test.ts`; `apps/AI-adm-D1/src/server/student-books-router.ts`; `apps/AI-adm-D1/src/server/app.ts`; `packages/db/src/repositories/smartBookNote.repo.ts`; `packages/db/src/repositories/chat.repo.ts`; `packages/db/src/schema.ts`; `apps/AI-Stu-R1/src/studentClient.ts`; `packages/contracts/src/identity.ts`。補以兩個 Student principal 執行 notes CRUD、chat session 與 progress 的 HTTP negative integration tests。
 
 ## AC-05 — Role／權限提升
 
