@@ -1855,6 +1855,15 @@ app.get("/api/admin/dashboard/stats", (req, res) => {
   }
 });
 
+// Admin-only runtime diagnostics. Guest quota state is process-local and
+// bounded; exposing aggregate counters here lets operators see saturation
+// without adding a public endpoint or leaking visitor identities.
+app.get("/api/admin/diagnostics/guest-usage", (req, res) => {
+  if (!requireAdminAccess(req, res)) return;
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ guestUsage: guestUsageByIp.stats(guestDayKey()), asOf: new Date().toISOString() });
+});
+
 app.use(createStudentPasscodesRouter(repos));
 
 app.use(createAccountsRouter({

@@ -38,8 +38,36 @@ describe("bounded guest usage", () => {
       expect(store.consume("new-ip", day, 1, 102)).toBeUndefined();
       expect(store.get("new-ip", day)).toBeUndefined();
       expect(store.get("private-ip", day)?.count).toBe(1);
-      expect(warn).toHaveBeenCalledExactlyOnceWith("Guest usage capacity exhausted; refusing new identities");
+      expect(warn).toHaveBeenCalledOnce();
+      const [entry] = warn.mock.calls[0];
+      expect(JSON.parse(String(entry))).toEqual({ event: "guest_usage_saturated", size: 1, capacity: 1, day });
+      expect(String(entry)).not.toContain("private-ip");
+      expect(String(entry)).not.toContain("new-ip");
     } finally { warn.mockRestore(); }
+  });
+  it("rate-limits saturation warnings to one per five minutes while busy", () => {
+    const warn = vi.fn();
+    const store = createGuestUsageStore({ capacity: 1, warn });
+    store.consume("a", day, 1, 1_000);
+    expect(store.consume("b", day, 1, 1_001)).toBeUndefined();
+    expect(store.consume("c", day, 1, 60_000)).toBeUndefined();
+    expect(store.consume("d", day, 1, 300_999)).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(store.consume("e", day, 1, 301_001)).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenLastCalledWith({ event: "guest_usage_saturated", size: 1, capacity: 1, day });
+  });
+  it("reports aggregate saturation statistics without identity keys", () => {
+    const store = createGuestUsageStore({ capacity: 2, warn: () => {} });
+    store.consume("a", day, 1, 10);
+    store.consume("b", day, 1, 11);
+    expect(store.stats(day)).toEqual({ size: 2, capacity: 2, day, busyCount: 0, lastSaturatedAt: null });
+    expect(store.consume("c", day, 1, 12)).toBeUndefined();
+    expect(store.consume("d", day, 1, 13)).toBeUndefined();
+    expect(store.stats(day)).toEqual({ size: 2, capacity: 2, day, busyCount: 2, lastSaturatedAt: 13 });
+    expect(store.stats("2026-11-13").busyCount).toBe(0);
+    const serialized = JSON.stringify(store.stats(day));
+    for (const key of ["a", "b", "c", "d"]) expect(serialized).not.toContain(`"${key}"`);
   });
   it("expires saturation at one hour after the latest attempt", () => {
     const store = createGuestUsageStore({ capacity: 1, warn: () => {} });
