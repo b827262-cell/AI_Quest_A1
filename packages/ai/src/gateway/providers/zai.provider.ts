@@ -1,14 +1,26 @@
 import { type AiProviderId } from "../ai-types";
+import type { DnsResolver } from "../../rag/safe-url";
+import type { ProviderTransport } from "../provider-transport";
 import { OpenAiGatewayProvider } from "./openai.provider";
 
 /** Z.AI's general OpenAI-compatible API. */
 export class ZaiGatewayProvider extends OpenAiGatewayProvider {
   override readonly providerId: AiProviderId = "zai";
 
-  constructor(options?: { apiKey?: string; baseUrl?: string; model?: string }) {
+  constructor(options?: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    /** Injectable pinned transport (default: pinnedFetch). Tests only. */
+    transport?: ProviderTransport;
+    /** Injectable DNS resolver for the pinned transport. Tests only. */
+    dnsResolver?: DnsResolver;
+  }) {
     super({
       apiKey: options?.apiKey,
       baseUrl: normalizeZaiBaseUrl(options?.baseUrl),
+      transport: options?.transport,
+      dnsResolver: options?.dnsResolver,
       model: options?.model ?? "glm-5.1"
     });
   }

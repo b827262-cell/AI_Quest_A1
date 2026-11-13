@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDbHandle, runMigrations, createRepositories } from "@ai-smartbook/db";
-import { AiGateway, AiGatewayError, AllowAllBudgetManager, MockGatewayProvider } from "@ai-smartbook/ai";
+import { AiGateway, AiGatewayError, AllowAllBudgetManager, MockGatewayProvider, setProviderTransportForTesting, type ProviderTransport } from "@ai-smartbook/ai";
 import { encryptCredential } from "./credential-crypto";
 import { CredentialBackedProvider } from "./credential-provider";
 import { DbPromptLogger } from "./db-prompt-logger";
@@ -49,8 +49,14 @@ function addCredential(repos: ReturnType<typeof setup>["repos"], configId: strin
   return row;
 }
 
+// Stub the network layer only; the SSRF guard stays active in production.
+const viaGlobalFetch: ProviderTransport = (url, options) =>
+  (globalThis.fetch as typeof fetch)(String(url), options as RequestInit);
+beforeEach(() => setProviderTransportForTesting(viaGlobalFetch));
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  setProviderTransportForTesting();
   handle?.sqlite.close();
   handle = undefined;
   if (previousVaultKey === undefined) delete process.env.AI_CREDENTIAL_ENCRYPTION_KEY;

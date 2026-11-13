@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AiGateway,
   GeminiGatewayProvider,
@@ -8,10 +8,21 @@ import {
   ZaiGatewayProvider,
   normalizeZaiBaseUrl,
   AiGatewayError,
-  MockGatewayProvider
+  MockGatewayProvider,
+  setProviderTransportForTesting,
+  type ProviderTransport
 } from "../src";
 
-afterEach(() => vi.unstubAllGlobals());
+// Tests stub globalThis.fetch; route the providers' pinned transport through it
+// so no socket is opened while the SSRF guard still runs in production.
+const viaGlobalFetch: ProviderTransport = (url, options) =>
+  (globalThis.fetch as typeof fetch)(String(url), options as RequestInit);
+
+beforeEach(() => setProviderTransportForTesting(viaGlobalFetch));
+afterEach(() => {
+  vi.unstubAllGlobals();
+  setProviderTransportForTesting();
+});
 
 describe("real providers without API key", () => {
   it("all report unavailable when key unset", async () => {

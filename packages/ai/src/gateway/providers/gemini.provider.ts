@@ -5,6 +5,13 @@ import {
   type AiProviderId
 } from "../ai-types";
 import type { GatewayAiProvider } from "../provider.interface";
+import type { DnsResolver } from "../../rag/safe-url";
+import {
+  assertSafeProviderEndpoint,
+  getProviderTransport,
+  providerTransportFailure,
+  type ProviderTransport
+} from "../provider-transport";
 
 const PUBLIC_PROVIDER_MESSAGE = "AI 服務目前暫時無法使用，請稍後再試。";
 
@@ -62,12 +69,18 @@ export class GeminiGatewayProvider implements GatewayAiProvider {
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
   private readonly endpointProfile: GeminiEndpointProfile;
+  private readonly transport: ProviderTransport;
+  private readonly dnsResolver: DnsResolver | undefined;
 
   constructor(options?: {
     apiKey?: string;
     model?: string;
     baseUrl?: string;
     endpointProfile?: GeminiEndpointProfile;
+    /** Injectable pinned transport (default: pinnedFetch). Tests only. */
+    transport?: ProviderTransport;
+    /** Injectable DNS resolver for the pinned transport. Tests only. */
+    dnsResolver?: DnsResolver;
   }) {
     this.apiKey = options?.apiKey;
     this.baseUrl = cleanBaseUrl(
@@ -75,6 +88,8 @@ export class GeminiGatewayProvider implements GatewayAiProvider {
     );
     this.endpointProfile = options?.endpointProfile ?? DEFAULT_GEMINI_ENDPOINT_PROFILE;
     this.defaultModel = options?.model ?? "gemini-1.5-flash";
+    this.transport = options?.transport ?? getProviderTransport();
+    this.dnsResolver = options?.dnsResolver;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -131,26 +146,22 @@ export class GeminiGatewayProvider implements GatewayAiProvider {
       headers["x-goog-api-key"] = this.apiKey;
     }
 
+    // Fail closed before the credential is attached: HTTPS only, no
+    // private/loopback/link-local/metadata target, no obfuscated IP.
+    assertSafeProviderEndpoint(endpoint, this.providerId);
+
     let res: Response;
     try {
-      res = await fetch(endpoint, {
+      res = await this.transport(endpoint, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-        signal: request.signal
+        signal: request.signal,
+        dnsResolver: this.dnsResolver
       });
     } catch (err) {
-      throw new AiGatewayError(
-        "AI_PROVIDER_UNAVAILABLE",
-        PUBLIC_PROVIDER_MESSAGE,
-        {
-          cause: err,
-          failedProvider: "gemini",
-          internalMessage: "gemini fetch failed",
-          retryable: true,
-          failureKind: request.signal?.aborted ? "provider_timeout" : "unknown"
-        }
-      );
+      if (err instanceof AiGatewayError) throw err;
+      throw providerTransportFailure(err, this.providerId, request.signal);
     }
 
     if (!res.ok) {
