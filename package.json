@@ -39,7 +39,8 @@
     "student:dashboard-smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/student-dashboard-smoke.ts",
     "rag:smoke": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/rag-smoke.ts",
     "release-gate:student-rag": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/release-gate-student-rag.ts",
-    "ai:test:ssrf": "pnpm --filter @ai-smartbook/ai exec vitest run test/rag/ssrf-adversarial.test.ts"
+    "ai:test:ssrf": "pnpm --filter @ai-smartbook/ai exec vitest run test/rag/ssrf-adversarial.test.ts",
+    "validate:security-fixtures": "node scripts/validate-security-fixtures.mjs"
   },
   "devDependencies": {
     "happy-dom": "^21.0.4",
