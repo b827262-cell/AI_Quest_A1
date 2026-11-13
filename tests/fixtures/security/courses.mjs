@@ -27,6 +27,11 @@ export const ENROLLMENTS = [
   { studentId: "student-004@example.invalid", courseId: "course-102@example.invalid", classId: "class-c@example.invalid" }
 ];
 
+// A TA does not own a course; access is granted by an explicit assignment.
+export const TA_ASSIGNMENTS = [
+  { userId: "ta-001@example.invalid", courseId: "course-101@example.invalid" }
+];
+
 export function studentsInCourse(courseId) {
   return ENROLLMENTS.filter((e) => e.courseId === courseId).map((e) => STUDENTS.find((s) => s.studentId === e.studentId)).filter(Boolean);
 }
@@ -43,7 +48,17 @@ export function courseForStudent(studentId) {
 export function isolateData(userRole, userId, data) {
   if (userRole === "admin") return data;
   if (userRole === "teacher" || userRole === "ta") {
-    return data.filter((item) => item.courseId && item.courseId.endsWith("@example.invalid"));
+    // Real ownership: a teacher owns courses by `owner`; a TA is scoped by an
+    // explicit assignment. Never infer access from a shared e-mail domain.
+    const scopedCourseIds = new Set(
+      COURSES.filter((course) => course.owner === userId).map((course) => course.courseId)
+    );
+    for (const assignment of TA_ASSIGNMENTS) {
+      if (assignment.userId === userId) scopedCourseIds.add(assignment.courseId);
+    }
+    return data.filter(
+      (item) => item.owner === userId || (typeof item.courseId === "string" && scopedCourseIds.has(item.courseId))
+    );
   }
   if (userRole === "student") {
     return data.filter((item) => item.studentId === userId || item.owner === userId);
