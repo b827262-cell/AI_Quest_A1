@@ -6,6 +6,7 @@ export type SmartBookNoteType = z.infer<typeof smartBookNoteTypeSchema>;
 export const smartBookNoteSchema = z.object({
   id: z.string(),
   bookId: z.string(),
+  studentId: z.string().nullable(),
   chapterId: z.string().nullable(),
   pageNumber: z.number().int().nullable(),
   type: smartBookNoteTypeSchema,

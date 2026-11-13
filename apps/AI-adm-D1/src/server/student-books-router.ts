@@ -206,15 +206,31 @@ app.get("/api/student/books/:bookId/contents", (req, res) => {
 
 // ---- Smart Notes (text / ai_answer / canvas) -----------------------------
 // Notes are scoped to a published book and optionally to chapter/page context.
+// They are also personal: the owner is taken from the authenticated student,
+// never from the request body, and a note owned by someone else is answered
+// with 404 so its existence is not disclosed.
+function requireStudentId(req: Request, res: Response): string | null {
+  const studentId = req.studentAuth?.user.id;
+  if (!studentId) {
+    fail(res, 401, "AUTH_REQUIRED");
+    return null;
+  }
+  return studentId;
+}
+
 app.get("/api/student/books/:bookId/notes", (req, res) => {
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
-  res.json({ notes: repos.notes.findByBookId(book.id) });
+  const studentId = requireStudentId(req, res);
+  if (!studentId) return;
+  res.json({ notes: repos.notes.findByBookIdAndStudent(book.id, studentId) });
 });
 
 app.post("/api/student/books/:bookId/notes", (req, res) => {
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
+  const studentId = requireStudentId(req, res);
+  if (!studentId) return;
   const parsed = createSmartBookNoteInputSchema.safeParse(req.body);
   if (!parsed.success) return failValidation(res, parsed.error);
   if (parsed.data.type === "canvas" && !parsed.data.canvasData) {
@@ -223,14 +239,18 @@ app.post("/api/student/books/:bookId/notes", (req, res) => {
   if (parsed.data.type !== "canvas" && !parsed.data.content?.trim()) {
     return fail(res, 400, "text/ai_answer notes require content");
   }
-  res.status(201).json({ note: repos.notes.create(book.id, parsed.data) });
+  res.status(201).json({ note: repos.notes.create(book.id, parsed.data, studentId) });
 });
 
 app.patch("/api/student/books/:bookId/notes/:noteId", (req, res) => {
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
+  const studentId = requireStudentId(req, res);
+  if (!studentId) return;
   const note = repos.notes.findById(String(req.params.noteId));
-  if (!note || note.bookId !== book.id) return fail(res, 404, "note not found");
+  if (!note || note.bookId !== book.id || note.studentId !== studentId) {
+    return fail(res, 404, "note not found");
+  }
   const parsed = updateSmartBookNoteInputSchema.safeParse(req.body);
   if (!parsed.success) return failValidation(res, parsed.error);
   res.json({ note: repos.notes.update(note.id, parsed.data) });
@@ -239,8 +259,12 @@ app.patch("/api/student/books/:bookId/notes/:noteId", (req, res) => {
 app.delete("/api/student/books/:bookId/notes/:noteId", (req, res) => {
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
+  const studentId = requireStudentId(req, res);
+  if (!studentId) return;
   const note = repos.notes.findById(String(req.params.noteId));
-  if (!note || note.bookId !== book.id) return fail(res, 404, "note not found");
+  if (!note || note.bookId !== book.id || note.studentId !== studentId) {
+    return fail(res, 404, "note not found");
+  }
   repos.notes.delete(note.id);
   res.json({ deleted: true });
 });
@@ -299,6 +323,8 @@ app.get("/api/student/books/:bookId/files/:fileId/pdf-view", (req, res) => {
 app.post("/api/student/books/:bookId/chat", (req, res) => {
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
+  const studentId = requireStudentId(req, res);
+  if (!studentId) return;
   // Accept both { message } (student UX) and { question } (legacy) bodies.
   const parsed = studentChatRequestSchema.safeParse(req.body);
   if (!parsed.success) return failValidation(res, parsed.error);
@@ -312,6 +338,11 @@ app.post("/api/student/books/:bookId/chat", (req, res) => {
   // Enforce admin blocks before doing any work: reject a blocked session, or a
   // brand-new session opened from an already-blocked public IP.
   const existingSession = sessionId ? repos.chat.findSessionById(sessionId) : null;
+  // A session that belongs to another student is reported as missing: writing
+  // into it (and echoing its history) would be a cross-account leak.
+  if (existingSession && existingSession.userId !== studentId) {
+    return fail(res, 404, "session not found");
+  }
   if (rejectIfBlocked(req, res, existingSession)) return;
 
   if (sessionId) {
@@ -325,6 +356,7 @@ app.post("/api/student/books/:bookId/chat", (req, res) => {
   if (!sessionId) {
     sessionId = repos.chat.createSession({
       bookId: book.id,
+      userId: studentId,
       title: question.slice(0, 40),
       ...enrichSessionClientInfo(null, requestClientInfo)
     }).id;
@@ -385,9 +417,13 @@ app.post("/api/student/books/:bookId/chat", (req, res) => {
 app.get("/api/student/books/:bookId/chat-sessions/:sessionId", (req, res) => {
   const book = findPublishedBook(String(req.params.bookId));
   if (!book) return fail(res, 404, "book not found");
+  const studentId = requireStudentId(req, res);
+  if (!studentId) return;
   const session = repos.chat.findSessionById(String(req.params.sessionId));
-  // Only expose sessions that belong to this published book.
-  if (!session || session.bookId !== book.id) return fail(res, 404, "session not found");
+  // Only expose sessions that belong to this published book and this student.
+  if (!session || session.bookId !== book.id || session.userId !== studentId) {
+    return fail(res, 404, "session not found");
+  }
   if (rejectIfBlocked(req, res, session)) return;
   repos.chat.updateSessionClientInfo(session.id, enrichSessionClientInfo(session, parseClientInfo(req)));
   res.json({ sessionId: session.id, messages: repos.chat.findMessages(session.id) });
