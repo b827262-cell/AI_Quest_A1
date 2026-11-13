@@ -35,7 +35,7 @@ fixture; production always fetches the team's Cloudflare certs endpoint.
 | Variable | Purpose |
 | --- | --- |
 | `STUDENT_SESSION_SECRET` | ≥32-char server secret retained for session configuration |
-| `STUDENT_ALLOWED_ORIGINS` | comma-separated origins allowed for mutating calls |
+| `STUDENT_ALLOWED_ORIGINS` | comma-separated origins allowed for cross-origin mutating calls. Production requires at least one origin. Same-origin mutating calls are allowed without listing the API origin; requests without an `Origin` header or with an unlisted cross-origin/cross-site origin are rejected. |
 | `STUDENT_SESSION_TTL_MS` | session lifetime in milliseconds |
 | `STUDENT_AUTH_DB_PATH` | SQLite file holding `student_sessions` and profiles |
 

@@ -155,6 +155,9 @@ export function assertStudentAuthConfig(config: StudentAuthConfig): void {
   if (!config.sessionSecret || config.sessionSecret.length < 32) {
     throw new Error("production Student auth requires a 32-character session secret");
   }
+  if (config.allowedOrigins.size === 0) {
+    throw new Error("production Student auth requires STUDENT_ALLOWED_ORIGINS to include at least one allowed origin");
+  }
 }
 
 export function createStudentSessionSecrets(): { sessionToken: string } {
@@ -484,8 +487,42 @@ export function readStudentCookie(cookieHeader: string | undefined, name = STUDE
   return undefined;
 }
 
-export function studentOriginAllowed(config: StudentAuthConfig, origin: string | undefined): boolean {
-  return !origin || config.allowedOrigins.size === 0 || config.allowedOrigins.has(origin);
+export interface StudentOriginRequest {
+  origin?: string | null;
+  host?: string | null;
+  secFetchSite?: string | null;
+}
+
+/**
+ * Origin policy for mutating, cookie-authenticated student requests.
+ *
+ * Fail closed: cross-origin requests are allowed only when their Origin is
+ * explicitly listed in STUDENT_ALLOWED_ORIGINS. Same-origin requests are
+ * allowed without an allowlist entry. Requests without an Origin header, or
+ * cross-site navigations/fetches that are not explicitly allowlisted, are
+ * rejected. An empty allowlist therefore never permits cross-origin mutation.
+ */
+export function isAllowedStudentMutatingOrigin(
+  config: StudentAuthConfig,
+  request: StudentOriginRequest
+): boolean {
+  const origin = request.origin?.trim();
+  if (!origin) return false;
+
+  let sameOrigin = false;
+  const host = request.host?.trim();
+  if (host) {
+    try {
+      sameOrigin = new URL(origin).host === host;
+    } catch {
+      sameOrigin = false;
+    }
+  }
+
+  const explicitlyAllowed = config.allowedOrigins.has(origin);
+  if (!sameOrigin && !explicitlyAllowed) return false;
+  if (request.secFetchSite === "cross-site" && !explicitlyAllowed) return false;
+  return true;
 }
 
 export function studentSessionTokenMatches(rawToken: string, digest: string): boolean {
