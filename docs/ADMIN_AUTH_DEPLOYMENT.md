@@ -93,3 +93,72 @@ request are written to `ai_admin_audit_logs`. Metadata is allowlisted and does
 not include request bodies, API keys, cookies, or passwords. Revoke sessions
 through the Admin session repository during incident response, then rotate
 the optional CLI token separately.
+
+## Local admin password hash (development)
+
+The local admin API (`pnpm --filter AI-adm-D1 server:dev`) loads the
+repository-root `.env` through
+`apps/AI-adm-D1/src/server/env.ts` (`projectRootEnvPath`, resolved as
+`../../../../.env` from the server package). Values from `.env` are applied
+only when the corresponding environment variable is not already set, so
+deployment-injected env takes precedence and `.env` never overrides it.
+
+### Setup
+
+1. Read the password without echoing it:
+
+   ```bash
+   read -r -s ADMIN_PASSWORD_INPUT
+   ```
+
+2. Generate the scrypt hash with the existing helper (same command used for
+   production):
+
+   ```bash
+   printf '%s\n' "$ADMIN_PASSWORD_INPUT" | node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/hash-admin-password.mjs
+   ```
+
+3. Write the printed hash into `.env` as `ADMIN_PASSWORD_HASH=<hash>`, leave
+   `ADMIN_PASSWORD` empty (or unset it), then clear the temporary variable:
+
+   ```
+   ADMIN_PASSWORD_HASH=scrypt$16384$8$1$<base64url-salt>$<base64url-derived>
+   ADMIN_PASSWORD=
+   ```
+
+   ```bash
+   unset ADMIN_PASSWORD_INPUT
+   ```
+
+4. Restart the admin API so the new hash is loaded.
+
+The program prefers the hash when it is set:
+`apps/AI-adm-D1/src/server/ai/admin-auth.ts` verifies `ADMIN_PASSWORD_HASH`
+via scrypt first. Plaintext `ADMIN_PASSWORD` is only a local-development
+fallback and is never used in production
+(`verifyPassword` returns the plaintext comparison only when
+`!config.production`). Do not leave plaintext or hashes in `.env` or backup
+files; remove them after use. Examples use placeholders only — never real
+account names, passwords, or hash values.
+
+### Readiness check in `reset-ai-smartbook.sh`
+
+`verify_admin_proxy` runs two modes depending on whether a plaintext
+`ADMIN_PASSWORD` is present in `.env`:
+
+- **Mode A — Full login probe** (plaintext `ADMIN_PASSWORD` present): reads
+  `ADMIN_USERNAME` and `ADMIN_PASSWORD`, posts to
+  `/api/admin/auth/login`, captures the `ai_admin_session` and
+  `ai_admin_csrf` cookies, then probes `/api/admin/accounts` with those
+  cookies. Expects login HTTP 200, both cookies present, and accounts
+  HTTP 200.
+
+- **Mode B — Unauthenticated proxy probe** (no plaintext `ADMIN_PASSWORD`):
+  GETs `/api/admin/auth/me` without any credentials. Expects HTTP 401 with
+  `Content-Type: application/json` and body
+  `{"error":"admin authentication required"}`. This confirms the
+  Vite → proxy → Admin API → AdminAuthMiddleware chain responded, without
+  needing a password.
+
+When a hash is configured but no plaintext is present, Mode B is used; the
+hash itself is never sent over HTTP during the probe.
