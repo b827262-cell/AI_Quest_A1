@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type {
   CreateSmartBookNoteInput,
   SmartBookNote,
@@ -17,11 +17,12 @@ function toNote(row: Row): SmartBookNote {
 
 export function makeSmartBookNoteRepo(db: Db) {
   return {
-    create(bookId: string, input: CreateSmartBookNoteInput): SmartBookNote {
+    create(bookId: string, input: CreateSmartBookNoteInput, studentId: string | null): SmartBookNote {
       const ts = nowIso();
       const row: Row = {
         id: newId("note"),
         bookId,
+        studentId,
         chapterId: input.chapterId ?? null,
         pageNumber: input.pageNumber ?? null,
         type: input.type,
@@ -37,11 +38,11 @@ export function makeSmartBookNoteRepo(db: Db) {
       return toNote(row);
     },
 
-    findByBookId(bookId: string): SmartBookNote[] {
+    findByBookIdAndStudent(bookId: string, studentId: string): SmartBookNote[] {
       return db
         .select()
         .from(smartBookNotes)
-        .where(eq(smartBookNotes.bookId, bookId))
+        .where(and(eq(smartBookNotes.bookId, bookId), eq(smartBookNotes.studentId, studentId)))
         .orderBy(desc(smartBookNotes.createdAt))
         .all()
         .map(toNote);
