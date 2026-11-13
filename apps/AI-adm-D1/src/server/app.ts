@@ -18,6 +18,7 @@ import {
   createStudentLearningHistoryRouter,
   oversizeJsonBodyHandler,
   invalidJsonBodyHandler,
+  apiNotFoundHandler,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
 import multer from "multer";
@@ -3142,6 +3143,11 @@ app.post("/api/admin/appearance-settings/upload", appearanceUpload.single("file"
     next(error);
   }
 }, uploadErrorHandler);
+
+// Unmatched `/api/*` requests must answer JSON, not Express' HTML 404 page
+// (which prints a stack trace in development). Non-API paths fall through, so
+// static assets and the SPA keep their existing behaviour.
+app.use(apiNotFoundHandler());
 
 // The 256 KiB parser mounted for learning history raises the same
 // `entity.too.large` type as the global 2 MB parser, so the error type alone
