@@ -6,9 +6,9 @@ import { z } from "zod";
 import { createStudentPasscodeThrottle } from "./passcode";
 import {
   clearStudentSessionCookieOptions,
+  isAllowedStudentMutatingOrigin,
   readStudentCookie,
   resolveStudentAuthConfig,
-  studentOriginAllowed,
   studentSessionCookieOptions,
   type StudentAuthConfig,
   type StudentAuthService
@@ -67,7 +67,11 @@ function publicMe(auth: StudentAuthService, rawToken: string | undefined): Stude
 }
 
 function rejectOrigin(req: Request, res: Response, config: StudentAuthConfig): boolean {
-  if (!studentOriginAllowed(config, req.header("origin"))) {
+  if (!isAllowedStudentMutatingOrigin(config, {
+    origin: req.header("origin"),
+    host: req.header("host"),
+    secFetchSite: req.header("sec-fetch-site")
+  })) {
     res.status(403).json({ error: "STUDENT_ORIGIN_NOT_ALLOWED" });
     return true;
   }

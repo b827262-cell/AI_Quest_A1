@@ -1,6 +1,6 @@
 import express, { type ErrorRequestHandler, type RequestHandler } from "express";
 import type { LearningHistoryRecord, StudentLearningHistoryRepo } from "@ai-smartbook/db";
-import { studentOriginAllowed, type StudentAuthConfig } from "./server";
+import { isAllowedStudentMutatingOrigin, type StudentAuthConfig } from "./server";
 
 const CATEGORIES = new Set(["auto", "programming", "math", "humanities", "cybersecurity", "教材問答"]);
 const SOURCES = new Set(["manual", "image", "file"]);
@@ -107,13 +107,11 @@ function validRecord(value: unknown): value is LearningHistoryRecord {
 function originGuard(config: StudentAuthConfig): RequestHandler {
   return (req, res, next) => {
     if (req.method === "GET" || req.method === "HEAD") return next();
-    const origin = req.header("origin");
-    const host = req.header("host");
-    let sameOrigin = false;
-    try { sameOrigin = Boolean(origin && host && new URL(origin).host === host); } catch { /* reject */ }
-    const explicitlyAllowed = Boolean(origin && config.allowedOrigins.has(origin));
-    if (!origin || (!sameOrigin && !explicitlyAllowed) || !studentOriginAllowed(config, origin)
-      || (req.header("sec-fetch-site") === "cross-site" && !explicitlyAllowed)) {
+    if (!isAllowedStudentMutatingOrigin(config, {
+      origin: req.header("origin"),
+      host: req.header("host"),
+      secFetchSite: req.header("sec-fetch-site")
+    })) {
       res.status(403).json({ error: "STUDENT_ORIGIN_NOT_ALLOWED" });
       return;
     }
