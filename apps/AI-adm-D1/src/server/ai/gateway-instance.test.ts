@@ -1,13 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDbHandle, createRepositories, runMigrations } from "@ai-smartbook/db";
 import { encryptCredential } from "./credential-crypto";
 import { buildGateway } from "./gateway-instance";
+import { setProviderTransportForTesting, type ProviderTransport } from "@ai-smartbook/ai";
 
 const previousVaultKey = process.env.AI_CREDENTIAL_ENCRYPTION_KEY;
 const previousGatewayEnabled = process.env.AI_GATEWAY_ENABLED;
 
+const viaGlobalFetch: ProviderTransport = (url, options) =>
+  (globalThis.fetch as typeof fetch)(String(url), options as RequestInit);
+beforeEach(() => setProviderTransportForTesting(viaGlobalFetch));
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  setProviderTransportForTesting();
   if (previousVaultKey === undefined) delete process.env.AI_CREDENTIAL_ENCRYPTION_KEY;
   else process.env.AI_CREDENTIAL_ENCRYPTION_KEY = previousVaultKey;
   if (previousGatewayEnabled === undefined) delete process.env.AI_GATEWAY_ENABLED;

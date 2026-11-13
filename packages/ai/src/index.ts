@@ -118,6 +118,12 @@ export { KimiGatewayProvider } from "./gateway/providers/kimi.provider";
 export { QwenGatewayProvider } from "./gateway/providers/qwen.provider";
 export { ZaiGatewayProvider } from "./gateway/providers/zai.provider";
 export {
+  assertSafeProviderEndpoint,
+  getProviderTransport,
+  setProviderTransportForTesting
+} from "./gateway/provider-transport";
+export type { ProviderTransport } from "./gateway/provider-transport";
+export {
   applyPromotionMultiplier,
   capabilityEnabled,
   classifyCredentialVerification,

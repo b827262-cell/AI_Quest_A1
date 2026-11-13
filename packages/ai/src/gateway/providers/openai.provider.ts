@@ -5,6 +5,13 @@ import {
   type AiProviderId
 } from "../ai-types";
 import type { GatewayAiProvider } from "../provider.interface";
+import type { DnsResolver } from "../../rag/safe-url";
+import {
+  assertSafeProviderEndpoint,
+  getProviderTransport,
+  providerTransportFailure,
+  type ProviderTransport
+} from "../provider-transport";
 
 const PUBLIC_PROVIDER_MESSAGE = "AI 服務目前暫時無法使用，請稍後再試。";
 
@@ -46,15 +53,23 @@ export class OpenAiGatewayProvider implements GatewayAiProvider {
   readonly defaultModel: string;
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
+  private readonly transport: ProviderTransport;
+  private readonly dnsResolver: DnsResolver | undefined;
 
   constructor(options?: {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
+    /** Injectable pinned transport (default: pinnedFetch). Tests only. */
+    transport?: ProviderTransport;
+    /** Injectable DNS resolver for the pinned transport. Tests only. */
+    dnsResolver?: DnsResolver;
   }) {
     this.apiKey = options?.apiKey;
     this.baseUrl = (options?.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
     this.defaultModel = options?.model ?? "gpt-4o-mini";
+    this.transport = options?.transport ?? getProviderTransport();
+    this.dnsResolver = options?.dnsResolver;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -75,9 +90,14 @@ export class OpenAiGatewayProvider implements GatewayAiProvider {
     if (request.systemPrompt) messages.push({ role: "system", content: request.systemPrompt });
     messages.push({ role: "user", content: request.prompt });
 
+    const endpoint = `${this.baseUrl}/chat/completions`;
+    // Fail closed before the credential is attached: HTTPS only, no
+    // private/loopback/link-local/metadata target, no obfuscated IP.
+    assertSafeProviderEndpoint(endpoint, this.providerId);
+
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl}/chat/completions`, {
+      res = await this.transport(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -90,20 +110,12 @@ export class OpenAiGatewayProvider implements GatewayAiProvider {
             : { temperature: request.temperature ?? 0.4, max_tokens: request.maxOutputTokens }),
           messages
         }),
-        signal: request.signal
+        signal: request.signal,
+        dnsResolver: this.dnsResolver
       });
     } catch (err) {
-      throw new AiGatewayError(
-        "AI_PROVIDER_UNAVAILABLE",
-        PUBLIC_PROVIDER_MESSAGE,
-        {
-          cause: err,
-          failedProvider: this.providerId,
-          internalMessage: "openai fetch failed",
-          retryable: true,
-          failureKind: request.signal?.aborted ? "provider_timeout" : "unknown"
-        }
-      );
+      if (err instanceof AiGatewayError) throw err;
+      throw providerTransportFailure(err, this.providerId, request.signal);
     }
 
     if (!res.ok) {

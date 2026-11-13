@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDbHandle, runMigrations, createRepositories } from "@ai-smartbook/db";
 import { encryptCredential } from "./credential-crypto";
 import { CredentialBackedProvider } from "./credential-provider";
+import { setProviderTransportForTesting, type ProviderTransport } from "@ai-smartbook/ai";
 
 const previousVaultKey = process.env.AI_CREDENTIAL_ENCRYPTION_KEY;
 let handle: ReturnType<typeof createDbHandle> | undefined;
@@ -14,7 +15,13 @@ function setup() {
   return { repos };
 }
 
+const viaGlobalFetch: ProviderTransport = (url, options) =>
+  (globalThis.fetch as typeof fetch)(String(url), options as RequestInit);
+beforeEach(() => setProviderTransportForTesting(viaGlobalFetch));
+
 afterEach(() => {
+  vi.unstubAllGlobals();
+  setProviderTransportForTesting();
   handle?.sqlite.close();
   handle = undefined;
   if (previousVaultKey === undefined) delete process.env.AI_CREDENTIAL_ENCRYPTION_KEY;
