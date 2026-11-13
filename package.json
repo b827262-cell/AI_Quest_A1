@@ -42,16 +42,17 @@
     "ai:test:ssrf": "pnpm --filter @ai-smartbook/ai exec vitest run test/rag/ssrf-adversarial.test.ts"
   },
   "devDependencies": {
-    "happy-dom": "^20.11.1",
+    "happy-dom": "^21.0.4",
     "playwright-core": "^1.62.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.12"
   },
   "pnpm": {
     "overrides": {
       "proxy-addr": ">=2.0.8",
       "nanoid": "^3.3.18",
       "source-map-js": "^1.2.2",
-      "body-parser": "^1.20.9"
+      "body-parser": "^1.20.9",
+      "qs": "6.16.2"
     }
   }
 }
