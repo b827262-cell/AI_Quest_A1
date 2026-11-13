@@ -151,6 +151,33 @@ describe("Admin API HTTP authentication and quota behavior", () => {
     } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
   });
 
+  it("exposes guest usage saturation diagnostics only to authenticated admins", async () => {
+    const { dependencies, dbHandle, token } = buildTestApp();
+    const store = createGuestUsageStore({ capacity: 1, warn: () => {} });
+    const app = createAdminApp(dependencies, store, () => "2026-11-12");
+    const gateway = vi.spyOn(dependencies.aiGateway, "run").mockResolvedValue({
+      result: { provider: "mock", model: "test", answer: "測試答案。", latencyMs: 0 }
+    } as Awaited<ReturnType<typeof dependencies.aiGateway.run>>);
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const ask = (ip: string) => request(app).post("/api/public/guest-ask").set("CF-Connecting-IP", ip).send({ question: "測試題目" });
+      for (let i = 0; i < 3; i++) {
+        expect((await ask("203.0.113.71")).status).toBe(200);
+        now += 21_000;
+      }
+      expect((await ask("203.0.113.72")).status).toBe(503);
+
+      expect((await request(app).get("/api/admin/diagnostics/guest-usage")).status).toBe(401);
+      const response = await request(app).get("/api/admin/diagnostics/guest-usage").set("x-admin-token", token);
+      expect(response.status).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body.guestUsage).toMatchObject({ size: 1, capacity: 1, day: "2026-11-12", busyCount: 1 });
+      expect(typeof response.body.guestUsage.lastSaturatedAt).toBe("number");
+      expect(JSON.stringify(response.body)).not.toContain("203.0.113");
+    } finally { clock.mockRestore(); gateway.mockRestore(); dbHandle.sqlite.close(); }
+  });
+
   it("uses the Cloudflare IP for admin login throttling and session audit", async () => {
     const { app, dbHandle } = buildTestApp();
     try {
