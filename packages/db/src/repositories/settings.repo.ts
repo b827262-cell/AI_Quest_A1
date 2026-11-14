@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
 import type { Db } from "../client";
 import { appSettings } from "../schema";
 import { nowIso } from "./util";
@@ -17,6 +17,15 @@ export function makeSettingsRepo(db: Db) {
         .values({ key, value, updatedAt: ts })
         .onConflictDoUpdate({ target: appSettings.key, set: { value, updatedAt: ts } })
         .run();
+    },
+
+    /** All rows whose key starts with `prefix`. Returns { key, value, updatedAt }. */
+    listByPrefix(prefix: string): Array<{ key: string; value: string; updatedAt: string }> {
+      return db
+        .select()
+        .from(appSettings)
+        .where(like(appSettings.key, `${prefix}%`))
+        .all();
     }
   };
 }

@@ -8,6 +8,8 @@ import { ChaptersTab } from "./tabs/ChaptersTab";
 import { QaTab } from "./tabs/QaTab";
 import { AiJobsTab } from "./tabs/AiJobsTab";
 import { OverviewTab } from "./tabs/OverviewTab";
+import { ReadingProgressTab } from "./tabs/ReadingProgressTab";
+import { StudentNotesTab } from "./tabs/StudentNotesTab";
 
 export function BookDetail() {
   const { bookId = "" } = useParams();
@@ -44,6 +46,8 @@ export function BookDetail() {
         {tab("/chapters", "章節")}
         {tab("/qa", "知識問答")}
         {tab("/ai-jobs", "AI 任務")}
+        {tab("/progress", "閱讀分析")}
+        {tab("/notes", "學生筆記")}
       </div>
       <Routes>
         <Route index element={<OverviewTab bookId={bookId} />} />
@@ -52,6 +56,8 @@ export function BookDetail() {
         <Route path="chapters" element={<ChaptersTab bookId={bookId} />} />
         <Route path="qa" element={<QaTab bookId={bookId} />} />
         <Route path="ai-jobs" element={<AiJobsTab bookId={bookId} />} />
+        <Route path="progress" element={<ReadingProgressTab bookId={bookId} />} />
+        <Route path="notes" element={<StudentNotesTab bookId={bookId} />} />
       </Routes>
     </div>
   );

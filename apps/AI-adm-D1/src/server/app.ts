@@ -1893,6 +1893,26 @@ app.get("/api/public/site-config", (_req, res) => {
   res.json(getPublicSiteConfig());
 });
 
+// Public, unauthenticated guest quota snapshot. Always no-store so a shared
+// browser/device never caches another guest's remaining count.
+app.get("/api/public/guest-quota", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const config = getPublicSiteConfig();
+  const identity = guestIdentity(req);
+  const day = guestDayKey();
+  const usage = guestUsageByIp.get(identity, day);
+  const usedCount = usage?.count ?? 0;
+  const dailyLimit = config.guestDailyLimit;
+  const remainingCount = Math.max(0, dailyLimit - usedCount);
+  res.json({
+    guestAiEnabled: config.guestAiEnabled,
+    dailyLimit,
+    usedCount,
+    remainingCount,
+    blocked: remainingCount <= 0
+  });
+});
+
 app.post("/api/public/guest-ask", async (req, res) => {
   const parsed = guestAskRequestSchema.safeParse(req.body);
   if (!parsed.success) return failValidation(res, parsed.error);

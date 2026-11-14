@@ -60,3 +60,47 @@ describe("Google confirmation hint", () => {
     expect(url.searchParams.get("udm")).toBe("50");
   });
 });
+
+describe("Guest quota messaging", () => {
+  const history = { studentName: "", authStatus: "anonymous", learningHistory: [] };
+  const intake = { googleStatus: "", pendingIntake: null, historyStatuses: {} };
+
+  it("shows the remaining count from quota in api mode", async () => {
+    const guest = {
+      strategy: "api",
+      response: null,
+      restoringAnswer: false,
+      category: "auto",
+      busy: false,
+      quota: { guestAiEnabled: true, dailyLimit: 3, usedCount: 1, remainingCount: 2, blocked: false }
+    };
+    await render(<PublicHero config={DEFAULT_CONFIG} guest={guest as never} history={history as never} intake={intake as never} />);
+    expect(container?.textContent).toContain("今日剩餘 2 題");
+  });
+
+  it("shows the exhausted message when remainingCount is 0", async () => {
+    const guest = {
+      strategy: "api",
+      response: null,
+      restoringAnswer: false,
+      category: "auto",
+      busy: false,
+      quota: { guestAiEnabled: true, dailyLimit: 3, usedCount: 3, remainingCount: 0, blocked: true }
+    };
+    await render(<PublicHero config={DEFAULT_CONFIG} guest={guest as never} history={history as never} intake={intake as never} />);
+    expect(container?.textContent).toContain("今日免費額度已用完");
+  });
+
+  it("shows the paused message when guestAiEnabled is false", async () => {
+    const guest = {
+      strategy: "api",
+      response: null,
+      restoringAnswer: false,
+      category: "auto",
+      busy: false,
+      quota: { guestAiEnabled: false, dailyLimit: 3, usedCount: 0, remainingCount: 3, blocked: false }
+    };
+    await render(<PublicHero config={DEFAULT_CONFIG} guest={guest as never} history={history as never} intake={intake as never} />);
+    expect(container?.textContent).toContain("訪客問答暫停開放");
+  });
+});
