@@ -21,9 +21,13 @@ router.get("/api/admin/accounts", (_req, res) => {
   const now = Date.now();
   const lastSeen = lastSeenBySession(messages);
 
+  const studentUsers = repos.studentUsers.listAll();
+  const studentById = new Map(studentUsers.map((u) => [u.id, u]));
+
   const accounts = sessions
     .map((s) => {
       const last = sessionLastActivityMs(s, lastSeen);
+      const student = s.userId ? studentById.get(s.userId) : undefined;
       return {
         id: s.userId || s.id,
         // Admin management actions always target the session row id.
@@ -41,12 +45,18 @@ router.get("/api/admin/accounts", (_req, res) => {
         blockedReason: s.blockedReason ?? null,
         blockedAt: s.blockedAt ?? null,
         lastSeenAt: new Date(last).toISOString(),
-        online: now - last <= ONLINE_WINDOW_MS
+        online: now - last <= ONLINE_WINDOW_MS,
+        // Enriched from the student profile when the session maps to one.
+        schoolName: student?.schoolName ?? null,
+        gradeLevel: student?.gradeLevel ?? null,
+        email: student?.email ?? null,
+        profileCompleted: student?.profileCompleted ?? false,
+        studentDisplayName: student?.displayName ?? null
       };
     })
     .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
 
-  res.json({ accounts });
+  res.json({ accounts, studentUsers });
 });
 
 // Admin-only: set the risk marking (safe / risk / dangerous) for a session.

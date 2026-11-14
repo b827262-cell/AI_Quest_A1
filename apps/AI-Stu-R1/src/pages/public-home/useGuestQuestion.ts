@@ -19,6 +19,7 @@ import {
   type GuestAskResponse,
   type GuestProviderPreference,
   type GuestQuestionCategory,
+  type PublicGuestQuota,
   type PublicSiteConfig
 } from "../../studentClient";
 
@@ -45,7 +46,21 @@ export function useGuestQuestion({
   const [feedback, setFeedback] = useState("");
   const [lastSourceType, setLastSourceType] = useState<"manual" | "image" | "file">("manual");
   const [restoringAnswer, setRestoringAnswer] = useState(isAnswerRoute);
+  const [quota, setQuota] = useState<PublicGuestQuota | null>(null);
   const requestAbortRef = useRef<AbortController | null>(null);
+
+  // Fetch the public per-guest daily quota snapshot once on mount. Optional
+  // chaining + catch keep this resilient to minimal mocks and offline/test envs.
+  useEffect(() => {
+    studentClient.getPublicGuestQuota?.().then(setQuota).catch(() => undefined);
+  }, []);
+
+  // Keep quota.remainingCount in sync when a response carries the authoritative
+  // remaining count (ask + saved-answer restore).
+  function syncQuotaRemaining(remaining: number | undefined) {
+    if (typeof remaining !== "number") return;
+    setQuota((prev) => (prev ? { ...prev, remainingCount: remaining } : prev));
+  }
 
   useEffect(() => {
     let active = true;
@@ -93,6 +108,10 @@ export function useGuestQuestion({
       }
       setQuestion(saved.question || "");
       setResponse(saved);
+      const savedRemaining = saved.remainingGuestQuestions;
+      if (typeof savedRemaining === "number") {
+        setQuota((prev) => (prev ? { ...prev, remainingCount: savedRemaining } : prev));
+      }
       setRestoringAnswer(false);
     }).catch(() => {
       if (!active) return;
@@ -147,6 +166,7 @@ export function useGuestQuestion({
         return;
       }
       setResponse(result);
+      syncQuotaRemaining(result.remainingGuestQuestions);
       if (result.status === "success" && result.answer) {
         setLearningHistory(updateLearningHistoryAnswer(historyRecord.entry.id, result.answer));
       }
@@ -246,6 +266,7 @@ export function useGuestQuestion({
     error,
     feedback,
     restoringAnswer,
+    quota,
     submitGuestQuestion,
     submitGoogleAiQuestion,
     submitFeedback,

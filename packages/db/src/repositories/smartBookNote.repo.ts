@@ -17,7 +17,7 @@ function toNote(row: Row): SmartBookNote {
 
 export function makeSmartBookNoteRepo(db: Db) {
   return {
-    create(bookId: string, input: CreateSmartBookNoteInput, studentId: string | null): SmartBookNote {
+    create(bookId: string, input: CreateSmartBookNoteInput, studentId: string | null = null): SmartBookNote {
       const ts = nowIso();
       const row: Row = {
         id: newId("note"),
@@ -36,6 +36,17 @@ export function makeSmartBookNoteRepo(db: Db) {
       };
       db.insert(smartBookNotes).values(row).run();
       return toNote(row);
+    },
+
+    /** Admin-only listing of all notes in a book across students. */
+    findByBookId(bookId: string): SmartBookNote[] {
+      return db
+        .select()
+        .from(smartBookNotes)
+        .where(eq(smartBookNotes.bookId, bookId))
+        .orderBy(desc(smartBookNotes.createdAt))
+        .all()
+        .map(toNote);
     },
 
     findByBookIdAndStudent(bookId: string, studentId: string): SmartBookNote[] {

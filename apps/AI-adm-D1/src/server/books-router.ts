@@ -866,5 +866,171 @@ router.get("/api/admin/books/:bookId/qa-logs", (req, res) => {
   res.json({ logs: repos.qaLogs.findByBookId(req.params.bookId) });
 });
 
+// ---- Phase B: reading analytics & notes (P2-3 / P2-4) -------------------
+
+type ReaderProgressState = {
+  currentPage: number | null;
+  currentChapterId: string | null;
+  completedPages: number[];
+  completedChapters: string[];
+  updatedAt: string | null;
+  lastEventType: string | null;
+};
+
+function parseReaderProgress(value: string): ReaderProgressState {
+  let parsed: Partial<ReaderProgressState> = {};
+  try {
+    parsed = JSON.parse(value) as Partial<ReaderProgressState>;
+  } catch {
+    parsed = {};
+  }
+  return {
+    currentPage: typeof parsed.currentPage === "number" ? parsed.currentPage : null,
+    currentChapterId: typeof parsed.currentChapterId === "string" ? parsed.currentChapterId : null,
+    completedPages: Array.isArray(parsed.completedPages)
+      ? parsed.completedPages.filter((p): p is number => typeof p === "number")
+      : [],
+    completedChapters: Array.isArray(parsed.completedChapters)
+      ? parsed.completedChapters.filter((c): c is string => typeof c === "string")
+      : [],
+    updatedAt:
+      typeof parsed.updatedAt === "string" && parsed.updatedAt.trim() ? parsed.updatedAt : null,
+    lastEventType: typeof parsed.lastEventType === "string" ? parsed.lastEventType : null
+  };
+}
+
+router.get("/api/admin/books/:bookId/analytics/reading-progress", (req, res) => {
+  const book = repos.books.findById(req.params.bookId);
+  if (!book) return fail(res, 404, "book not found");
+
+  const prefix = `reader-progress-v1:${book.id}:`;
+  const rows = repos.settings.listByPrefix(prefix);
+
+  const sessions = rows.map((row) => ({
+    sessionId: row.key.slice(prefix.length),
+    state: parseReaderProgress(row.value)
+  }));
+
+  const totalSessions = sessions.length;
+  const activeReadersCount = sessions.filter(
+    (s) =>
+      s.state.currentPage !== null ||
+      s.state.completedPages.length > 0 ||
+      s.state.completedChapters.length > 0
+  ).length;
+
+  const totalCompletedPages = sessions.reduce((sum, s) => sum + s.state.completedPages.length, 0);
+  const averageCompletedPages =
+    totalSessions === 0 ? 0 : Number((totalCompletedPages / totalSessions).toFixed(2));
+
+  // Page drop-off: every page that appears as a current page or a completed page.
+  const pageSet = new Set<number>();
+  for (const s of sessions) {
+    if (s.state.currentPage !== null) pageSet.add(s.state.currentPage);
+    for (const p of s.state.completedPages) pageSet.add(p);
+  }
+  const pageDropoffDistribution = [...pageSet]
+    .sort((a, b) => a - b)
+    .map((page) => ({
+      page,
+      currentReadersCount: sessions.filter((s) => s.state.currentPage === page).length,
+      completedReadersCount: sessions.filter((s) => s.state.completedPages.includes(page)).length
+    }));
+
+  const chapters = repos.chapters.findByBookId(book.id);
+  const chapterCompletionStats = chapters.map((chapter) => {
+    const completedCount = sessions.filter((s) =>
+      s.state.completedChapters.includes(chapter.id)
+    ).length;
+    return {
+      chapterId: chapter.id,
+      title: chapter.title,
+      orderIndex: chapter.orderIndex,
+      completedCount,
+      completionRate: totalSessions === 0 ? 0 : Number((completedCount / totalSessions).toFixed(4))
+    };
+  });
+
+  const recentReaders = sessions
+    .map((s) => ({
+      sessionId: s.sessionId,
+      currentPage: s.state.currentPage,
+      completedPagesCount: s.state.completedPages.length,
+      completedChaptersCount: s.state.completedChapters.length,
+      updatedAt: s.state.updatedAt
+    }))
+    .sort((a, b) => {
+      if (a.updatedAt === null && b.updatedAt === null) return 0;
+      if (a.updatedAt === null) return 1;
+      if (b.updatedAt === null) return -1;
+      return b.updatedAt.localeCompare(a.updatedAt);
+    });
+
+  res.json({
+    bookId: book.id,
+    totalSessions,
+    activeReadersCount,
+    averageCompletedPages,
+    pageDropoffDistribution,
+    chapterCompletionStats,
+    recentReaders
+  });
+});
+
+router.get("/api/admin/books/:bookId/notes", (req, res) => {
+  const book = repos.books.findById(req.params.bookId);
+  if (!book) return fail(res, 404, "book not found");
+
+  const chapterId =
+    typeof req.query.chapterId === "string" && req.query.chapterId ? req.query.chapterId : undefined;
+  const type =
+    typeof req.query.type === "string" && req.query.type ? req.query.type : undefined;
+  const q =
+    typeof req.query.q === "string" && req.query.q ? req.query.q.trim().toLowerCase() : undefined;
+
+  let notes = repos.notes.findByBookId(book.id);
+  if (chapterId) notes = notes.filter((n) => n.chapterId === chapterId);
+  if (type) notes = notes.filter((n) => n.type === type);
+  if (q) {
+    notes = notes.filter(
+      (n) =>
+        n.title.toLowerCase().includes(q) ||
+        (n.content ?? "").toLowerCase().includes(q)
+    );
+  }
+
+  const chapterTitles = new Map(
+    repos.chapters.findByBookId(book.id).map((c) => [c.id, c.title])
+  );
+
+  const result = notes.map((n) => ({
+    id: n.id,
+    bookId: n.bookId,
+    chapterId: n.chapterId,
+    chapterTitle: n.chapterId ? chapterTitles.get(n.chapterId) ?? null : null,
+    pageNumber: n.pageNumber,
+    type: n.type,
+    title: n.title,
+    content: n.content,
+    canvasData: n.canvasData,
+    canvasImageUrl: n.canvasImageUrl,
+    createdAt: n.createdAt,
+    updatedAt: n.updatedAt
+  }));
+
+  res.json({ bookId: book.id, totalCount: result.length, notes: result });
+});
+
+router.delete("/api/admin/books/:bookId/notes/:noteId", (req, res) => {
+  const book = repos.books.findById(req.params.bookId);
+  if (!book) return fail(res, 404, "book not found");
+
+  const note = repos.notes.findById(req.params.noteId);
+  if (!note || note.bookId !== book.id) return fail(res, 404, "note not found");
+
+  repos.notes.delete(note.id);
+  res.json({ deleted: true, noteId: note.id });
+});
+
   return router;
 }
