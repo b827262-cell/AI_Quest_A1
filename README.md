@@ -68,17 +68,19 @@
 .
 ├── apps/
 │   ├── AI-Stu-R1/          # 學生端前端應用 (Vite / React SPA)
-│   └── AI-adm-D1/          # 管理員前端與後端 API 服務 (Hono / Node.js)
+│   └── AI-adm-D1/          # 管理員前端與後端 API 服務 (Express / Node.js)
 ├── packages/
 │   ├── ai/                 # AI 多模型 Gateway 與憑證/配額控管
+│   ├── ai-orchestration/   # AI 編排／RAG 管線
+│   ├── auth/               # 身份驗證與 Token 管理模組
 │   ├── book-core/          # PDF 解析、章節切割與 AI 問答核心
+│   ├── contracts/          # 跨包合約與 Zod schema 定義
 │   ├── db/                 # SQLite / Drizzle ORM Schema 與 Repositories
+│   ├── quiz-core/          # 測驗與題庫核心模組
 │   ├── schema/             # 全域 TypeScript 型別與 Zod 驗證定義
 │   ├── student-runtime/    # 學生端運行時狀態支援
 │   ├── sync/               # 學生學習資料匯出 / 匯入工具
-│   ├── ui/                 # 跨應用共享 UI 元件庫
-│   ├── auth/               # 身份驗證與 Token 管理模組
-│   └── quiz-core/          # 測驗與題庫核心模組
+│   └── ui/                 # 跨應用共享 UI 元件庫
 ├── docs/                   # 專案架構與完成報告文檔
 ├── reset-ai-smartbook.sh   # 一鍵服務控制與監控腳本
 └── package.json
