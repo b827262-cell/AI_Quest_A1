@@ -65,10 +65,14 @@ async function main() {
   for (const [label, args] of localCommands) results.push(await runCommand(label, args));
   const localGate = combineGate("Local Test", results);
 
-  // Workspace symlink health: warn-only by design (check:symlinks uses the
-  // --warn-only flag), so orphan /data/ absolute links or broken symlinks
-  // surface in the gate summary without failing the release gate.
-  const symlinkHealth = await runCommand("workspace symlink health", ["check:symlinks"]);
+  // Workspace symlink health: STRICT since R13 (PM-approved on baseline a4a5550;
+  // R12 environment restored broken=0 / abs-/data/=0). The old --warn-only path
+  // is intentionally NOT invoked here: broken symlinks or absolute /data/
+  // links now FAIL this step and the overall release gate directly. We bypass
+  // the check:symlinks npm script (which carries --warn-only in package.json)
+  // by exec-ing the strict script itself — phase3a-release-gate.mjs is the only
+  // file modified for this upgrade (R13-T4 single-file authorization).
+  const symlinkHealth = await runCommand("workspace symlink health", ["exec", "bash", "scripts/check-workspace-symlinks.sh"]);
   const symlinkHealthGate = combineGate("Workspace Symlink Health", [symlinkHealth]);
 
   const preflight = await runCommand("database preflight", ["db:preflight:phase2"]);

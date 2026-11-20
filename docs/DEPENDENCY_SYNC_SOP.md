@@ -132,7 +132,7 @@ ln -s ../../schema/node_modules/zod packages/auth/node_modules/zod
 
 | # | 检查项目 | 执行命令 | 期望结果 |
 |---|----------|----------|----------|
-| 1 | 根层 zod 解析 | `node -e "require.resolve('zod')"` | 可解析、exit 0 |
+| 1 | 根层 vitest 解析 | `node -e "require.resolve('vitest')"` | 可解析、exit 0 |
 | 2 | auth 包 zod 解析 | `cd packages/auth && node -e "require('zod')"` | 可解析、exit 0 |
 | 3 | auth 包类型检查 | `pnpm --filter @ai-smartbook/auth typecheck` | exit 0 |
 | 4 | 站点认证测试 | `pnpm run test:site-auth` | 8/8 passed、exit 0 |
@@ -140,6 +140,8 @@ ln -s ../../schema/node_modules/zod packages/auth/node_modules/zod
 | 6 | Symlink 健康检查（strict） | `bash scripts/check-workspace-symlinks.sh` | broken 0、abs-/data/ 0、exit 0 |
 | 7 | 边界检查 | `bash scripts/boundary-check.sh` | exit 0、GATE_STATUS: PASS |
 | 8 | Git 状态检查 | `git status --porcelain` | 仅既有授权文件；pnpm-lock.yaml 不变 |
+
+> **R12 基準變更軌跡**：原 #1 為「根層 zod 解析」，但根 `package.json` 無 `dependencies`，zod 從未在根層宣告，此為無效基準（t6 R11-T6 §5 提出之疑點）。R13 依 PM 核准改為「根層 vitest 解析」，對齊根 `package.json` 實際 `devDependencies`。
 
 ### 3.1 验收执行顺序
 
@@ -333,10 +335,12 @@ corepack pnpm@9.15.0 -v
    # 与基准值比对，确保 lockfile 未被修改
 
 2. 以 pnpm@9.15.0 执行冻结安装
-   corepack pnpm@9.15.0 install --frozen-lockfile
+   NODE_ENV=development CI=true corepack pnpm@9.15.0 install --frozen-lockfile
+   # NODE_ENV=development：确保安装 devDependencies（vitest/typescript）
+   # CI=true：防止非 TTY 环境重现 NO_TTY 卡停
 
 3. 执行 R9-T6 §2.4 八项验收清单
-   - #1 根层 zod 解析
+   - #1 根层 vitest 解析（R13 基准修订，原 zod 项为无效基准）
    - #2 auth 包 zod 解析
    - #3 auth 包类型检查
    - #4 站点认证测试
@@ -383,7 +387,9 @@ env | grep NODE_ENV
 unset NODE_ENV
 
 # 再执行安装
-corepack pnpm@9.15.0 install --frozen-lockfile
+NODE_ENV=development CI=true corepack pnpm@9.15.0 install --frozen-lockfile
+# NODE_ENV=development：确保安装 devDependencies（vitest/typescript）
+# CI=true：防止非 TTY 环境重现 NO_TTY 卡停
 ```
 
 **事故后排查**：若发现测试框架或类型检查工具缺失，但 production 依赖存在，应排查：
