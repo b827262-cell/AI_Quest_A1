@@ -44,57 +44,106 @@ describe("auth-helper | relay.verify method classification", () => {
   it("classifies GET as GET", async () => {
     const req = buildRequest("GET", "http://localhost/api/student");
     await getNormalizedAuth(req);
+    expect(loggedEvents).toHaveLength(1);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("GET");
     expect(event.evt).toBe("relay.verify");
+    expect(event.result).toBe("none");
+    expect(event.pathClass).toBe("student");
+    expect(event.site).toBe("unknown");
+    expect(event.mode).toBe("transitional");
+    expect(event.identityPresent).toBe(true);
+    expect(event.synthetic).toBe(false);
   });
 
   it("classifies HEAD as HEAD", async () => {
     const req = buildRequest("HEAD", "http://localhost/api/admin");
     await getNormalizedAuth(req);
+    expect(loggedEvents).toHaveLength(1);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("HEAD");
     expect(event.evt).toBe("relay.verify");
+    expect(event.result).toBe("none");
+    expect(event.pathClass).toBe("admin");
+    expect(event.site).toBe("unknown");
+    expect(event.mode).toBe("transitional");
+    expect(event.identityPresent).toBe(true);
+    expect(event.synthetic).toBe(false);
   });
 
   it("classifies PUT as PUT (actual verb)", async () => {
     const req = buildRequest("PUT", "http://localhost/api/student/progress");
     await getNormalizedAuth(req);
+    expect(loggedEvents).toHaveLength(1);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("PUT");
     expect(event.evt).toBe("relay.verify");
+    expect(event.result).toBe("none");
+    expect(event.pathClass).toBe("student");
+    expect(event.site).toBe("unknown");
+    expect(event.mode).toBe("transitional");
+    expect(event.identityPresent).toBe(true);
+    expect(event.synthetic).toBe(false);
   });
 
   it("classifies POST as POST (actual verb)", async () => {
     const req = buildRequest("POST", "http://localhost/api/admin/books");
     await getNormalizedAuth(req);
+    expect(loggedEvents).toHaveLength(1);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("POST");
     expect(event.evt).toBe("relay.verify");
+    expect(event.result).toBe("none");
+    expect(event.pathClass).toBe("admin");
+    expect(event.site).toBe("unknown");
+    expect(event.mode).toBe("transitional");
+    expect(event.identityPresent).toBe(true);
+    expect(event.synthetic).toBe(false);
   });
 
   it("classifies DELETE as DELETE (actual verb)", async () => {
     const req = buildRequest("DELETE", "http://localhost/api/student/profile");
     await getNormalizedAuth(req);
+    expect(loggedEvents).toHaveLength(1);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("DELETE");
     expect(event.evt).toBe("relay.verify");
+    expect(event.result).toBe("none");
+    expect(event.pathClass).toBe("student");
+    expect(event.site).toBe("unknown");
+    expect(event.mode).toBe("transitional");
+    expect(event.identityPresent).toBe(true);
+    expect(event.synthetic).toBe(false);
   });
 
   it("classifies PATCH as PATCH (actual verb)", async () => {
     const req = buildRequest("PATCH", "http://localhost/api/student/settings");
     await getNormalizedAuth(req);
+    expect(loggedEvents).toHaveLength(1);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("PATCH");
     expect(event.evt).toBe("relay.verify");
+    expect(event.result).toBe("none");
+    expect(event.pathClass).toBe("student");
+    expect(event.site).toBe("unknown");
+    expect(event.mode).toBe("transitional");
+    expect(event.identityPresent).toBe(true);
+    expect(event.synthetic).toBe(false);
   });
 
   it("classifies unknown verb OPTIONS as OTHER", async () => {
     const req = buildRequest("OPTIONS", "http://localhost/api/cors/preflight");
     await getNormalizedAuth(req);
+    expect(loggedEvents).toHaveLength(1);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("OTHER");
     expect(event.evt).toBe("relay.verify");
+    expect(event.result).toBe("none");
+    expect(event.pathClass).toBe("other");
+    expect(event.site).toBe("unknown");
+    expect(event.mode).toBe("transitional");
+    expect(event.identityPresent).toBe(true);
+    expect(event.synthetic).toBe(false);
   });
 
   it("classifies unknown verb TRACE as OTHER", async () => {
@@ -104,8 +153,15 @@ describe("auth-helper | relay.verify method classification", () => {
     const req = buildRequest("GET", "http://localhost/api/debug");
     Object.defineProperty(req, "method", { value: "TRACE", configurable: true });
     await getNormalizedAuth(req);
+    expect(loggedEvents).toHaveLength(1);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("OTHER");
     expect(event.evt).toBe("relay.verify");
+    expect(event.result).toBe("none");
+    expect(event.pathClass).toBe("other");
+    expect(event.site).toBe("unknown");
+    expect(event.mode).toBe("transitional");
+    expect(event.identityPresent).toBe(true);
+    expect(event.synthetic).toBe(false);
   });
 });
