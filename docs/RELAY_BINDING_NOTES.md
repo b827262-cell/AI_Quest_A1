@@ -132,15 +132,38 @@ export A01_RELAY_KEY_ADMIN="<32字符以上的密钥>"
 export A01_RELAY_KEY_ADMIN_PREV="<前一个密钥，用于轮换>"
 ```
 
-## 4. SITE_ROLE 测试与部署注入规范
+## 4. 站点角色与密钥隔离
 
-### 4.1 站点角色识别
+### 4.1 SITE_ROLE 环境变量
 
-Relay 验证通过请求路径识别站点角色：
+`SITE_ROLE` 是 auth-helper.ts:84 中的日志闸门，用于控制 Relay 验证日志仅在主要实例上输出：
 
 ```typescript
+// auth-helper.ts:84
+if (readRuntimeString("SITE_ROLE") !== "primary") return;
+```
+
+**作用**：
+- 当 `SITE_ROLE` 不等于 `"primary"` 时，跳过 Relay 验证日志输出
+- 避免在多个实例部署时产生重复日志
+- 不影响 Relay 验证逻辑本身，仅影响可观测性
+
+**部署建议**：
+- 主要实例设置 `SITE_ROLE=primary`
+- 备用实例或不需日志的实例可不设置或设为其他值
+
+### 4.2 站点角色识别
+
+Relay 验证以 `x-a01-relay-site` 标头宣告 site、再以路径前缀强制绑定（relay-verification.ts:112, 125）：
+
+```typescript
+// L112: 解析 x-a01-relay-site 标头获取 site 值
+const parsed = parseRelayHeaders(request.headers);
+// L125: 以路径前缀强制绑定，防止标头与路径不一致
 const prefix = `/api/${parsed.site}`;
-// parsed.site 为 "student" 或 "admin"
+if (policyPath !== "/api/health" && policyPath !== prefix && !policyPath.startsWith(`${prefix}/`)) {
+  return { status: "invalid" };
+}
 ```
 
 **路径策略**：
@@ -148,7 +171,7 @@ const prefix = `/api/${parsed.site}`;
 - `/api/student/*`：学生端 API
 - `/api/admin/*`：管理端 API
 
-### 4.2 密钥隔离规则
+### 4.3 密钥隔离规则
 
 **关键安全规则**：学生端和管理端必须使用不同的密钥。
 
@@ -166,7 +189,7 @@ function siteKeys(site: "student" | "admin"): string[] {
 - 空数组导致验证失败，返回 `{ status: "invalid" }`
 - 此设计防止密钥意外共享导致的安全漏洞
 
-### 4.3 测试注入示例
+### 4.4 测试注入示例
 
 ```typescript
 // 测试学生端

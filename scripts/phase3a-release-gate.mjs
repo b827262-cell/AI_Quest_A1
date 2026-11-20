@@ -65,6 +65,12 @@ async function main() {
   for (const [label, args] of localCommands) results.push(await runCommand(label, args));
   const localGate = combineGate("Local Test", results);
 
+  // Workspace symlink health: warn-only by design (check:symlinks uses the
+  // --warn-only flag), so orphan /data/ absolute links or broken symlinks
+  // surface in the gate summary without failing the release gate.
+  const symlinkHealth = await runCommand("workspace symlink health", ["check:symlinks"]);
+  const symlinkHealthGate = combineGate("Workspace Symlink Health", [symlinkHealth]);
+
   const preflight = await runCommand("database preflight", ["db:preflight:phase2"]);
   const rotationTests = await runCommand("credential rotation tests", ["--filter", "AI-adm-D1", "exec", "vitest", "run", "--no-file-parallelism", "src/server/ai/credential-rotation.test.ts", "src/server/ai/credential-crypto.test.ts"]);
   let rotationVerification;
@@ -91,7 +97,7 @@ async function main() {
   ]);
   const rollbackRehearsal = rollbackRestoreRehearsalGate();
 
-  const gates = [localGate, combineGate("Database Preflight", [preflight]), rotationTestsGate, targetCredentialVerificationGate,
+  const gates = [localGate, symlinkHealthGate, combineGate("Database Preflight", [preflight]), rotationTestsGate, targetCredentialVerificationGate,
     e2eGate, combineGate("Staging HTTP Smoke", [staging]), combineGate("Provider Vault Live Smoke", [providerLive]),
     combineGate("Production Verification", [production]), rollbackProcedure, rollbackRehearsal];
   const overall = overallState(gates);

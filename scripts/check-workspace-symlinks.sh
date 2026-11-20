@@ -42,10 +42,11 @@ while IFS= read -r -d '' link; do
   if [ -z "$resolved" ] || [ ! -e "$resolved" ]; then
     broken=$((broken + 1))
     emit "BROKEN: $link -> ${raw:-<unreadable>}"
-    continue
   fi
 
   # absolute link under /data/ (string check on raw target and resolved path)
+  # deliberately NOT skipped for broken links: a link can be both broken
+  # and point at /data/ — count it in both categories for accurate triage.
   case "$raw" in
     /data/|/data/*)
       dataabs=$((dataabs + 1))
