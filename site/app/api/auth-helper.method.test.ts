@@ -25,8 +25,8 @@ describe("auth-helper | relay.verify method classification", () => {
 
     loggedEvents = [];
     console.log = vi.fn((...args) => {
+      // Collect only: do not re-emit to stdout (removes test noise).
       loggedEvents.push(args[0]);
-      originalConsoleLog.apply(console, args);
     });
   });
 
@@ -46,6 +46,7 @@ describe("auth-helper | relay.verify method classification", () => {
     await getNormalizedAuth(req);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("GET");
+    expect(event.evt).toBe("relay.verify");
   });
 
   it("classifies HEAD as HEAD", async () => {
@@ -53,6 +54,7 @@ describe("auth-helper | relay.verify method classification", () => {
     await getNormalizedAuth(req);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("HEAD");
+    expect(event.evt).toBe("relay.verify");
   });
 
   it("classifies PUT as PUT (actual verb)", async () => {
@@ -60,6 +62,7 @@ describe("auth-helper | relay.verify method classification", () => {
     await getNormalizedAuth(req);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("PUT");
+    expect(event.evt).toBe("relay.verify");
   });
 
   it("classifies POST as POST (actual verb)", async () => {
@@ -67,6 +70,7 @@ describe("auth-helper | relay.verify method classification", () => {
     await getNormalizedAuth(req);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("POST");
+    expect(event.evt).toBe("relay.verify");
   });
 
   it("classifies DELETE as DELETE (actual verb)", async () => {
@@ -74,6 +78,7 @@ describe("auth-helper | relay.verify method classification", () => {
     await getNormalizedAuth(req);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("DELETE");
+    expect(event.evt).toBe("relay.verify");
   });
 
   it("classifies PATCH as PATCH (actual verb)", async () => {
@@ -81,6 +86,7 @@ describe("auth-helper | relay.verify method classification", () => {
     await getNormalizedAuth(req);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("PATCH");
+    expect(event.evt).toBe("relay.verify");
   });
 
   it("classifies unknown verb OPTIONS as OTHER", async () => {
@@ -88,6 +94,7 @@ describe("auth-helper | relay.verify method classification", () => {
     await getNormalizedAuth(req);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("OTHER");
+    expect(event.evt).toBe("relay.verify");
   });
 
   it("classifies unknown verb TRACE as OTHER", async () => {
@@ -99,5 +106,6 @@ describe("auth-helper | relay.verify method classification", () => {
     await getNormalizedAuth(req);
     const event = JSON.parse(loggedEvents[0] as string);
     expect(event.method).toBe("OTHER");
+    expect(event.evt).toBe("relay.verify");
   });
 });
