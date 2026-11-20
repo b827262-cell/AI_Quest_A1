@@ -345,13 +345,13 @@ start_service() {
   if command -v setsid >/dev/null 2>&1; then
     (
       cd "$PROJECT_ROOT"
-      nohup setsid bash -lc "exec $command" >>"$log_file" 2>&1 &
+      nohup setsid bash -lc "exec env $command" >>"$log_file" 2>&1 &
       echo "$!" >"$pid_file"
     )
   else
     (
       cd "$PROJECT_ROOT"
-      nohup bash -lc "exec $command" >>"$log_file" 2>&1 &
+      nohup bash -lc "exec env $command" >>"$log_file" 2>&1 &
       echo "$!" >"$pid_file"
     )
   fi

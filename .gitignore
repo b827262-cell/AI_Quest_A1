@@ -46,3 +46,15 @@ logs/dev/
 
 # Local programming backup archives (never commit)
 Programming-Backup/
+
+# Agent & dispatch artifacts (R4)
+reports/
+scripts/dispatch-*
+CODING_ABILITY_FOR_PM.md
+.a01-phase-r/
+.a01-phase-r-*
+.agents/
+.commandcode/
+.heartbeat
+data/tasks.json
+data/MBA-buddy/
