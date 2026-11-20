@@ -61,16 +61,16 @@ describe("Phase 3A release gate state matrix", () => {
     expect(exitCodeForState("BLOCKED")).toBe(2);
   });
 
-  it("accepts an E2E report only when all 23 assertions pass", () => {
+  it("accepts an E2E report only when all 24 assertions pass", () => {
     expect(evaluateBrowserE2eReport(passingE2eReport(), "PASS").state).toBe("PASS");
   });
 
   it("rejects partially blocked E2E assertions as FAIL", () => {
-    expect(evaluateBrowserE2eReport({ ...passingE2eReport(), assertionCounts: { executed: 2, passed: 2, failed: 0, blocked: 21 } }, "BLOCKED").state).toBe("FAIL");
+    expect(evaluateBrowserE2eReport({ ...passingE2eReport(), assertionCounts: { executed: 2, passed: 2, failed: 0, blocked: 22 } }, "BLOCKED").state).toBe("FAIL");
   });
 
   it("marks zero executed assertions BLOCKED only for a blocked browser command", () => {
-    const report = { ...passingE2eReport(), assertionCounts: { executed: 0, passed: 0, failed: 0, blocked: 23 } };
+    const report = { ...passingE2eReport(), assertionCounts: { executed: 0, passed: 0, failed: 0, blocked: 24 } };
     expect(evaluateBrowserE2eReport(report, "BLOCKED").state).toBe("BLOCKED");
     expect(evaluateBrowserE2eReport(report, "PASS").state).toBe("FAIL");
   });

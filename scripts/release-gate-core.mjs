@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { artifactPath, scanArtifactText } from "./release-artifacts.mjs";
 
 export const RELEASE_GATE_EXIT = Object.freeze({ PASS: 0, FAIL: 1, BLOCKED: 2 });
-export const E2E_ASSERTION_TOTAL = 23;
+export const E2E_ASSERTION_TOTAL = 24;
 
 export function stateForExit(code, timedOut = false) {
   if (timedOut || code === null || code === undefined) return "FAIL";
