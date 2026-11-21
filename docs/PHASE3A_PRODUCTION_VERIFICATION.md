@@ -77,14 +77,16 @@ pnpm production:verify:phase3a
 
 #### 3.1.3 端點可達性檢查
 
-| 端點 | 路徑 | 期望狀態 |
-|------|------|----------|
-| 學生端首頁 | `/` | 200 |
-| 公開 site-config | `/api/public/site-config` | 200 |
-| 管理端健康檢查（live） | `/health/live` | 200 |
-| 管理端健康檢查（ready） | `/health/ready` | 200 |
+| 端點 | 路徑 | 期望狀態 | 檢查方式 |
+|------|------|----------|----------|
+| 學生端首頁 | `/` | 200 | script 自動檢查 |
+| 公開 site-config | `/api/public/site-config` | 200 | script 自動檢查 |
+| 管理端健康檢查（live） | `/health/live` | 200 | **手動確認（非 script 檢查）** |
+| 管理端健康檢查（ready） | `/health/ready` | 200 | **手動確認（非 script 檢查）** |
 
 > **註（F2）**：`production-verification.mjs:175-211` 實際檢查的端點不含 `/api/admin/health`。管理端 API（`apps/AI-adm-D1/src`）僅有 `/health/live` 和 `/health/ready` 兩條健康檢查路由（見 `admin-api.integration.test.ts:442-443`）。`production-verification.mjs` 實際檢查的端點包括：學生端首頁、管理端首頁、Public site config、Student domain rejects Admin API、Admin unauthorized request、CORS origin rejection、Forwarded-header spoof、Security headers、Admin token protected API、Admin cookie flags、Uploads routing、Error responses sanitized。
+>
+> **註（F3）**：`/health/live` 和 `/health/ready` **不是** `production-verification.mjs` 自動檢查的端點，需手動確認。手動確認方式：`curl -s -o /dev/null -w "%{http_code}" https://<admin-host>/health/live` 應回傳 `200`。
 
 #### 3.1.4 安全掃描
 

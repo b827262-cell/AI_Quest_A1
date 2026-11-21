@@ -342,3 +342,52 @@
   .public-hero { padding-top: 64px; }
 }
 
+
+/* ===== R16: Google AI relay simulator (side-by-side popup workbench) ===== */
+.google-relay-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 32px 24px;
+  background: rgba(16, 21, 44, 0.42);
+  backdrop-filter: blur(2px);
+}
+.google-relay-panel {
+  width: min(430px, 100%);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px;
+  border-radius: 20px;
+  background: #ffffff;
+  border: 1px solid rgba(132, 144, 190, 0.35);
+  box-shadow: 0 18px 44px rgba(16, 21, 44, 0.28);
+  outline: none;
+}
+.google-relay-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.google-relay-title { font-size: 16px; font-weight: 700; margin: 0; }
+.google-relay-close { border: 0; background: transparent; font-size: 15px; cursor: pointer; color: #5a648f; padding: 4px 6px; border-radius: 8px; }
+.google-relay-close:hover { background: rgba(132, 144, 190, 0.15); }
+.google-relay-question { margin: 0; font-size: 14px; font-weight: 600; color: #232a4d; word-break: break-word; }
+.google-relay-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.google-relay-reopen, .google-relay-done {
+  border: 0; border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  background: #2f5cff; color: #fff;
+}
+.google-relay-reopen:hover, .google-relay-done:hover { background: #2448d6; }
+.google-relay-channels { margin: 0; padding: 10px 12px 10px 26px; font-size: 12px; color: #4a5378; background: rgba(47, 92, 255, 0.06); border-radius: 12px; display: grid; gap: 4px; }
+.google-relay-receiver {
+  padding: 16px 14px; border: 2px dashed rgba(47, 92, 255, 0.45); border-radius: 14px;
+  font-size: 13px; color: #39406b; text-align: center; background: rgba(47, 92, 255, 0.04);
+}
+.relay-dropzone.is-dragging .google-relay-receiver { border-color: #2f5cff; background: rgba(47, 92, 255, 0.12); }
+.google-relay-status { margin: 0; font-size: 13px; font-weight: 600; color: #146a3d; background: rgba(20, 155, 84, 0.1); border-radius: 10px; padding: 8px 10px; }
+.google-relay-modal[data-conflict="true"] .google-relay-status { color: #8a2b1d; background: rgba(196, 74, 44, 0.12); }
+.google-relay-help { margin: 0; font-size: 11px; color: #7a83ab; }
+@media (max-width: 720px) {
+  .google-relay-modal { padding: 16px 12px; justify-content: center; }
+}

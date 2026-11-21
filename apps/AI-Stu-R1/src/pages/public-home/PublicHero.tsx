@@ -3,6 +3,7 @@ import { GuestRemainingHint } from "../../components/GuestRemainingHint";
 import { HomeAIComposer } from "../../components/HomeAIComposer";
 import type { PublicSiteConfig } from "../../studentClient";
 import { GuestAnswer } from "./GuestAnswer";
+import { GoogleAiRelaySimulatorModal } from "./GoogleAiRelaySimulatorModal";
 import { LearningHistoryPanel } from "./LearningHistoryPanel";
 import { GOOGLE_CONFIRM_HINT, QUICK_STARTS } from "./constants";
 import type { useGuestQuestion } from "./useGuestQuestion";
@@ -114,6 +115,14 @@ export function PublicHero({
             {intake.pendingIntake.candidates.map((entry) => <button key={entry.id} type="button" onClick={() => intake.confirmPendingIntake(entry)}>{entry.question}</button>)}
             <button type="button" className="share-binding-cancel" onClick={intake.dismissPendingIntake}>先不儲存</button>
           </section> : null}
+          {guest.activeRelay ? (
+            <GoogleAiRelaySimulatorModal
+              entry={guest.activeRelay.entry}
+              url={guest.activeRelay.url}
+              onClose={() => guest.setActiveRelay(null)}
+              onIntake={intake.acceptIncomingAnswer}
+            />
+          ) : null}
         </>
     ) : guest.restoringAnswer ? (
       <p className="public-answer-loading" role="status">正在載入回答…</p>

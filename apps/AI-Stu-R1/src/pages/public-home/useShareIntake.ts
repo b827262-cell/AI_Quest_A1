@@ -6,6 +6,7 @@ import {
   extractSharedAnswerText,
   findAnswerBinding,
   findGoogleAiSourceEntry,
+  normalizeQuestion,
   readLearningHistory,
   readPendingRawAnswer,
   saveGoogleAiSourceUrl,
@@ -13,6 +14,19 @@ import {
   saveRawAnswerOnce,
   type LearningHistoryEntry
 } from "../../learningHistory";
+
+/** Options for an explicit-target intake (R16 relay simulator / per-entry paste). */
+export type AnswerIntakeOptions = {
+  sharedUrl?: unknown;
+  explicitTargetEntry?: boolean;
+};
+
+/**
+ * R17-T4 (R16-T3 F2): acceptIncomingAnswer reports what actually happened so a
+ * caller's UI state (e.g. the relay modal's「第 1 步完成」) can follow the real
+ * storage outcome instead of assuming success.
+ */
+export type ShareIntakeResult = { saved: boolean } | null;
 
 export function useShareIntake(setLearningHistory: (entries: LearningHistoryEntry[]) => void) {
   const [googleStatus, setGoogleStatus] = useState("");
@@ -51,55 +65,66 @@ export function useShareIntake(setLearningHistory: (entries: LearningHistoryEntr
     setGoogleStatus("無法高信心自動對應；原始回覆暫留在本頁，請明確選擇題目。" );
   }
 
-  function acceptIncomingAnswer(rawAnswer: string, preferredEntry?: LearningHistoryEntry, sharedUrl?: unknown) {
+  function acceptIncomingAnswer(rawAnswer: string, preferredEntry?: LearningHistoryEntry, options?: AnswerIntakeOptions): ShareIntakeResult {
     const current = readLearningHistory();
+    const sharedUrl = options?.sharedUrl;
     const source = extractGoogleAiSourceUrl(rawAnswer, sharedUrl);
     const sourceEntry = source ? findGoogleAiSourceEntry(current, source) : null;
     const extraction = extractSharedAnswerText(rawAnswer, sharedUrl);
     if (extraction.status !== "accepted") {
       if (source && sourceEntry) {
-        saveSourceIntake(sourceEntry, source.sourceUrl);
+        const sourceStatus = saveSourceIntake(sourceEntry, source.sourceUrl);
         const message = "已保存搜尋好朋友來源連結；尚未保存回答文字。請使用「從剪貼簿帶回回答」，或展開手動貼上備援。";
         setGoogleStatus(message);
         setHistoryStatuses((messages) => ({ ...messages, [sourceEntry.id]: message }));
-        return;
+        return { saved: sourceStatus === "saved" || sourceStatus === "already_saved" };
       }
       const message = "來源只分享了連結；沒有儲存回答。請使用「從剪貼簿帶回回答」，或展開手動貼上備援。";
       setGoogleStatus(message);
       if (preferredEntry) setHistoryStatuses((messages) => ({ ...messages, [preferredEntry.id]: message }));
-      return;
+      return { saved: false };
     }
     rawAnswer = extraction.rawAnswer;
     // The validated `q` parameter gives an exact, local question binding.
     if (source && sourceEntry) {
-      saveSourceIntake(sourceEntry, source.sourceUrl);
+      const sourceStatus = saveSourceIntake(sourceEntry, source.sourceUrl);
       const result = saveIntake(sourceEntry, rawAnswer);
       setGoogleStatus(result === "saved" ? "已保存搜尋好朋友來源連結與原始回答。" : "已保存搜尋好朋友來源連結；原始回答未覆寫。" );
-      return;
+      return { saved: sourceStatus === "saved" || sourceStatus === "already_saved" || result === "saved" };
     }
     const binding = findAnswerBinding(current, rawAnswer);
     if (preferredEntry) {
+      if (options?.explicitTargetEntry) {
+        // R16: the learner (or the locked relay simulator) explicitly picked
+        // this entry, so the 67% token gate is waived. A udm=50 URL naming a
+        // different question is still protected: it never binds implicitly.
+        if (source && normalizeQuestion(source.question) !== normalizeQuestion(preferredEntry.question)) {
+          requireExplicitChoice(rawAnswer, [preferredEntry, ...binding.matches.filter((entry) => entry.id !== preferredEntry.id)].slice(0, 3));
+          return { saved: false };
+        }
+        return { saved: saveIntake(preferredEntry, rawAnswer) === "saved" };
+      }
       const candidates = [preferredEntry, ...binding.matches.filter((entry) => entry.id !== preferredEntry.id)].slice(0, 3);
       if (!canAutoBindAnswer(binding) || binding.matches[0]?.id !== preferredEntry.id) {
         requireExplicitChoice(rawAnswer, candidates);
-        return;
+        return { saved: false };
       }
-      saveIntake(preferredEntry, rawAnswer);
-      return;
+      return { saved: saveIntake(preferredEntry, rawAnswer) === "saved" };
     }
     if (binding.hasExplicitMismatch || !binding.matches.length) {
       const candidates = current.filter((entry) => entry.strategy === "google-ai" && !entry.rawAnswer).slice(0, 3);
       if (candidates.length) requireExplicitChoice(rawAnswer, candidates);
       else setGoogleStatus("沒有可對應的待處理題目；請先提出問題後再帶回回覆。");
-      return;
+      return { saved: false };
     }
     if (canAutoBindAnswer(binding)) {
       const target = binding.matches[0];
       const result = saveIntake(target, rawAnswer);
       setGoogleStatus(result === "saved" ? "已安全帶回回覆。" : "回覆沒有重複儲存。" );
-      return;
+      return { saved: result === "saved" };
     }
     requireExplicitChoice(rawAnswer, binding.matches);
+    return { saved: false };
   }
 
   useEffect(() => {
@@ -108,7 +133,7 @@ export function useShareIntake(setLearningHistory: (entries: LearningHistoryEntr
       const data = event.data as { type?: unknown; payload?: { text?: unknown; url?: unknown } } | null;
       if (data?.type !== "share-intake") return;
       const rawAnswer = typeof data.payload?.text === "string" ? data.payload.text : "";
-      if (data.payload) acceptIncomingAnswer(rawAnswer, undefined, data.payload.url);
+      if (data.payload) acceptIncomingAnswer(rawAnswer, undefined, { sharedUrl: data.payload.url });
     }
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.addEventListener("message", receiveIntake);
