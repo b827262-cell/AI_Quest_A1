@@ -30,6 +30,7 @@
     "smoke:provider": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/provider-live-smoke.ts",
     "verify:guest-ask-live": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/guest-ask-live-verify.ts",
     "e2e:admin-providers": "pnpm --filter AI-adm-D1 build && node scripts/admin-provider-ui-e2e.mjs",
+    "e2e:student-relay": "node scripts/student-relay-e2e.mjs",
     "production:verify:phase3a": "node scripts/production-verification.mjs",
     "release-gate:phase3a": "node scripts/phase3a-release-gate.mjs",
     "credential-key:rotate": "node --import ./apps/AI-adm-D1/node_modules/tsx/dist/loader.mjs scripts/credential-key-rotation.ts",

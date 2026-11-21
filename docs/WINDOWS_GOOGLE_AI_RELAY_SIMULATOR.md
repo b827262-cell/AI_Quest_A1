@@ -176,7 +176,67 @@ if (extraction.status !== "accepted") {
 
 `useGuestQuestion.ts:202-236` 的 `submitGoogleAiQuestion` 將改為桌面並排 Popup 加啟動 `activeRelayEntry`，保留既有 `manual`/`image`/`file` 行為與 cooldown，**不破壞**既有 `google-confirm-hint.test.tsx`、`guest-cooldown.test.tsx`。
 
-## 6. 常見問題
+## 6. 實機模擬測試（Playwright Chromium E1–E7）執行與驗收指南
+
+### 6.1 執行命令
+
+```bash
+node scripts/student-relay-e2e.mjs
+```
+
+或透過根目錄 `package.json` 腳本（R18-T4 新增後）：
+
+```bash
+corepack pnpm@9.15.0 run e2e:student-relay
+```
+
+> **注意**：`e2e:student-relay` 腳本定義於根層 `package.json`，不可使用 `--filter AI-Stu-R1` 過濾，否則會靜默 no-op（輸出「None of the selected packages has a "e2e:student-relay" script」且回 exit 0）。
+
+### 6.2 前置條件
+
+1. **playwright-core 已安裝**：項目 `node_modules` 已包含 `playwright-core` 套件。
+2. **本地 Chromium 已安裝**：PM 已執行 `playwright-core install chromium` 安裝 headless Chromium 瀏覽器。**禁止自行執行安裝命令**。
+3. **靜態 SPA 伺服器**：腳本在 `apps/AI-Stu-R1/dist` 缺失或過舊時執行 build，然後以內建 HTTP 伺服器服務已構建的 SPA（loopback `127.0.0.1`），**不啟動或連接 Vite 開發伺服器**。
+4. **不連外網**：腳本攔截所有指向 `google.com` 的 popup 請求，回傳本地模擬的 Google AI 結果頁，不觸發反爬蟲機制、不消耗外部 API 配額。
+
+### 6.3 輸出產物
+
+腳本執行後輸出結構化 JSON 報告至：
+
+```
+release-artifacts/phase3a/student-relay-e2e.json
+```
+
+報告包含每個 E1–E7 測試用例的 PASS/FAIL 狀態、耗時與斷言明細。
+
+### 6.4 E1–E7 覆蓋矩陣
+
+| 編號 | 測試名稱 | 覆蓋範圍 | 驗證要點 |
+|------|----------|----------|----------|
+| **E1** | 通道 B 免權限 `Ctrl+V` / `paste` | 全域貼上監聽 | 派發真實瀏覽器 `paste` 事件（含 `text/plain` 與 `text/html` `udm=50` 來源連結），驗證 `localStorage` 已存入 `rawAnswer`、`organizedAnswer` 與 `sourceUrl`，且 Modal 顯示「✅ 已收到回答」 |
+| **E2** | 通道 A 視窗切回 `focus` 自動讀取剪貼簿 | 焦點偵測自動貼回 | `context.grantPermissions(['clipboard-read','clipboard-write'])` 後寫入新答案並派發合成 `focus`/`visibilitychange` 事件（**非切換真實視窗焦點**），驗證 0 按鍵自動貼回存檔 |
+| **E3** | 剪貼簿權限拒絕靜默降級 | 權限拒絕處理 | 未授權 `clipboard-read` 下觸發 `focus`，驗證無錯誤彈窗、Modal 維持待命且通道 B 仍可正常貼回 |
+| **E4** | 通道 C 跨視窗 `drop` 拖放貼回 | 拖放通道 | 對 Modal 拖放區派發 `drop` 事件，驗證答案自動貼回存檔 |
+| **E5** | F1 防呆：舊剪貼簿快照與題目本身不誤存 | 剪貼簿舊內容過濾 | 開窗前剪貼簿預置舊文字 `X` 及題目文字本身，觸發 `focus` 驗證靜默忽略、零誤存 |
+| **E6** | 防呆與 XSS 安全 | 他題網址攔截 + 腳本注入防護 | 驗證他題 `udm=50` 網址觸發 `conflict` 攔截、非 Google 網址被忽略、`<script>`/`<img onerror>` HTML 注入不執行（`window.__relay_pwned === undefined`） |
+| **E7** | 通道 D 兩段式 + Popup 同名視窗重用 | URL-only 接力 + 視窗管理 | 驗證第 1 步綁定同題 `udm=50` 網址、第 2 步完成回答；以 spy 覆寫 `window.open` 斷言呼叫次數、目標名稱與 URL。**注意**：headless Chromium/CDP 不會合併同名視窗，因此僅量測「呼叫意圖」，不證明第二個真實 popup 被重用 |
+
+### 6.5 測試狀態說明
+
+**重要**：`scripts/student-relay-e2e.mjs` 腳本由 R18-T4 同事負責實作與首次實跑。在 R18-T4 報告（`reports/dispatch/R18-T4.md`）明確記錄 E1–E7 全部 PASS 之前，**不得宣稱測試通過**。本文檔僅記錄執行方式與驗收標準，不預設測試結果。
+
+### 6.6 合成瀏覽器模擬與真人測試的區別
+
+此 Playwright Chromium 自動化測試為 **headless 瀏覽器模擬**，其執行結果與真人操作存在本質差異：
+
+- **合成事件 vs. 真人操作**：腳本派發合成 `focus`/`visibilitychange`/`paste`/`drop` 事件，而非切換真實視窗焦點或手動按鍵。這些合成事件在 headless 環境中可觸發對應的 JavaScript 回調，但不等同於真人跨視窗操作的完整體驗。
+- **不替代真實 Windows Chrome/Edge 測試**：Headless 環境與有頭瀏覽器在剪貼簿權限提示、焦點行為、拖放手感等方面存在差異。自動化測試 PASS 不代表真人操作一定成功。
+- **Popup 重用僅量測呼叫意圖**：headless Chromium/CDP 不會合併同名視窗，E7 僅以 spy 斷言 `window.open` 的呼叫次數、目標名稱與 URL，不證明第二個真實 popup 被重用。
+- **不替代 Android Share Target 測試**：此測試僅覆蓋桌面環境的 `google-ai` strategy，Android Share Target 需另行在真實裝置上驗證。
+
+建議在自動化測試全數 PASS 後，仍進行至少一次真人 Windows Chrome/Edge 端到端確認，以驗證剪貼簿權限提示、視窗切換手感與 Popup 重用等環境依賴行為。
+
+## 7. 常見問題
 
 ### Q1：剪貼簿權限被封鎖怎麼辦？
 
@@ -194,7 +254,7 @@ if (extraction.status !== "accepted") {
 
 手機端繼續使用既有的 Android Share Target 流程。接力模擬器專為 Windows 桌面環境設計。
 
-## 7. 相關檔案
+## 8. 相關檔案
 
 | 檔案 | 說明 |
 |------|------|

@@ -11,7 +11,6 @@ import {
   extractRelayAnswerFromHtml,
   GOOGLE_RELAY_WINDOW_NAME,
   GoogleAiRelaySimulatorModal,
-  googleRelayPopupFeatures,
   shouldIgnoreClipboardForFocus
 } from "./GoogleAiRelaySimulatorModal";
 import {
@@ -53,7 +52,10 @@ function flushMicrotasks() {
 }
 
 function stubWindowOpen() {
-  const open = vi.fn((...args: unknown[]) => null);
+  const open = vi.fn((..._args: unknown[]) => {
+    void _args;
+    return null;
+  });
   window.open = open as unknown as typeof window.open;
   return open;
 }
