@@ -17,7 +17,7 @@
 | 本機 Vite + admin API | `5173` 可代理至 `4300` | `5174` 代理至 `4300` | 同上 |
 | `site/` ChatGPT Sites | **未接入此 V1** | **未接入此 V1** | Sites 使用另一套 SIWC／relay 身分和 D1，不能當成相同 student session |
 
-本機／staging 的 Vite 代理會改寫上游 Host；啟用學員寫入前，須把實際學員前台 origin 明確列入 `STUDENT_ALLOWED_ORIGINS`。未設定時跨代理 Origin 會回 403；不要關閉來源檢查來繞過。
+本機／staging 的 Vite 代理會改寫上游 Host；啟用學員寫入前，須把實際學員前台 origin 明確列入 `STUDENT_ALLOWED_ORIGINS`。跨代理等非同源變更請求必須明確列入；未列入（或未帶 Origin）的跨源變更請求一律回 403。同源變更請求可不重複列入 API origin；production 必須設定至少一個允許 origin。不要關閉來源檢查來繞過。
 
 `site/` 是另一套 vinext/D1 應用，不載入 `AI-Stu-R1`/`AI-adm-D1` 的 React 程式，也沒有這些新 API。若日後要在 Sites 上啟用，需另外設計可信身分映射、D1 schema 與 route；不能直接把 `student-synth-001` 或瀏覽器傳來的 `studentId` 當成學員 ID。此 Draft PR 只驗證 monorepo 的本機／測試環境。`packages/db/sql/20261016_student_learning_history.sql` 是待審 migration；沒有在 production 執行。
 
