@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import {
   artifactPath,
   releaseMetadata,
@@ -127,7 +128,9 @@ const MOCK_SOURCE = String.raw`
       return new Response(null, { status: 204 });
     }
     if (adminPath && !state.authenticated) return json({ error: "admin authentication required" }, 401);
-    if (path === "/api/appearance-settings") return json({ settings: {} });
+    if (path === "/api/appearance-settings") return json({ settings: {
+      systemName: "iBrain AI", headerLogoUrl: "", headerLogoSize: 24, headerLogoTextGap: 8, dashboardNavLabel: "首頁"
+    } });
     if (path === "/api/admin/ai-providers" && method === "GET") {
       if (state.failProviderList) return json({ error: "internal server error" }, 500);
       return json({ providers: state.providers.map(responseProvider) });
@@ -279,6 +282,23 @@ async function clickButton(cdp, label, rowText = null) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
 }
 
+async function confirmDialog(cdp, title) {
+  const point = await evaluate(cdp, `(function () {
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find((item) =>
+      item.querySelector("h2")?.textContent.includes(${escapeString(title)}));
+    const button = [...(dialog?.querySelectorAll("button") || [])].find((item) => item.textContent.trim() === "確定");
+    if (!button || button.disabled) return null;
+    button.scrollIntoView({ block: "center", inline: "center" });
+    const rect = button.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  if (!point) fail(`confirmation dialog/button not found: ${title}`);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+  await waitFor(cdp, `![...document.querySelectorAll('[role="dialog"] h2')].some((item) => item.textContent.includes(${escapeString(title)}))`);
+}
+
 async function fillInput(cdp, label, value, occurrence = 0) {
   const expression = `(function () {
     const labels = [...document.querySelectorAll("label")];
@@ -376,12 +396,104 @@ async function getPageTarget(endpoint) {
   return target.webSocketDebuggerUrl;
 }
 
-function navigationUrl(htmlPath) {
+function navigationUrl(localBaseUrl) {
   const configured = process.env.E2E_ADMIN_BASE_URL?.trim() || process.env.E2E_BASE_URL?.trim();
-  if (!configured) return `file://${htmlPath}`;
+  if (!configured) return new URL("/admin/ai-providers", localBaseUrl).toString();
   const url = new URL(configured);
   if (!/^https?:$/.test(url.protocol)) throw new Error("E2E base URL must use HTTP(S)");
   return new URL("/admin/ai-providers", url).toString();
+}
+
+function startStaticServer() {
+  const mimeTypes = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2"
+  };
+  const server = createServer((request, response) => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.writeHead(405, { Allow: "GET, HEAD" });
+      response.end();
+      return;
+    }
+    try {
+      const pathname = decodeURIComponent(new URL(request.url || "/", "http://127.0.0.1").pathname);
+      let filePath = resolve(distDir, `.${pathname}`);
+      const fileRelativePath = relative(distDir, filePath);
+      if (fileRelativePath.startsWith("..") || fileRelativePath.startsWith("/")) {
+        response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end("forbidden");
+        return;
+      }
+      if (!filePath.startsWith(distDir)) {
+        response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end("forbidden");
+        return;
+      }
+      if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
+        if (pathname === "/favicon.ico") {
+          response.writeHead(204);
+          response.end();
+          return;
+        }
+        if (extname(pathname)) {
+          response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+          response.end("not found");
+          return;
+        }
+        filePath = join(distDir, "index.html");
+      }
+      if (!existsSync(filePath)) {
+        response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end("not found");
+        return;
+      }
+      const body = readFileSync(filePath);
+      response.writeHead(200, {
+        "Content-Type": mimeTypes[extname(filePath)] || "application/octet-stream",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"
+      });
+      response.end(request.method === "HEAD" ? undefined : body);
+    } catch {
+      response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("bad request");
+    }
+  });
+  return new Promise((resolveServer, rejectServer) => {
+    server.once("error", rejectServer);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        rejectServer(new Error("admin E2E static server did not bind a TCP port"));
+        return;
+      }
+      resolveServer({ server, baseUrl: `http://127.0.0.1:${address.port}` });
+    });
+  });
+}
+
+async function stopServer(server) {
+  if (!server?.listening) return true;
+  return new Promise((resolveStopped) => server.close((error) => resolveStopped(!error)));
+}
+
+function safeBrowserUrl(value) {
+  try {
+    const url = new URL(value);
+    return sanitizeDiagnostic(`${url.origin}${url.pathname}`, 300);
+  } catch {
+    return sanitizeDiagnostic(value, 300);
+  }
 }
 
 async function captureSafeScreenshot(cdp) {
@@ -400,6 +512,8 @@ async function main() {
   let workDir;
   let browser;
   let cdp;
+  let staticServer;
+  let serverCleaned = true;
   let screenshot = null;
   let status = "PASS";
   let exitCode = 0;
@@ -408,6 +522,32 @@ async function main() {
   let browserConsoleSecretScan = "NOT RUN";
   const assertions = [];
   const consoleMessages = [];
+  const browserDiagnostics = {
+    page: null,
+    consoleErrors: [],
+    pageErrors: [],
+    failedRequests: [],
+    failedResponses: []
+  };
+  const requestUrls = new Map();
+  const safeDiagnosticText = (value, maxLength = 500) =>
+    sanitizeDiagnostic(String(value ?? "").split(testKey).join("[REDACTED_FIXTURE]"), maxLength);
+  const capturePageDiagnostics = async () => {
+    const page = await evaluate(cdp, `(() => ({
+      url: location.href,
+      title: document.title,
+      bodyText: document.body?.innerText ?? "",
+      bodyLength: (document.body?.innerText ?? "").length,
+      readyState: document.readyState
+    }))()`);
+    browserDiagnostics.page = {
+      url: safeBrowserUrl(page?.url || ""),
+      title: safeDiagnosticText(page?.title || "", 200),
+      bodyText: safeDiagnosticText(page?.bodyText || "", 1200),
+      bodyLength: Number(page?.bodyLength) || 0,
+      readyState: safeDiagnosticText(page?.readyState || "", 40)
+    };
+  };
   const check = (name, condition) => {
     const state = condition ? "PASS" : "FAIL";
     assertions.push({ name, state });
@@ -416,19 +556,18 @@ async function main() {
 
   try {
     if (!existsSync(join(distDir, "index.html"))) fail("admin build is missing; run pnpm --filter AI-adm-D1 build first");
-    const asset = readdirSync(distDir + "/assets").find((name) => name.endsWith(".js"));
-    if (!asset) fail("admin JavaScript asset is missing");
+    if (!readdirSync(join(distDir, "assets")).some((name) => name.endsWith(".js"))) fail("admin JavaScript asset is missing");
     workDir = mkdtempSync(join(tmpdir(), "ai-smartbook-ui-e2e-"));
     const profileDir = join(workDir, "chrome-profile");
-    const htmlPath = join(workDir, "admin.html");
-    const assetUrl = `file://${join(distDir, "assets", asset)}`;
-    writeFileSync(htmlPath, `<!doctype html><html><body><div id="root"></div><script type="module" src="${assetUrl}"></script></body></html>`);
+    const localServer = await startStaticServer();
+    staticServer = localServer.server;
 
     browser = await launchChrome(profileDir);
     cdp = await cdpClient(await getPageTarget(browser.endpoint));
     await cdp.send("Runtime.enable");
     await cdp.send("Page.enable");
     await cdp.send("Log.enable");
+    await cdp.send("Network.enable");
     const version = await cdp.send("Browser.getVersion");
     browser.version = typeof version?.product === "string" ? version.product : "unknown";
     cdp.socket.addEventListener("message", (event) => {
@@ -437,10 +576,43 @@ async function main() {
         if (message.method === "Runtime.consoleAPICalled" || message.method === "Log.entryAdded") {
           consoleMessages.push(JSON.stringify(message));
         }
+        if (message.method === "Runtime.consoleAPICalled" && ["error", "warning"].includes(message.params?.type)) {
+          const text = (message.params.args || []).map((arg) => arg.value ?? arg.description ?? "").join(" ");
+          browserDiagnostics.consoleErrors.push({ type: message.params.type, text: safeDiagnosticText(text) });
+        }
+        if (message.method === "Log.entryAdded" && ["error", "warning"].includes(message.params?.entry?.level)) {
+          browserDiagnostics.consoleErrors.push({
+            type: message.params.entry.level,
+            text: safeDiagnosticText(message.params.entry.text || "")
+          });
+        }
+        if (message.method === "Runtime.exceptionThrown") {
+          browserDiagnostics.pageErrors.push(safeDiagnosticText(
+            message.params?.exceptionDetails?.exception?.description || message.params?.exceptionDetails?.text || "page exception"
+          ));
+        }
+        if (message.method === "Network.requestWillBeSent") {
+          requestUrls.set(message.params.requestId, safeBrowserUrl(message.params.request?.url || ""));
+        }
+        if (message.method === "Network.loadingFailed") {
+          browserDiagnostics.failedRequests.push({
+            url: requestUrls.get(message.params.requestId) || "unknown",
+            error: safeDiagnosticText(message.params.errorText || "request failed", 200),
+            resourceType: safeDiagnosticText(message.params.type || "unknown", 40)
+          });
+        }
+        if (message.method === "Network.responseReceived" && Number(message.params.response?.status) >= 400) {
+          browserDiagnostics.failedResponses.push({
+            url: safeBrowserUrl(message.params.response?.url || ""),
+            status: Number(message.params.response.status),
+            resourceType: safeDiagnosticText(message.params.type || "unknown", 40)
+          });
+        }
       } catch { /* diagnostics only */ }
     });
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: MOCK_SOURCE });
-    await cdp.send("Page.navigate", { url: navigationUrl(htmlPath) });
+    const navigation = await cdp.send("Page.navigate", { url: navigationUrl(localServer.baseUrl) });
+    if (navigation.errorText) fail(`admin E2E navigation failed: ${safeDiagnosticText(navigation.errorText)}`);
 
     await waitFor(cdp, `document.body.innerText.includes("管理端登入")`);
     const unauthenticatedText = await bodyText(cdp);
@@ -472,9 +644,11 @@ async function main() {
     check("provider can be edited", (await bodyText(cdp)).includes("OpenAI Edited") && updatedProvider?.priority === 7);
 
     await clickButton(cdp, "停用 Provider");
+    await confirmDialog(cdp, "確認停用 Provider");
     await waitFor(cdp, `document.body.innerText.includes("Provider 已停用")`);
     check("provider can be disabled", true);
     await clickButton(cdp, "啟用 Provider");
+    await confirmDialog(cdp, "確認啟用 Provider");
     await waitFor(cdp, `document.body.innerText.includes("Provider 已啟用")`);
     check("provider can be enabled", true);
 
@@ -538,6 +712,7 @@ async function main() {
     check("failure count and cooldown are displayed", (await bodyText(cdp)).includes("1") && (await bodyText(cdp)).includes("至 "));
 
     await clickButton(cdp, "停用", "E2E Credential Edited");
+    await confirmDialog(cdp, "確認停用 Credential");
     await waitFor(cdp, `document.body.innerText.includes("Credential 已停用")`);
     check("credential status can be disabled", true);
     await clickButton(cdp, "啟用", "E2E Credential Edited");
@@ -545,7 +720,9 @@ async function main() {
     check("credential status can be enabled", true);
 
     await clickButton(cdp, "軟刪除", "E2E Credential Edited");
+    await confirmDialog(cdp, "確認刪除 Credential");
     await waitFor(cdp, `!document.body.innerText.includes("E2E Credential Edited")`);
+    await waitFor(cdp, `document.body.innerText.includes("Credential 已軟刪除")`);
     check("soft delete confirmation removes credential from list", (await bodyText(cdp)).includes("Credential 已軟刪除"));
     await waitFor(cdp, `document.body.innerText.includes("Seed Credential")`);
     check("soft-deleted credential is removed while existing credential remains", (await bodyText(cdp)).includes("Seed Credential"));
@@ -568,11 +745,13 @@ async function main() {
     failureReason = sanitizeDiagnostic(message);
     if (cdp) {
       try {
+        await capturePageDiagnostics();
         const harnessSnapshot = await evaluate(cdp, "window.__phase3aE2e?.snapshot?.() || null");
         const buttonSnapshot = await evaluate(cdp, "[...document.querySelectorAll('button')].filter((button) => button.textContent.includes('儲存 Provider')).map((button) => ({text: button.textContent, disabled: button.disabled}))");
         const pageHints = await evaluate(cdp, "document.body.innerText.split('\\n').filter((line) => /Provider|Credential|新增|儲存|失敗|成功|必須|Key/.test(line)).slice(-18)");
         failureReason = sanitizeDiagnostic(`${message}; hints=${JSON.stringify(pageHints)}; harness=${JSON.stringify(harnessSnapshot)}; buttons=${JSON.stringify(buttonSnapshot)}`, 1800);
       } catch { /* the page may already be unavailable */ }
+      screenshot = await captureSafeScreenshot(cdp);
     }
     if (error instanceof BrowserLaunchError) browser = { diagnostics: error.diagnostics };
     if (error instanceof BrowserLaunchError || /headless browser unavailable|DevTools|setsockopt|sandbox|Chrome executable/i.test(message)) {
@@ -583,12 +762,16 @@ async function main() {
       exitCode = 1;
     }
   } finally {
+    if (cdp && !browserDiagnostics.page) {
+      try { await capturePageDiagnostics(); } catch { /* page may already be unavailable */ }
+    }
     // Clear the only reload-persistent harness value before terminating Chrome.
     if (cdp) {
       try { await evaluate(cdp, "window.name = ''; true"); } catch { /* page may already be unavailable */ }
     }
     cdp?.close();
     const chromeCleaned = await stopChild(browser?.child);
+    serverCleaned = await stopServer(staticServer);
     let workDirCleaned = true;
     if (workDir) {
       try { rmSync(workDir, { recursive: true, force: true }); } catch { workDirCleaned = false; }
@@ -624,10 +807,10 @@ async function main() {
       cleanup: {
         chromeProcess: chromeCleaned ? "PASS" : "FAIL",
         temporaryProfile: workDirCleaned ? "PASS" : "FAIL",
-        // The harness loads a temporary file fixture and starts no HTTP mock server.
-        testServer: "PASS"
+        testServer: serverCleaned ? "PASS" : "FAIL"
       },
-      blockedReason: failureReason
+      blockedReason: failureReason,
+      diagnostics: browserDiagnostics
     });
     if (!artifact.written) {
       status = "FAIL";
@@ -636,7 +819,7 @@ async function main() {
     }
     console.log(`Browser UI E2E: ${status} (executed=${counts.PASS + counts.FAIL}, passed=${counts.PASS}, failed=${counts.FAIL}, blocked=${counts.BLOCKED})`);
     console.log(`Artifact: ${reportPath}`);
-    console.log(`Cleanup: chrome=${chromeCleaned ? "PASS" : "FAIL"}, temporaryProfile=${workDirCleaned ? "PASS" : "FAIL"}, testServer=PASS (not started)`);
+    console.log(`Cleanup: chrome=${chromeCleaned ? "PASS" : "FAIL"}, temporaryProfile=${workDirCleaned ? "PASS" : "FAIL"}, testServer=${serverCleaned ? "PASS" : "FAIL"}`);
     process.exitCode = exitCode;
   }
   return exitCode;
