@@ -333,6 +333,7 @@ export const adminApi = {
   getLearningHistoryDetail: (studentId: string, entryId: string) => http<{ entry: AdminLearningHistoryDetail }>(`/api/admin/learning-history/${encodeURIComponent(studentId)}/${encodeURIComponent(entryId)}`),
   login: (username: string, password: string) => http<{ authenticated: true; user: { username: string } }>("/api/admin/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   getAdminMe: () => http<{ authenticated: true; authType: "session" | "token"; user: { username: string } | null }>("/api/admin/auth/me"),
+  getAdminAuthMode: () => http<{ devLogin: boolean; devUsername: string | null }>("/api/admin/auth/mode"),
   logout: () => http<void>("/api/admin/auth/logout", { method: "POST", headers: { "X-CSRF-Token": readCsrfCookie() } }),
   getAiEvaluationSettings: () => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings"),
   saveAiEvaluationSettings: (settings: Omit<AiLiveEvaluationSettings, "updatedAt">) => http<{ settings: AiLiveEvaluationSettings }>("/api/admin/ai-evaluations/settings", { method: "PUT", body: JSON.stringify(settings) }),

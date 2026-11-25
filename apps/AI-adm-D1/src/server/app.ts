@@ -46,6 +46,7 @@ import {
 import { makeAnalyticsService, todayTaipei } from "./ai/analytics-service";
 import {
   adminCredentialsMatch,
+  adminLocalDevLoginMatch,
   clearAdminSessionCookies,
   createAdminLoginThrottle,
   createAdminSessionSecrets,
@@ -366,6 +367,17 @@ const adminAuthMiddleware = adminBoundary.authenticate;
 const adminCsrfMiddleware = adminBoundary.csrf;
 const adminLoginThrottle = createAdminLoginThrottle();
 
+app.get("/api/admin/auth/mode", (req, res) => {
+  // Local developer login is only reported (and only usable) on loopback.
+  const { ip } = resolveClientIp(req);
+  const devLogin = adminAuthConfig.devLogin && ip === "127.0.0.1";
+  res.setHeader("Cache-Control", "no-store");
+  return res.json({
+    devLogin,
+    devUsername: devLogin ? adminAuthConfig.username ?? null : null
+  });
+});
+
 app.post("/api/admin/auth/login", async (req, res) => {
   const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
@@ -378,7 +390,9 @@ app.post("/api/admin/auth/login", async (req, res) => {
     return fail(res, 429, "too many administrator login attempts");
   }
 
-  const credentialsMatch = await adminCredentialsMatch(username, password, adminAuthConfig);
+  const credentialsMatch = adminLocalDevLoginMatch(username, req.header("origin"), clientIp, adminAuthConfig)
+    ? true
+    : await adminCredentialsMatch(username, password, adminAuthConfig);
   reservation.finish(credentialsMatch);
   if (!credentialsMatch) {
     repos.aiProviders.audit("admin.auth.login.failed", "admin_session", undefined, { username: username.slice(0, 80) });

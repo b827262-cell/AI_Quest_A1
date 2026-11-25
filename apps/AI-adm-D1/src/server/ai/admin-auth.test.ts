@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ADMIN_CSRF_COOKIE,
   adminCredentialsMatch,
+  adminLocalDevLoginMatch,
   assertAdminAuthConfig,
   createAdminAuthMiddleware,
   createAdminCsrfMiddleware,
@@ -243,5 +244,39 @@ describe("canonical CSRF cookie contract", () => {
     expect(transportSource).toContain('import { ADMIN_CSRF_COOKIE } from "./admin-auth-contract"');
     expect(transportSource).toContain("`${ADMIN_CSRF_COOKIE}=`");
     expect(transportSource).not.toContain('const prefix = "ai_admin_csrf="');
+  });
+});
+
+describe("adminLocalDevLoginMatch", () => {
+  const env = {
+    NODE_ENV: "development",
+    ADMIN_USERNAME: "admin",
+    ADMIN_LOCAL_DEV_LOGIN: "true"
+  };
+
+  it("accepts the configured username from loopback with a local origin", () => {
+    const config = resolveAdminAuthConfig(env);
+    expect(adminLocalDevLoginMatch("admin", "http://127.0.0.1:5174", "127.0.0.1", config)).toBe(true);
+    expect(adminLocalDevLoginMatch("admin", "http://localhost:5174", "127.0.0.1", config)).toBe(true);
+  });
+
+  it("rejects non-loopback clients, non-local origins, wrong usernames, and a disabled flag", () => {
+    const config = resolveAdminAuthConfig(env);
+    expect(adminLocalDevLoginMatch("admin", "http://127.0.0.1:5174", "10.0.0.5", config)).toBe(false);
+    expect(adminLocalDevLoginMatch("admin", "https://evil.example", "127.0.0.1", config)).toBe(false);
+    expect(adminLocalDevLoginMatch("admin", undefined, "127.0.0.1", config)).toBe(false);
+    expect(adminLocalDevLoginMatch("root", "http://127.0.0.1:5174", "127.0.0.1", config)).toBe(false);
+    expect(adminLocalDevLoginMatch(
+      "admin",
+      "http://127.0.0.1:5174",
+      "127.0.0.1",
+      resolveAdminAuthConfig({ ...env, ADMIN_LOCAL_DEV_LOGIN: "false" })
+    )).toBe(false);
+  });
+
+  it("never enables in production", () => {
+    const config = resolveAdminAuthConfig({ ...env, NODE_ENV: "production" });
+    expect(config.devLogin).toBe(false);
+    expect(adminLocalDevLoginMatch("admin", "http://127.0.0.1:5174", "127.0.0.1", config)).toBe(false);
   });
 });

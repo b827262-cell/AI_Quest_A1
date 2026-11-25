@@ -8,7 +8,7 @@ import {
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { AdminSessionRepo } from "@ai-smartbook/db";
 import { ADMIN_CSRF_COOKIE } from "../../admin-auth-contract";
-import { resolveAdminAllowedOrigins } from "./admin-origin";
+import { LOCAL_ADMIN_ORIGINS, resolveAdminAllowedOrigins } from "./admin-origin";
 
 export const ADMIN_SESSION_COOKIE = "ai_admin_session";
 export { ADMIN_CSRF_COOKIE } from "../../admin-auth-contract";
@@ -40,6 +40,11 @@ export type AdminAuthConfig = {
   secureCookies: boolean;
   /** Retained as a compatibility field; insecure development bypass is gone. */
   allowInsecureDev: false;
+  /**
+   * Local developer login (ADMIN_LOCAL_DEV_LOGIN=true): password is optional,
+   * but only for loopback clients with a local admin origin. Never production.
+   */
+  devLogin: boolean;
 };
 
 export function resolveAdminAuthConfig(env: NodeJS.ProcessEnv = process.env): AdminAuthConfig {
@@ -56,7 +61,8 @@ export function resolveAdminAuthConfig(env: NodeJS.ProcessEnv = process.env): Ad
       : DEFAULT_ADMIN_SESSION_TTL_MS,
     sessionCookie: env.ADMIN_SESSION_COOKIE?.trim() || ADMIN_SESSION_COOKIE,
     secureCookies: env.ADMIN_SESSION_SECURE !== "false",
-    allowInsecureDev: false
+    allowInsecureDev: false,
+    devLogin: !production && env.ADMIN_LOCAL_DEV_LOGIN === "true"
   };
 }
 
@@ -186,6 +192,24 @@ export async function adminCredentialsMatch(
   const usernameMatches = Boolean(config.username && sameSecret(username, config.username));
   const passwordMatches = await verifyPassword(password, config);
   return usernameMatches && passwordMatches;
+}
+
+/**
+ * Local developer login: the username alone is enough, but only when the flag
+ * is enabled (never in production), the resolved client IP is loopback, and
+ * the browser origin is one of the local admin origins. Everything else still
+ * requires the password.
+ */
+export function adminLocalDevLoginMatch(
+  username: string,
+  origin: string | undefined,
+  clientIp: string | null,
+  config: AdminAuthConfig = resolveAdminAuthConfig()
+): boolean {
+  if (!config.devLogin) return false;
+  if (clientIp !== "127.0.0.1") return false;
+  if (!origin || !(LOCAL_ADMIN_ORIGINS as readonly string[]).includes(origin)) return false;
+  return Boolean(config.username && sameSecret(username, config.username));
 }
 
 type LoginAttempt = { id: number; attemptedAt: number };
