@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { schema } from "./schema";
@@ -34,11 +34,12 @@ let cached: DbHandle | null = null;
  * always wins; otherwise the path is anchored to the monorepo root so that
  * migrate, seed and the admin server all use the same `data/` file.
  */
-export function resolveDbPath(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveDbPath(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
   const explicit =
     env.SQLITE_PATH || (env.DATABASE_URL ? env.DATABASE_URL.replace(/^file:/, "") : "");
-  if (explicit) return resolve(explicit);
-  return join(findRepoRoot(process.cwd()), "data", "ai-smartbook-r1.db");
+  const repoRoot = findRepoRoot(cwd);
+  if (explicit) return isAbsolute(explicit) ? resolve(explicit) : resolve(repoRoot, explicit);
+  return join(repoRoot, "data", "ai-smartbook-r1.db");
 }
 
 export function createDbHandle(dbPath = resolveDbPath()): DbHandle {

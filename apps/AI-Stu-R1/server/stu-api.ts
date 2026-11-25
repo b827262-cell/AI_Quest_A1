@@ -23,6 +23,7 @@ import {
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
+import { resolveStudentAuthDbPath } from "./student-auth-db-path";
 import { createReadyCheck, registerHealthRoutes } from "./health-routes";
 import { logServerError, registerStudentBookRoutes } from "./student-book-routes";
 
@@ -52,7 +53,7 @@ if (existsSync(rootEnvPath)) {
 const config = loadStudentRuntimeConfig();
 const studentAuthConfig = resolveStudentAuthConfig(process.env);
 assertStudentAuthConfig(studentAuthConfig);
-const studentAuthDbPath = process.env.STUDENT_AUTH_DB_PATH || process.env.SQLITE_PATH || resolve(process.cwd(), "data", "ai-smartbook-r1.db");
+const studentAuthDbPath = resolveStudentAuthDbPath();
 const studentAuthRuntime = createStudentAuthRuntime(studentAuthDbPath, studentAuthConfig);
 
 // Build the data source defensively: a missing/unopenable SQLite file (e.g.
