@@ -1,8 +1,8 @@
 # Phase 2 Release Runbook
 
-> **版本**：1.2.0（R19 實測同步：Gate 11 步與 E2E 最新狀態）
-> **對應基線**：HEAD `36d383e`，branch `feat/front-back-integration-p1-p3`
-> **最後更新**：2026-11-21
+> **版本**：1.3.0（R20 實測同步：Gate 13 步）
+> **對應基線**：HEAD `fb2906e`，branch `feat/front-back-integration-p1-p3`
+> **最後更新**：2026-11-25
 
 > **權限前提（F6）**：本章包含 `systemctl`、`nginx`、`cp /etc/nginx/…` 等需 **互動 sudo/root** 權限的操作。在非互動環境（`sudo -n` 要求密碼）下，這些步驟無法執行，請改用 `reset-ai-smartbook.sh`（開發/測試環境；無需 sudo）或聯繫系統管理員。`reset-ai-smartbook.sh` 的功能與權限需求尚待逐行閱讀驗證，此處僅列為「未驗證選項／未知」。
 
@@ -24,65 +24,52 @@
 執行完整發布門控（`scripts/phase3a-release-gate.mjs`）：
 
 ```bash
-pnpm release-gate:phase3a
+corepack pnpm@9.15.0 run release-gate:phase3a
 ```
 
-該腳本會依序執行以下檢查（定義於 `scripts/phase3a-release-gate.mjs`）：
+根 `package.json` 的 `release-gate:phase3a` script 直接執行 `node scripts/phase3a-release-gate.mjs`。該程式組合以下 13 個 gate（標籤與順序對應 `scripts/phase3a-release-gate.mjs:116-118`）：
 
-1. **Local Test**：typecheck、release-script typecheck、lint、release-script lint、unit and integration tests、build
-2. **Workspace Symlink Health**：`scripts/check-workspace-symlinks.sh`（`phase3a-release-gate.mjs:76`，嚴格模式；broken symlinks 或絕對 `/data/` 連結將 FAIL）
-3. **Database Preflight**：`pnpm db:preflight:phase2`（`scripts/phase2-db-preflight.ts`）
-4. **Rotation Implementation Tests**：credential rotation 單元測試
-5. **Target DB Credential Verification**：`pnpm credential-key:verify`（`scripts/credential-key-rotation.ts --verify`）
-6. **Browser UI E2E**：`pnpm e2e:admin-providers`（`scripts/admin-provider-ui-e2e.mjs`）
-7. **Staging HTTP Smoke**：`pnpm smoke:phase3a`（`scripts/phase3a-staging-smoke.ts`）
-8. **Provider Vault Live Smoke**：`pnpm smoke:provider`（`scripts/provider-live-smoke.ts`）
-9. **Production Verification**：`pnpm production:verify:phase3a`（`scripts/production-verification.mjs`）
-10. **Rollback Procedure Available**：`fileGate`（`phase3a-release-gate.mjs:44-53`）**僅驗證三份檔案存在**（`existsSync`），不代表回滾流程已驗證可操作：
-    - `docs/PHASE2_RELEASE_RUNBOOK.md`（本文件）
-    - `docs/PHASE3A_PRODUCTION_VERIFICATION.md`
-    - `scripts/credential-key-rotation.ts`
-11. **Rollback Restore Rehearsal**：回滾演練 artifact 驗證
+| # | Gate 步驟 | 實際執行命令／來源 | 實碼位置 |
+|---|-----------|-------------------|----------|
+| 1 | Local Test | `pnpm -r typecheck`、`pnpm typecheck:release-scripts`、`pnpm -r lint`、`pnpm lint:release-scripts`、`pnpm -r test`、`pnpm -r build` | `phase3a-release-gate.mjs:57-66` |
+| 2 | Workspace Symlink Health | `pnpm exec bash scripts/check-workspace-symlinks.sh`（strict） | `phase3a-release-gate.mjs:68-76` |
+| 3 | Lockfile Store Sync | `pnpm run check:lock-sync` | `phase3a-release-gate.mjs:78-81`；`package.json:26` |
+| 4 | Database Preflight | `pnpm db:preflight:phase2` | `phase3a-release-gate.mjs:83` |
+| 5 | Rotation Implementation Tests | `pnpm --filter AI-adm-D1 exec vitest run --no-file-parallelism src/server/ai/credential-rotation.test.ts src/server/ai/credential-crypto.test.ts` | `phase3a-release-gate.mjs:84,91` |
+| 6 | Target DB Credential Verification | `pnpm credential-key:verify`（缺少加密金鑰時標示 BLOCKED，不嘗試 DB 驗證） | `phase3a-release-gate.mjs:85-92` |
+| 7 | Browser UI E2E | `pnpm e2e:admin-providers` | `phase3a-release-gate.mjs:94-95` |
+| 8 | Student Relay Browser E2E | `pnpm run e2e:student-relay` | `phase3a-release-gate.mjs:97-102`；`package.json:34` |
+| 9 | Staging HTTP Smoke | `pnpm smoke:phase3a` | `phase3a-release-gate.mjs:103,117` |
+| 10 | Provider Vault Live Smoke | `pnpm smoke:provider`（可依 `PROVIDER_LIVE_PROVIDER` 增加 provider 參數） | `phase3a-release-gate.mjs:104-107,117` |
+| 11 | Production Verification | `pnpm production:verify:phase3a` | `phase3a-release-gate.mjs:108,118` |
+| 12 | Rollback Procedure Available | `fileGate` 檢查三份程序檔存在；命令欄為 `release procedure files`，不是實際回滾演練 | `phase3a-release-gate.mjs:44-53,109-113` |
+| 13 | Rollback Restore Rehearsal | `rollbackRestoreRehearsalGate()` 驗證回滾演練 artifact | `phase3a-release-gate.mjs:114,118` |
 
-**通過條件**：所有 gate 狀態為 `PASS` 或 `BLOCKED`（非 `FAIL`）。
+**通過條件**：不得有 `FAIL`；`BLOCKED` 代表所需環境或憑證未提供，不能當作 production ready。
 
-### 1.2.1 R19 發布門控實測現況
+### 1.2.1 R20 發布門控實測現況
 
-> **資料來源**：`release-artifacts/phase3a/release-gate-summary.json`（R19-T4 實跑，commit `36d383e`）
-> **執行時間**：2026-11-21T08:24:30.779Z
+> **資料來源**：`reports/dispatch/R20-T4.md`（Dp1050 HEAD `fb2906e` 實測）
 > **整體狀態**：`BLOCKED`（Production Ready: No）
-
-Release Gate 11 步實測結果（**6 PASS / 0 FAIL / 5 BLOCKED**）：
+> **實測分布**：13 步，**8 PASS / 0 FAIL / 5 BLOCKED**
 
 | # | Gate 步驟 | 狀態 | 備註 |
 |---|-----------|------|------|
-| 1 | Local Test | **PASS** | typecheck、lint、unit tests、build 全部通過（66099ms） |
-| 2 | Workspace Symlink Health | **PASS** | broken=0, abs-/data/=0（1476ms） |
-| 3 | Database Preflight | **PASS** | 資料庫連線與 schema 驗證通過（2448ms） |
-| 4 | Rotation Implementation Tests | **PASS** | credential rotation 單元測試通過（5285ms） |
-| 5 | Target DB Credential Verification | **BLOCKED** | `AI_CREDENTIAL_ENCRYPTION_KEY` 環境變數未提供 |
-| 6 | Browser UI E2E | **PASS** | Admin E2E 24/24 斷言通過（7023ms） |
-| 7 | Staging HTTP Smoke | **BLOCKED** | Staging 環境權限未配置 |
-| 8 | Provider Vault Live Smoke | **BLOCKED** | Provider 憑證配置未提供 |
-| 9 | Production Verification | **BLOCKED** | 生產環境 URL 未配置，10 項檢查全部 BLOCKED |
-| 10 | Rollback Procedure Available | **PASS** | `fileGate` 驗證 3 份檔案存在 |
-| 11 | Rollback Restore Rehearsal | **BLOCKED** | 回滾演練 artifact 缺失 |
+| 1 | Local Test | **PASS** | typecheck、lint、unit/integration tests、build 通過 |
+| 2 | Workspace Symlink Health | **PASS** | broken=0、abs-/data/=0 |
+| 3 | Lockfile Store Sync | **PASS** | `check:lock-sync` strict exit 0 |
+| 4 | Database Preflight | **PASS** | 實測通過 |
+| 5 | Rotation Implementation Tests | **PASS** | credential rotation 測試通過 |
+| 6 | Target DB Credential Verification | **BLOCKED** | 未提供目標 DB 驗證所需環境金鑰 |
+| 7 | Browser UI E2E | **PASS** | Admin E2E 24/24，exit 0 |
+| 8 | Student Relay Browser E2E | **PASS** | 7 cases／42 assertions 全數通過 |
+| 9 | Staging HTTP Smoke | **BLOCKED** | Staging 環境未配置 |
+| 10 | Provider Vault Live Smoke | **BLOCKED** | Provider 憑證未配置 |
+| 11 | Production Verification | **BLOCKED** | Production 環境未配置 |
+| 12 | Rollback Procedure Available | **PASS** | `fileGate` 確認 3 份檔案存在；不代表回滾流程已實際演練 |
+| 13 | Rollback Restore Rehearsal | **BLOCKED** | 回滾演練 artifact 未提供 |
 
-**Admin E2E 最新狀態**（R19-T2 實跑）：
-
-- **24/24 斷言全部 PASS**，exit code = 0
-- 原始阻斷原因：`file://` 載入 module bundle 遭 Chromium CORS 拒絕
-- 修復方式：改用 loopback HTTP 並補齊 appearance-settings fixture
-- 第 19 項（Credential 軟刪除）：在既有 check 前等待「Credential 已軟刪除」提示
-- Artifact：`release-artifacts/phase3a/admin-provider-e2e.json`（status=PASS, executed=24, passed=24, failed=0, blocked=0）
-- 實碼驗證：`scripts/admin-provider-ui-e2e.mjs` 恰 24 條 `check(`、`TOTAL_ASSERTIONS=24`，**未刪減或弱化**
-
-**Student Relay E2E 最新狀態**（R19-T4 實跑）：
-
-- **42/42 斷言全部 PASS**（7 cases），exit code = 0
-- Artifact：`release-artifacts/phase3a/student-relay-e2e.json`（status=PASS）
-
-> **注意**：5 項 BLOCKED 均因環境配置未提供（憑證、Staging、Production），不等同於 `FAIL`。`GATE_EXIT=2` = `exitCodeForState("BLOCKED")`（`scripts/release-gate-core.mjs:37`，常數 `RELEASE_GATE_EXIT` 定義於 `:4`），總判定「Overall Release Gate: BLOCKED」如實記錄。
+> **注意**：5 項 BLOCKED 為憑證或環境條件不足，不能寫成 FAIL 或 PASS。Gate 狀態政策為 FAIL 優先於 BLOCKED、BLOCKED 優先於 PASS；因此此輪 `GATE_EXIT=2`、Overall Release Gate 為 `BLOCKED`、Production Ready 為 `No`。Student Relay Browser E2E 對應 `scripts/student-relay-e2e.mjs`，實碼只在 7 cases／42 assertions 全數通過時 exit 0；artifact 為 `release-artifacts/phase3a/student-relay-e2e.json`。
 
 ### 1.3 資料庫預檢
 

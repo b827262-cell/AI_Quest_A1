@@ -75,6 +75,11 @@ async function main() {
   const symlinkHealth = await runCommand("workspace symlink health", ["exec", "bash", "scripts/check-workspace-symlinks.sh"]);
   const symlinkHealthGate = combineGate("Workspace Symlink Health", [symlinkHealth]);
 
+  // R20-T4: lockfile store sync gate. Strict exit-code state via stateForExit —
+  // the checker exits non-zero on any lockfile/store divergence.
+  const lockfileSync = await runCommand("lockfile store sync", ["run", "check:lock-sync"]);
+  const lockfileSyncGate = combineGate("Lockfile Store Sync", [lockfileSync]);
+
   const preflight = await runCommand("database preflight", ["db:preflight:phase2"]);
   const rotationTests = await runCommand("credential rotation tests", ["--filter", "AI-adm-D1", "exec", "vitest", "run", "--no-file-parallelism", "src/server/ai/credential-rotation.test.ts", "src/server/ai/credential-crypto.test.ts"]);
   let rotationVerification;
@@ -88,6 +93,13 @@ async function main() {
 
   const e2e = await runCommand("browser UI E2E", ["e2e:admin-providers"]);
   const e2eGate = browserE2eGate(e2e, artifactPath("admin-provider-e2e", "E2E_REPORT_PATH"));
+
+  // R20-T4: student relay browser E2E gate. `scripts/student-relay-e2e.mjs`
+  // exits 0 only when all 7 cases (E1-E7) and all 42 assertions pass, so the
+  // exit-code state is a faithful 42/42 verification. Same runner pattern as
+  // the admin browser UI E2E step above.
+  const studentRelay = await runCommand("student relay browser E2E", ["run", "e2e:student-relay"]);
+  const studentRelayGate = combineGate("Student Relay Browser E2E", [studentRelay]);
   const staging = await runCommand("staging HTTP smoke", ["smoke:phase3a"]);
   const providerArgs = process.env.PROVIDER_LIVE_PROVIDER?.trim()
     ? ["smoke:provider", "--provider", process.env.PROVIDER_LIVE_PROVIDER.trim()]
@@ -101,12 +113,13 @@ async function main() {
   ]);
   const rollbackRehearsal = rollbackRestoreRehearsalGate();
 
-  const gates = [localGate, symlinkHealthGate, combineGate("Database Preflight", [preflight]), rotationTestsGate, targetCredentialVerificationGate,
-    e2eGate, combineGate("Staging HTTP Smoke", [staging]), combineGate("Provider Vault Live Smoke", [providerLive]),
+  const gates = [localGate, symlinkHealthGate, lockfileSyncGate, combineGate("Database Preflight", [preflight]), rotationTestsGate, targetCredentialVerificationGate,
+    e2eGate, studentRelayGate, combineGate("Staging HTTP Smoke", [staging]), combineGate("Provider Vault Live Smoke", [providerLive]),
     combineGate("Production Verification", [production]), rollbackProcedure, rollbackRehearsal];
   const overall = overallState(gates);
   const reportLocations = {
     browserUiE2e: artifactPath("admin-provider-e2e", "E2E_REPORT_PATH"),
+    studentRelayE2e: artifactPath("student-relay-e2e", "E2E_REPORT_PATH"),
     staging: artifactPath("staging-smoke", "PHASE3A_SMOKE_REPORT"),
     providerLive: artifactPath("provider-live-smoke", "PROVIDER_LIVE_REPORT_PATH"),
     production: artifactPath("production-verification", "PRODUCTION_REPORT_PATH"),

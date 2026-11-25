@@ -226,6 +226,26 @@ grep -rE '"zod"|"vitest"' packages/*/package.json apps/*/package.json
 - 属宣告相依降版，变更面大
 - 仅在 registry 不可取得时，提报 PM 裁示
 
+## 4.6 Lockfile Store Sync 守門檢查（R20）
+
+`pnpm run check:lock-sync` 透過 `scripts/check-lockfile-store-sync.mjs` 唯讀比對 `pnpm-lock.yaml` 中 13 個 workspace importer 的 `dependencies`／`devDependencies`、`node_modules/.pnpm` store 目錄及各 workspace `node_modules/<package>/package.json` 實際版本。`link:` 與 `workspace:` 本地連結會略過；peer suffix 不影響裸版本比對。
+
+**Release Gate 使用 strict 模式**：
+
+```bash
+corepack pnpm@9.15.0 run check:lock-sync
+```
+
+無漂移時輸出 `RESULT: OK` 並 exit 0；任何 store 目錄缺失、workspace 套件缺失或實際版本與 lockfile 不符時，列出 `DRIFT` 明細並 exit 1。此檢查不會安裝或修改依賴，也不會修改 lockfile。
+
+**診斷時可使用 warn-only**：
+
+```bash
+node scripts/check-lockfile-store-sync.mjs --warn-only
+```
+
+warn-only 一樣輸出每項漂移與統計，但結果為 `RESULT: WARN` 並 exit 0，供盤點或診斷使用；它不代表通過 strict Release Gate，正式驗收仍須執行上方不帶參數的命令。根 `package.json` 第 26 行定義 `"check:lock-sync": "node scripts/check-lockfile-store-sync.mjs"`。
+
 ## 5. 附录：相关脚本与文件
 
 ### 5.1 检测脚本
