@@ -258,6 +258,49 @@ export interface UploadBookFileOptions {
   relatedFileId?: string | null;
 }
 
+/** Admin reading-progress analytics for a book (P2-3). */
+export interface BookReadingProgressAnalytics {
+  bookId: string;
+  totalSessions: number;
+  activeReadersCount: number;
+  averageCompletedPages: number;
+  pageDropoffDistribution: Array<{
+    page: number;
+    currentReadersCount: number;
+    completedReadersCount: number;
+  }>;
+  chapterCompletionStats: Array<{
+    chapterId: string;
+    title: string;
+    orderIndex: number;
+    completedCount: number;
+    completionRate: number;
+  }>;
+  recentReaders: Array<{
+    sessionId: string;
+    currentPage: number | null;
+    completedPagesCount: number;
+    completedChaptersCount: number;
+    updatedAt: string | null;
+  }>;
+}
+
+/** Admin projection of a student-authored note on a book (P2-4). */
+export interface AdminBookNote {
+  id: string;
+  bookId: string;
+  chapterId: string | null;
+  chapterTitle: string | null;
+  pageNumber: number | null;
+  type: string;
+  title: string;
+  content: string | null;
+  canvasData: string | null;
+  canvasImageUrl: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
 /**
  * Slot D real wiring. The 高普考資料快照 page talks to the two admin endpoints
  * through the same `http` helper as every other admin call, so cookies, the CSRF
@@ -409,6 +452,28 @@ export const adminApi = {
   getBook: (bookId: string) =>
     http<{ book: Book; chapters: BookChapter[]; files: BookFile[] }>(
       `/api/admin/books/${bookId}`
+    ),
+
+  getBookReadingProgress: (bookId: string) =>
+    http<BookReadingProgressAnalytics>(
+      `/api/admin/books/${bookId}/analytics/reading-progress`
+    ),
+
+  getBookNotes: (bookId: string, params?: { chapterId?: string; type?: string; q?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.chapterId) qs.set("chapterId", params.chapterId);
+    if (params?.type) qs.set("type", params.type);
+    if (params?.q) qs.set("q", params.q);
+    const tail = qs.toString() ? `?${qs.toString()}` : "";
+    return http<{ bookId: string; totalCount: number; notes: AdminBookNote[] }>(
+      `/api/admin/books/${bookId}/notes${tail}`
+    );
+  },
+
+  deleteBookNote: (bookId: string, noteId: string) =>
+    http<{ deleted: boolean; noteId: string }>(
+      `/api/admin/books/${bookId}/notes/${noteId}`,
+      { method: "DELETE" }
     ),
 
   importReaderToc: (bookId: string, payload: ReaderTocImportPayload) =>
@@ -591,7 +656,7 @@ export const adminApi = {
   getDashboardStats: (range: DashboardRange = "month") =>
     http<AdminDashboardStats>(`/api/admin/dashboard/stats?range=${range}`),
 
-  listAccounts: () => http<{ accounts: AdminAccount[] }>("/api/admin/accounts"),
+  listAccounts: () => http<{ accounts: AdminAccount[]; studentUsers?: AdminStudentUser[] }>("/api/admin/accounts"),
 
   setAccountRisk: (sessionId: string, riskLevel: RiskLevel, note?: string | null) =>
     http<{ account: AdminAccount | null }>(`/api/admin/accounts/${sessionId}/risk`, {
@@ -835,6 +900,24 @@ export interface AdminAccount {
   blockedAt: string | null;
   lastSeenAt: string;
   online: boolean;
+  // Enriched from the linked student profile (null for anonymous sessions).
+  schoolName?: string | null;
+  gradeLevel?: string | null;
+  email?: string | null;
+  profileCompleted?: boolean;
+  studentDisplayName?: string | null;
+}
+
+/** Admin-only projection of a registered student's profile/roster row. */
+export interface AdminStudentUser {
+  id: string;
+  displayName: string;
+  email: string;
+  schoolName: string | null;
+  gradeLevel: string | null;
+  profileCompleted: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface StudentQuestion {

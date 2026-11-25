@@ -29,6 +29,15 @@ export interface PublicSiteConfig {
   maintenanceNotice: string;
 }
 
+/** Public, per-guest daily quota snapshot from GET /api/public/guest-quota. */
+export interface PublicGuestQuota {
+  guestAiEnabled: boolean;
+  dailyLimit: number;
+  usedCount: number;
+  remainingCount: number;
+  blocked: boolean;
+}
+
 export type GuestQuestionCategory =
   | "auto"
   | "programming"
@@ -262,6 +271,8 @@ export const studentClient = {
     }),
 
   getPublicSiteConfig: () => http<PublicSiteConfig>("/api/public/site-config"),
+
+  getPublicGuestQuota: () => http<PublicGuestQuota>("/api/public/guest-quota"),
 
   askAsGuest: async (body: {
     question: string;

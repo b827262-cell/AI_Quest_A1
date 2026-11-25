@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { GOOGLE_CONFIRM_HINT } from "./constants";
 import {
+  isDesktopRelayEnvironment,
+  GOOGLE_RELAY_WINDOW_NAME,
+  googleRelayPopupFeatures
+} from "./GoogleAiRelaySimulatorModal";
+import {
   addLearningHistoryEntry,
   googleAiSearchUrl,
   updateLearningHistoryAnswer,
@@ -19,6 +24,7 @@ import {
   type GuestAskResponse,
   type GuestProviderPreference,
   type GuestQuestionCategory,
+  type PublicGuestQuota,
   type PublicSiteConfig
 } from "../../studentClient";
 
@@ -45,7 +51,22 @@ export function useGuestQuestion({
   const [feedback, setFeedback] = useState("");
   const [lastSourceType, setLastSourceType] = useState<"manual" | "image" | "file">("manual");
   const [restoringAnswer, setRestoringAnswer] = useState(isAnswerRoute);
+  const [quota, setQuota] = useState<PublicGuestQuota | null>(null);
+  const [activeRelay, setActiveRelay] = useState<{ entry: LearningHistoryEntry; url: string } | null>(null);
   const requestAbortRef = useRef<AbortController | null>(null);
+
+  // Fetch the public per-guest daily quota snapshot once on mount. Optional
+  // chaining + catch keep this resilient to minimal mocks and offline/test envs.
+  useEffect(() => {
+    studentClient.getPublicGuestQuota?.().then(setQuota).catch(() => undefined);
+  }, []);
+
+  // Keep quota.remainingCount in sync when a response carries the authoritative
+  // remaining count (ask + saved-answer restore).
+  function syncQuotaRemaining(remaining: number | undefined) {
+    if (typeof remaining !== "number") return;
+    setQuota((prev) => (prev ? { ...prev, remainingCount: remaining } : prev));
+  }
 
   useEffect(() => {
     let active = true;
@@ -62,6 +83,7 @@ export function useGuestQuestion({
       setError("");
       setFeedback("");
       setLastSourceType("manual");
+      setActiveRelay(null);
       setRestoringAnswer(false);
       return () => {
         active = false;
@@ -93,6 +115,10 @@ export function useGuestQuestion({
       }
       setQuestion(saved.question || "");
       setResponse(saved);
+      const savedRemaining = saved.remainingGuestQuestions;
+      if (typeof savedRemaining === "number") {
+        setQuota((prev) => (prev ? { ...prev, remainingCount: savedRemaining } : prev));
+      }
       setRestoringAnswer(false);
     }).catch(() => {
       if (!active) return;
@@ -147,6 +173,7 @@ export function useGuestQuestion({
         return;
       }
       setResponse(result);
+      syncQuotaRemaining(result.remainingGuestQuestions);
       if (result.status === "success" && result.answer) {
         setLearningHistory(updateLearningHistoryAnswer(historyRecord.entry.id, result.answer));
       }
@@ -192,7 +219,18 @@ export function useGuestQuestion({
       strategy: "google-ai"
     });
     setLearningHistory(historyRecord.entries);
-    window.open(googleAiSearchUrl(trimmed), "_blank", "noopener,noreferrer");
+    const relayUrl = googleAiSearchUrl(trimmed);
+    if (isDesktopRelayEnvironment()) {
+      // R16: desktop side-by-side relay — a controlled named popup on the
+      // right plus the relay simulator modal on the left, instead of a
+      // full-screen tab that gets lost.
+      window.open(relayUrl, GOOGLE_RELAY_WINDOW_NAME, googleRelayPopupFeatures());
+      setActiveRelay({ entry: historyRecord.entry, url: relayUrl });
+      setQuestion("");
+      setGoogleStatus(`已開啟 Google AI 並排小視窗；接力模擬器正在本頁等待貼回（貼上、拖曳或切回視窗皆可）。${GOOGLE_CONFIRM_HINT}`);
+      return;
+    }
+    window.open(relayUrl, "_blank", "noopener,noreferrer");
     setQuestion("");
     setGoogleStatus(`已用搜尋好朋友／谷哥開啟問題；回來後可用分享、剪貼簿或貼上備援帶回回覆。${GOOGLE_CONFIRM_HINT}`);
   }
@@ -216,6 +254,7 @@ export function useGuestQuestion({
     setError("");
     setFeedback("");
     setLastSourceType("manual");
+    setActiveRelay(null);
     clearGuestAnswerCredential();
     navigate("/", { replace: true, state: null });
   }
@@ -246,10 +285,13 @@ export function useGuestQuestion({
     error,
     feedback,
     restoringAnswer,
+    quota,
     submitGuestQuestion,
     submitGoogleAiQuestion,
     submitFeedback,
     resetQuestion,
-    retryGuestQuestion
+    retryGuestQuestion,
+    activeRelay,
+    setActiveRelay
   };
 }

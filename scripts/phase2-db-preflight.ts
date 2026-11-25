@@ -1,8 +1,20 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import Database from "../packages/db/node_modules/better-sqlite3";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { createDbHandle, createRepositories, resolveDbPath, runMigrations } from "../packages/db/src/index";
+
+// R15-T4 fix (root cause confirmed by R14-T4/T6): better-sqlite3@13.0.2 has no
+// root module entry, so importing the pnpm.instance path directly breaks under
+// tsx's ESM resolution (ERR_MODULE_NOT_FOUND .../index.js). The workspace keeps
+// better-sqlite3 installed in packages/db/node_modules; anchor require() at
+// packages/db/package.json and let Node resolve its CJS entry (main=lib/index.js).
+// Loading method only — backup/restore logic below is unchanged.
+const dbRequire = createRequire(
+  fileURLToPath(new URL("../packages/db/package.json", import.meta.url)),
+);
+const Database = dbRequire("better-sqlite3");
 
 const sourcePath = resolveDbPath();
 if (!existsSync(sourcePath)) {

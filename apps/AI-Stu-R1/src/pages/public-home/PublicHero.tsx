@@ -3,6 +3,7 @@ import { GuestRemainingHint } from "../../components/GuestRemainingHint";
 import { HomeAIComposer } from "../../components/HomeAIComposer";
 import type { PublicSiteConfig } from "../../studentClient";
 import { GuestAnswer } from "./GuestAnswer";
+import { GoogleAiRelaySimulatorModal } from "./GoogleAiRelaySimulatorModal";
 import { LearningHistoryPanel } from "./LearningHistoryPanel";
 import { GOOGLE_CONFIRM_HINT, QUICK_STARTS } from "./constants";
 import type { useGuestQuestion } from "./useGuestQuestion";
@@ -20,6 +21,18 @@ export function PublicHero({
   intake: ReturnType<typeof useShareIntake>;
   guest: ReturnType<typeof useGuestQuestion>;
 }) {
+  const guestDailyLimit = config.guestDailyLimit;
+  const remainingGuestQuestions =
+    guest.quota?.remainingCount ??
+    guest.response?.remainingGuestQuestions ??
+    guestDailyLimit;
+  const guestQuotaPaused = !config.guestAiEnabled || guest.quota?.guestAiEnabled === false;
+  const guestQuotaExhausted = remainingGuestQuestions <= 0 || guest.quota?.blocked === true;
+  const guestQuotaText = guestQuotaPaused
+    ? "訪客問答暫停開放，請登入後使用 · 每題最多 2,000 字"
+    : guestQuotaExhausted
+      ? `今日免費額度已用完（0 / ${guestDailyLimit} 題），登入後可繼續使用`
+      : `訪客每日可體驗 ${guestDailyLimit} 題（今日剩餘 ${remainingGuestQuestions} 題）· 每題最多 2,000 字`;
   return (
     <section className="public-hero" aria-labelledby="public-home-heading">
       <div className="public-hero-orbit public-hero-orbit-one" />
@@ -52,7 +65,11 @@ export function PublicHero({
             autoFocus={!guest.busy}
           />
           <div className="public-composer-meta">
-            <span>{guest.strategy === "google-ai" ? "搜尋好朋友／谷哥不需 API 金鑰 · 每題最多 2,000 字" : `訪客每日可體驗 ${config.guestDailyLimit} 題 · 每題最多 2,000 字`}</span>
+            {guest.strategy === "google-ai" ? (
+              <span>搜尋好朋友／谷哥不需 API 金鑰 · 每題最多 2,000 字</span>
+            ) : (
+              <span role="status" aria-live="polite" aria-atomic="true">{guestQuotaText}</span>
+            )}
             <span>目前模式：{guest.category === "auto" ? "自動判斷" : guest.category}</span>
           </div>
           {guest.strategy === "api" ? <p><GuestRemainingHint remaining={guest.guestRemaining} /></p> : null}
@@ -98,6 +115,14 @@ export function PublicHero({
             {intake.pendingIntake.candidates.map((entry) => <button key={entry.id} type="button" onClick={() => intake.confirmPendingIntake(entry)}>{entry.question}</button>)}
             <button type="button" className="share-binding-cancel" onClick={intake.dismissPendingIntake}>先不儲存</button>
           </section> : null}
+          {guest.activeRelay ? (
+            <GoogleAiRelaySimulatorModal
+              entry={guest.activeRelay.entry}
+              url={guest.activeRelay.url}
+              onClose={() => guest.setActiveRelay(null)}
+              onIntake={intake.acceptIncomingAnswer}
+            />
+          ) : null}
         </>
     ) : guest.restoringAnswer ? (
       <p className="public-answer-loading" role="status">正在載入回答…</p>

@@ -12,7 +12,9 @@ const releaseScriptNames = new Set([
   "production-verification.mjs",
   "provider-live-smoke.ts",
   "release-artifacts.mjs",
-  "release-gate-core.mjs"
+  "release-gate-core.mjs",
+  "student-reader-smoke.ts",
+  "student-web-e2e.ts"
 ]);
 const files = readdirSync(scriptsDir).filter((name) => releaseScriptNames.has(name)).sort();
 const diagnostics = [];

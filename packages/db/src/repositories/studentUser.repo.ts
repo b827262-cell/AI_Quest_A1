@@ -9,6 +9,19 @@ export function makeStudentUserRepo(db: Db) {
     count(): number {
       return db.select({ value: count() }).from(studentUsers).get()?.value ?? 0;
     },
+    /** Admin-only projection used to enrich account listings. No auth here. */
+    listAll() {
+      return db.select({
+        id: studentUsers.id,
+        displayName: studentUsers.displayName,
+        email: studentUsers.email,
+        schoolName: studentUsers.schoolName,
+        gradeLevel: studentUsers.gradeLevel,
+        profileCompleted: studentUsers.profileCompleted,
+        createdAt: studentUsers.createdAt,
+        updatedAt: studentUsers.updatedAt
+      }).from(studentUsers).all();
+    },
     findByGoogleSubject(googleSubject: string) {
       return db.select().from(studentUsers).where(eq(studentUsers.googleSubject, googleSubject)).get();
     },

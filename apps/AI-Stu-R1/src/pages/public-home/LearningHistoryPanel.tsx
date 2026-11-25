@@ -6,6 +6,7 @@ import {
   updateLearningHistoryContent,
   type LearningHistoryEntry
 } from "../../learningHistory";
+import { readClipboardText } from "./GoogleAiRelaySimulatorModal";
 import { SOURCE_LABELS } from "./constants";
 
 export function LearningHistoryPanel({
@@ -20,7 +21,7 @@ export function LearningHistoryPanel({
   onEntriesChange: (entries: LearningHistoryEntry[]) => void;
   onStatusChange: (id: string, message: string) => void;
   statuses: Record<string, string>;
-  onIntake: (rawAnswer: string, preferredEntry?: LearningHistoryEntry) => void;
+  onIntake: (rawAnswer: string, preferredEntry?: LearningHistoryEntry, options?: { sharedUrl?: unknown; explicitTargetEntry?: boolean }) => void;
   signedIn: boolean;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -55,14 +56,16 @@ export function LearningHistoryPanel({
   }
 
   async function pasteGoogleAnswer(entry: LearningHistoryEntry) {
-    try {
-      if (!navigator.clipboard?.readText) throw new Error("clipboard unavailable");
-      const answer = await navigator.clipboard.readText();
-      if (!answer.trim()) throw new Error("clipboard empty");
-      onIntake(answer, entry);
-    } catch {
-      onStatusChange(entry.id, "無法讀取剪貼簿；請允許權限，或展開下方手動貼上備援。");
+    // readClipboardText() (shared with the relay simulator) degrades to null
+    // on permission failure; the explicit button keeps its fallback message.
+    const answer = await readClipboardText();
+    if (answer?.trim()) {
+      // R16: the learner explicitly pressed this entry's import button, so the
+      // 67% auto-bind gate is waived (conflicting question URLs stay protected).
+      onIntake(answer, entry, { explicitTargetEntry: true });
+      return;
     }
+    onStatusChange(entry.id, "無法讀取剪貼簿；請允許權限，或展開下方手動貼上備援。");
   }
 
   return (

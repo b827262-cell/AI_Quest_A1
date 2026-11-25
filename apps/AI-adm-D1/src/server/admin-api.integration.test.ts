@@ -576,3 +576,288 @@ describe("student questions routes", () => {
     }
   });
 });
+
+describe("Phase A backend DTO (P1-1 accounts enrichment, P1-2 guest quota)", () => {
+  it("P1-1 enriches accounts with the matching student profile and returns the studentUsers projection", async () => {
+    const { app, dependencies, token } = buildTestApp();
+    const student = dependencies.repos.studentUsers.create({
+      googleSubject: "p1-1-subject", email: "p1-1@example.test", displayName: "P1 Student"
+    });
+    dependencies.repos.studentUsers.updateProfile(student.id, {
+      displayName: "P1 Student",
+      schoolName: "Sunrise High",
+      gradeLevel: "G10"
+    });
+    const studentSession = dependencies.repos.chat.createSession({ bookId: "p1-1-book", userId: student.id });
+    const anonymousSession = dependencies.repos.chat.createSession({ bookId: "p1-1-anon" });
+
+    const response = await request(app).get("/api/admin/accounts").set("x-admin-token", token);
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty("studentUsers");
+    expect(Array.isArray(response.body.studentUsers)).toBe(true);
+
+    const returnedStudent = response.body.studentUsers.find((u: { id: string }) => u.id === student.id);
+    expect(returnedStudent).toEqual({
+      id: student.id,
+      displayName: "P1 Student",
+      email: "p1-1@example.test",
+      schoolName: "Sunrise High",
+      gradeLevel: "G10",
+      profileCompleted: true,
+      createdAt: expect.any(String),
+      updatedAt: expect.any(String)
+    });
+
+    const enriched = response.body.accounts.find((a: { sessionId: string }) => a.sessionId === studentSession.id);
+    const anon = response.body.accounts.find((a: { sessionId: string }) => a.sessionId === anonymousSession.id);
+    expect(enriched).toMatchObject({
+      sessionId: studentSession.id,
+      loginMethod: "帳號登入",
+      schoolName: "Sunrise High",
+      gradeLevel: "G10",
+      email: "p1-1@example.test",
+      profileCompleted: true,
+      studentDisplayName: "P1 Student"
+    });
+    expect(anon).toMatchObject({
+      sessionId: anonymousSession.id,
+      loginMethod: "匿名進入",
+      schoolName: null,
+      gradeLevel: null,
+      email: null,
+      profileCompleted: false,
+      studentDisplayName: null
+    });
+  });
+
+  it("P1-2 returns the public guest quota DTO with a no-store cache header", async () => {
+    const { app } = buildTestApp();
+    const response = await request(app).get("/api/public/guest-quota");
+    expect(response.status).toBe(200);
+    expect(String(response.headers["cache-control"])).toMatch(/no-store/);
+    expect(response.body).toEqual({
+      guestAiEnabled: true,
+      dailyLimit: 3,
+      usedCount: 0,
+      remainingCount: 3,
+      blocked: false
+    });
+  });
+});
+
+describe("Phase B backend DTO (P2-3 reading-progress analytics, P2-4 notes)", () => {
+  it("P2-3 returns the reading-progress analytics DTO for a book", async () => {
+    const { app, dependencies, dbHandle, token } = buildTestApp();
+    const book = dependencies.repos.books.create({ title: "P2-3 Book" });
+    const ch1 = dependencies.repos.chapters.create({ bookId: book.id, title: "Ch1", orderIndex: 0 });
+    const ch2 = dependencies.repos.chapters.create({ bookId: book.id, title: "Ch2", orderIndex: 1 });
+
+    const progressPrefix = `reader-progress-v1:${book.id}:`;
+    dependencies.repos.settings.set(`${progressPrefix}s1`, JSON.stringify({
+      currentPage: 5, currentChapterId: ch1.id, completedPages: [1, 2, 3],
+      completedChapters: [ch1.id], updatedAt: "2024-01-03T00:00:00.000Z", lastEventType: "page_view"
+    }));
+    dependencies.repos.settings.set(`${progressPrefix}s2`, JSON.stringify({
+      currentPage: 3, currentChapterId: ch1.id, completedPages: [1, 2],
+      completedChapters: [], updatedAt: "2024-01-02T00:00:00.000Z", lastEventType: "chapter_complete"
+    }));
+    dependencies.repos.settings.set(`${progressPrefix}s3`, JSON.stringify({
+      currentPage: null, currentChapterId: null, completedPages: [],
+      completedChapters: [ch1.id, ch2.id], updatedAt: "2024-01-01T00:00:00.000Z", lastEventType: "chapter_complete"
+    }));
+    dependencies.repos.settings.set(`${progressPrefix}s4`, JSON.stringify({
+      currentPage: null, currentChapterId: null, completedPages: [],
+      completedChapters: [], updatedAt: null, lastEventType: null
+    }));
+
+    const response = await request(app)
+      .get(`/api/admin/books/${book.id}/analytics/reading-progress`)
+      .set("x-admin-token", token);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      bookId: book.id,
+      totalSessions: 4,
+      activeReadersCount: 3,
+      averageCompletedPages: 1.25,
+      pageDropoffDistribution: [
+        { page: 1, currentReadersCount: 0, completedReadersCount: 2 },
+        { page: 2, currentReadersCount: 0, completedReadersCount: 2 },
+        { page: 3, currentReadersCount: 1, completedReadersCount: 1 },
+        { page: 5, currentReadersCount: 1, completedReadersCount: 0 }
+      ],
+      chapterCompletionStats: [
+        { chapterId: ch1.id, title: "Ch1", orderIndex: 0, completedCount: 2, completionRate: 0.5 },
+        { chapterId: ch2.id, title: "Ch2", orderIndex: 1, completedCount: 1, completionRate: 0.25 }
+      ],
+      recentReaders: [
+        { sessionId: "s1", currentPage: 5, completedPagesCount: 3, completedChaptersCount: 1, updatedAt: "2024-01-03T00:00:00.000Z" },
+        { sessionId: "s2", currentPage: 3, completedPagesCount: 2, completedChaptersCount: 0, updatedAt: "2024-01-02T00:00:00.000Z" },
+        { sessionId: "s3", currentPage: null, completedPagesCount: 0, completedChaptersCount: 2, updatedAt: "2024-01-01T00:00:00.000Z" },
+        { sessionId: "s4", currentPage: null, completedPagesCount: 0, completedChaptersCount: 0, updatedAt: null }
+      ]
+    });
+    dbHandle.sqlite.close();
+  });
+
+  it("P2-3 returns 404 for a missing book", async () => {
+    const { app, dbHandle, token } = buildTestApp();
+    const response = await request(app)
+      .get("/api/admin/books/missing-book/analytics/reading-progress")
+      .set("x-admin-token", token);
+    expect(response.status).toBe(404);
+    dbHandle.sqlite.close();
+  });
+
+  it("P2-4 returns the notes DTO with optional filters", async () => {
+    const { app, dependencies, dbHandle, token } = buildTestApp();
+    const book = dependencies.repos.books.create({ title: "P2-4 Book" });
+    const ch1 = dependencies.repos.chapters.create({ bookId: book.id, title: "Ch1", orderIndex: 0 });
+    const ch2 = dependencies.repos.chapters.create({ bookId: book.id, title: "Ch2", orderIndex: 1 });
+
+    const n1 = dependencies.repos.notes.create(book.id, {
+      type: "text", title: "Note A", content: "alpha content", chapterId: ch1.id, pageNumber: 1
+    });
+    const n2 = dependencies.repos.notes.create(book.id, {
+      type: "ai_answer", title: "Note B", content: "beta", chapterId: ch2.id, pageNumber: 2
+    });
+    const n3 = dependencies.repos.notes.create(book.id, {
+      type: "canvas", title: "Sketch", content: null, chapterId: null, pageNumber: null,
+      canvasData: "data", canvasImageUrl: "http://img"
+    });
+
+    const expectedNotes = [
+      { id: n1.id, bookId: book.id, chapterId: ch1.id, chapterTitle: "Ch1", pageNumber: 1, type: "text", title: "Note A", content: "alpha content", canvasData: null, canvasImageUrl: null, createdAt: expect.any(String), updatedAt: expect.any(String) },
+      { id: n2.id, bookId: book.id, chapterId: ch2.id, chapterTitle: "Ch2", pageNumber: 2, type: "ai_answer", title: "Note B", content: "beta", canvasData: null, canvasImageUrl: null, createdAt: expect.any(String), updatedAt: expect.any(String) },
+      { id: n3.id, bookId: book.id, chapterId: null, chapterTitle: null, pageNumber: null, type: "canvas", title: "Sketch", content: null, canvasData: "data", canvasImageUrl: "http://img", createdAt: expect.any(String), updatedAt: expect.any(String) }
+    ];
+
+    const all = await request(app).get(`/api/admin/books/${book.id}/notes`).set("x-admin-token", token);
+    expect(all.status).toBe(200);
+    expect(all.body.bookId).toBe(book.id);
+    expect(all.body.totalCount).toBe(3);
+    expect(all.body.notes.slice().sort((a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id)))
+      .toEqual(expectedNotes.slice().sort((a, b) => a.id.localeCompare(b.id)));
+
+    const byChapter = await request(app).get(`/api/admin/books/${book.id}/notes?chapterId=${ch1.id}`).set("x-admin-token", token);
+    expect(byChapter.status).toBe(200);
+    expect(byChapter.body.totalCount).toBe(1);
+    expect(byChapter.body.notes[0].id).toBe(n1.id);
+
+    const byType = await request(app).get(`/api/admin/books/${book.id}/notes?type=ai_answer`).set("x-admin-token", token);
+    expect(byType.status).toBe(200);
+    expect(byType.body.totalCount).toBe(1);
+    expect(byType.body.notes[0].id).toBe(n2.id);
+
+    const byQuery = await request(app).get(`/api/admin/books/${book.id}/notes?q=ALPHA`).set("x-admin-token", token);
+    expect(byQuery.status).toBe(200);
+    expect(byQuery.body.totalCount).toBe(1);
+    expect(byQuery.body.notes[0].id).toBe(n1.id);
+
+    dbHandle.sqlite.close();
+  });
+
+  it("P2-4 returns 404 for a missing book", async () => {
+    const { app, dbHandle, token } = buildTestApp();
+    const response = await request(app)
+      .get("/api/admin/books/missing-book/notes")
+      .set("x-admin-token", token);
+    expect(response.status).toBe(404);
+    dbHandle.sqlite.close();
+  });
+});
+
+describe("P2-4 delete note route (DELETE /api/admin/books/:bookId/notes/:noteId)", () => {
+  function seedBookWithNotes(dependencies: ReturnType<typeof createAdminTestDependencies>) {
+    const book = dependencies.repos.books.create({ title: "Delete Notes Book" });
+    const ch1 = dependencies.repos.chapters.create({ bookId: book.id, title: "Ch1", orderIndex: 0 });
+    const n1 = dependencies.repos.notes.create(book.id, {
+      type: "text", title: "Note A", content: "alpha", chapterId: ch1.id, pageNumber: 1
+    });
+    const n2 = dependencies.repos.notes.create(book.id, {
+      type: "text", title: "Note B", content: "beta", chapterId: null, pageNumber: null
+    });
+    return { book, ch1, n1, n2 };
+  }
+
+  it("deletes a note and reduces the notes count", async () => {
+    const { app, dependencies, dbHandle } = buildTestApp();
+    const { book, n1 } = seedBookWithNotes(dependencies);
+    const session = await login(app);
+
+    const before = await request(app).get(`/api/admin/books/${book.id}/notes`).set("Cookie", session.cookieHeader);
+    expect(before.status).toBe(200);
+    expect(before.body.totalCount).toBe(2);
+
+    const del = await request(app)
+      .delete(`/api/admin/books/${book.id}/notes/${n1.id}`)
+      .set("Cookie", session.cookieHeader)
+      .set("Origin", "http://127.0.0.1:5174")
+      .set("x-csrf-token", session.csrf);
+    expect(del.status).toBe(200);
+    expect(del.body).toEqual({ deleted: true, noteId: n1.id });
+
+    const after = await request(app).get(`/api/admin/books/${book.id}/notes`).set("Cookie", session.cookieHeader);
+    expect(after.status).toBe(200);
+    expect(after.body.totalCount).toBe(1);
+    expect(after.body.notes.map((n: { id: string }) => n.id)).not.toContain(n1.id);
+    dbHandle.sqlite.close();
+  });
+
+  it("returns 404 for a missing book, a missing note, and a cross-book note", async () => {
+    const { app, dependencies, dbHandle } = buildTestApp();
+    const session = await login(app);
+    const headers = {
+      Cookie: session.cookieHeader,
+      Origin: "http://127.0.0.1:5174",
+      "x-csrf-token": session.csrf
+    };
+
+    const missingBook = await request(app)
+      .delete("/api/admin/books/missing-book/notes/whatever")
+      .set(headers);
+    expect(missingBook.status).toBe(404);
+
+    const book = dependencies.repos.books.create({ title: "Delete Notes Book X" });
+    const missingNote = await request(app)
+      .delete(`/api/admin/books/${book.id}/notes/missing-note`)
+      .set(headers);
+    expect(missingNote.status).toBe(404);
+
+    const otherBook = dependencies.repos.books.create({ title: "Delete Notes Book Y" });
+    const crossNote = dependencies.repos.notes.create(otherBook.id, {
+      type: "text", title: "Cross", content: "c", chapterId: null, pageNumber: null
+    });
+    const cross = await request(app)
+      .delete(`/api/admin/books/${book.id}/notes/${crossNote.id}`)
+      .set(headers);
+    expect(cross.status).toBe(404);
+    dbHandle.sqlite.close();
+  });
+
+  it("rejects deletion without authentication, with a wrong origin, and without CSRF", async () => {
+    const { app, dependencies, dbHandle, token } = buildTestApp();
+    const book = dependencies.repos.books.create({ title: "Delete Notes Auth Book" });
+    const n1 = dependencies.repos.notes.create(book.id, {
+      type: "text", title: "N", content: "c", chapterId: null, pageNumber: null
+    });
+    const path = `/api/admin/books/${book.id}/notes/${n1.id}`;
+
+    expect((await request(app).delete(path)).status).toBe(401);
+
+    const student = dependencies.repos.studentUsers.create({
+      googleSubject: "del-student-subject", email: "del-student@example.test", displayName: "Del Student"
+    });
+    const { sessionToken } = createStudentSessionSecrets();
+    dependencies.repos.studentSessions.create({
+      tokenDigest: digestStudentSecret(sessionToken), userId: student.id,
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    expect((await request(app).delete(path).set("Cookie", `ai_student_session=${sessionToken}`)).status).toBe(401);
+
+    expect((await request(app).delete(path).set("x-admin-token", token).set("Origin", "https://evil.example.test")).status).toBe(403);
+
+    const session = await login(app);
+    expect((await request(app).delete(path).set("Cookie", session.cookieHeader).set("Origin", "http://127.0.0.1:5174")).status).toBe(403);
+    dbHandle.sqlite.close();
+  });
+});
