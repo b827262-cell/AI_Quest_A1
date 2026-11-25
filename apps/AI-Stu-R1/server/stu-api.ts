@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import {
   assertStudentAuthConfig,
@@ -24,6 +25,29 @@ import {
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
 import { createReadyCheck, registerHealthRoutes } from "./health-routes";
 import { logServerError, registerStudentBookRoutes } from "./student-book-routes";
+
+// Load the repository-root .env the same way the admin API does, filling only
+// values the launch environment did not provide. Without this the student API
+// falls back to production defaults such as /opt/AI-Stu-R1/data/student.db.
+const rootEnvPath = fileURLToPath(new URL("../../../.env", import.meta.url));
+if (existsSync(rootEnvPath)) {
+  for (const line of readFileSync(rootEnvPath, "utf8").split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!match) continue;
+    const [, key, raw] = match;
+    if (process.env[key] !== undefined) continue;
+    let value = raw;
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    } else {
+      value = value.replace(/\s+#.*$/, "");
+    }
+    process.env[key] = value;
+  }
+}
 
 const config = loadStudentRuntimeConfig();
 const studentAuthConfig = resolveStudentAuthConfig(process.env);
