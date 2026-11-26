@@ -15,7 +15,13 @@ export function createStudentNotesRouter(deps: { notes: StudentNoteRepo; learnin
     const offset = Number(raw);
     const n = Number(req.query.limit ?? 50);
     const limit = Number.isSafeInteger(n) && n > 0 ? Math.min(n, 100) : 50;
-    const notes = deps.notes.list(req.studentAuth!.user.id, { offset, limit: limit + 1, includeDeleted: req.query.includeDeleted === "1" || req.query.includeDeleted === "true", bookId: typeof req.query.bookId === "string" ? req.query.bookId : undefined });
+    const tag = req.query.tag;
+    const q = req.query.q;
+    if ((tag !== undefined && (typeof tag !== "string" || !tag.trim() || tag.trim().length > 24)) ||
+        (q !== undefined && (typeof q !== "string" || !q.trim() || q.trim().length > 100))) {
+      return res.status(400).json({ error: "INVALID_QUERY" });
+    }
+    const notes = deps.notes.list(req.studentAuth!.user.id, { offset, limit: limit + 1, includeDeleted: req.query.includeDeleted === "1" || req.query.includeDeleted === "true", bookId: typeof req.query.bookId === "string" ? req.query.bookId : undefined, tag: typeof tag === "string" ? tag.trim() : undefined, q: typeof q === "string" ? q.trim() : undefined });
     return res.json({ notes: notes.slice(0, limit), nextOffset: notes.length > limit ? offset + limit : null });
   });
   router.post("/notes", (req, res) => {

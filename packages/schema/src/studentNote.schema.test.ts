@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   createStudentNoteFromHistoryInputSchema,
   createStudentNoteInputSchema,
+  studentAiAskInputSchema,
+  studentAiAskResponseSchema,
   studentNoteSchema,
+  studentNotesQuerySchema,
   updateStudentNoteInputSchema
 } from "./studentNote.schema";
 
@@ -323,5 +326,259 @@ describe("studentNoteSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("studentNotesQuerySchema", () => {
+  it("accepts an empty query (all filters optional)", () => {
+    const result = studentNotesQuerySchema.safeParse({});
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toEqual({});
+  });
+
+  it("coerces string offset and limit from the query string", () => {
+    const result = studentNotesQuerySchema.safeParse({ offset: "20", limit: "50" });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.offset).toBe(20);
+      expect(result.data.limit).toBe(50);
+    }
+  });
+
+  it("accepts the full filter set", () => {
+    const result = studentNotesQuerySchema.safeParse({
+      offset: "0",
+      limit: "100",
+      includeDeleted: true,
+      bookId: "book-1",
+      tag: "機器學習",
+      q: "梯度下降"
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.tag).toBe("機器學習");
+      expect(result.data.q).toBe("梯度下降");
+    }
+  });
+
+  it("trims tag and q before validating length", () => {
+    const result = studentNotesQuerySchema.safeParse({ tag: "  機器學習  ", q: "  梯度下降  " });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.tag).toBe("機器學習");
+      expect(result.data.q).toBe("梯度下降");
+    }
+  });
+
+  it("rejects an out-of-range or non-integer offset", () => {
+    expect(studentNotesQuerySchema.safeParse({ offset: "-1" }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ offset: "100001" }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ offset: "1.5" }).success).toBe(false);
+  });
+
+  it("rejects an out-of-range limit", () => {
+    expect(studentNotesQuerySchema.safeParse({ limit: "0" }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ limit: "101" }).success).toBe(false);
+  });
+
+  it("rejects a non-boolean includeDeleted", () => {
+    expect(studentNotesQuerySchema.safeParse({ includeDeleted: "true" }).success).toBe(false);
+  });
+
+  it("rejects empty or whitespace-only tag and q", () => {
+    expect(studentNotesQuerySchema.safeParse({ tag: "" }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ tag: "   " }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ q: "" }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ q: "   " }).success).toBe(false);
+  });
+
+  it("rejects an over-long tag, q or bookId", () => {
+    expect(studentNotesQuerySchema.safeParse({ tag: "a".repeat(25) }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ q: "a".repeat(101) }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ bookId: "a".repeat(129) }).success).toBe(false);
+  });
+
+  it("accepts tag, q and bookId at their exact limits", () => {
+    expect(studentNotesQuerySchema.safeParse({ tag: "a".repeat(24) }).success).toBe(true);
+    expect(studentNotesQuerySchema.safeParse({ q: "a".repeat(100) }).success).toBe(true);
+    expect(studentNotesQuerySchema.safeParse({ bookId: "a".repeat(128) }).success).toBe(true);
+  });
+
+  it("rejects unknown query parameters instead of ignoring them", () => {
+    expect(studentNotesQuerySchema.safeParse({ studentId: "other" }).success).toBe(false);
+    expect(studentNotesQuerySchema.safeParse({ tag: "x", chapterTitle: "第一章" }).success).toBe(false);
+  });
+});
+
+describe("studentAiAskInputSchema", () => {
+  it("accepts a minimal question and defaults the category to auto", () => {
+    const result = studentAiAskInputSchema.safeParse({ question: "什麼是梯度下降？" });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.question).toBe("什麼是梯度下降？");
+      expect(result.data.category).toBe("auto");
+    }
+  });
+
+  it("trims the question before validating", () => {
+    const result = studentAiAskInputSchema.safeParse({ question: "  什麼是梯度下降？  " });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.question).toBe("什麼是梯度下降？");
+  });
+
+  it("accepts every supported category plus optional context fields", () => {
+    for (const category of [
+      "auto",
+      "programming",
+      "math",
+      "humanities",
+      "cybersecurity",
+      "教材問答"
+    ] as const) {
+      expect(studentAiAskInputSchema.safeParse({ question: "Q", category }).success).toBe(true);
+    }
+
+    const result = studentAiAskInputSchema.safeParse({
+      question: "Q",
+      category: "教材問答",
+      bookId: "book-1",
+      chapterId: "chapter-2",
+      pageNumber: 42,
+      followUpNoteId: "note-1"
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts null for the nullable context fields", () => {
+    const result = studentAiAskInputSchema.safeParse({
+      question: "Q",
+      bookId: null,
+      chapterId: null,
+      pageNumber: null,
+      followUpNoteId: null
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty or whitespace-only question", () => {
+    expect(studentAiAskInputSchema.safeParse({}).success).toBe(false);
+    expect(studentAiAskInputSchema.safeParse({ question: "" }).success).toBe(false);
+    expect(studentAiAskInputSchema.safeParse({ question: "   " }).success).toBe(false);
+  });
+
+  it("rejects a question longer than 2,000 characters", () => {
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "a".repeat(2_001) }).success
+    ).toBe(false);
+  });
+
+  it("accepts a question of exactly 2,000 characters", () => {
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "a".repeat(2_000) }).success
+    ).toBe(true);
+  });
+
+  it("rejects a payload that smuggles studentId in", () => {
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", studentId: "other" }).success
+    ).toBe(false);
+  });
+
+  it("rejects unknown fields", () => {
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", strategy: "google-ai" }).success
+    ).toBe(false);
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", providerMode: "gemini" }).success
+    ).toBe(false);
+  });
+
+  it("rejects an unsupported category", () => {
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", category: "physics" }).success
+    ).toBe(false);
+  });
+
+  it("rejects an out-of-range page number", () => {
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", pageNumber: 0 }).success
+    ).toBe(false);
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", pageNumber: 100_001 }).success
+    ).toBe(false);
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", pageNumber: 1.5 }).success
+    ).toBe(false);
+  });
+
+  it("rejects an over-long bookId, chapterId or followUpNoteId", () => {
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", bookId: "a".repeat(129) }).success
+    ).toBe(false);
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", chapterId: "a".repeat(129) }).success
+    ).toBe(false);
+    expect(
+      studentAiAskInputSchema.safeParse({ question: "Q", followUpNoteId: "a".repeat(129) }).success
+    ).toBe(false);
+  });
+});
+
+describe("studentAiAskResponseSchema", () => {
+  const response = {
+    entryId: "entry-1",
+    question: "什麼是梯度下降？",
+    answer: "梯度下降是一種最佳化演算法。",
+    strategy: "api" as const,
+    providerMode: "gemini" as const,
+    askedAt: "2026-11-26T10:00:00.000Z"
+  };
+
+  it("accepts a gemini-mode response", () => {
+    const result = studentAiAskResponseSchema.safeParse(response);
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.providerMode).toBe("gemini");
+  });
+
+  it("accepts a mock-mode response", () => {
+    expect(
+      studentAiAskResponseSchema.safeParse({ ...response, providerMode: "mock" }).success
+    ).toBe(true);
+  });
+
+  it("rejects a strategy other than api", () => {
+    expect(
+      studentAiAskResponseSchema.safeParse({ ...response, strategy: "google-ai" }).success
+    ).toBe(false);
+  });
+
+  it("rejects an unknown providerMode", () => {
+    expect(
+      studentAiAskResponseSchema.safeParse({ ...response, providerMode: "openai" }).success
+    ).toBe(false);
+  });
+
+  it("rejects a missing or empty entryId", () => {
+    const { entryId: _entryId, ...withoutEntryId } = response;
+    expect(studentAiAskResponseSchema.safeParse(withoutEntryId).success).toBe(false);
+    expect(
+      studentAiAskResponseSchema.safeParse({ ...response, entryId: "" }).success
+    ).toBe(false);
+  });
+
+  it("rejects a missing answer or askedAt", () => {
+    const { answer: _answer, ...withoutAnswer } = response;
+    const { askedAt: _askedAt, ...withoutAskedAt } = response;
+    expect(studentAiAskResponseSchema.safeParse(withoutAnswer).success).toBe(false);
+    expect(studentAiAskResponseSchema.safeParse(withoutAskedAt).success).toBe(false);
   });
 });

@@ -14,6 +14,9 @@ import type { AnswerIntakeOptions } from "../../pages/public-home/useShareIntake
 
 type ShareIntakeResult = { saved: boolean } | null;
 
+/** R24 Phase 2: two answer channels with the same note-conversion sink. */
+export type StudentAiMode = "google-relay" | "platform";
+
 export interface StudentAiAssistantProps {
   /** Optional question text injected by the reader's selection bar. */
   prefill?: { text: string; nonce: number } | null;
@@ -86,12 +89,16 @@ function newEntryId(): string {
 }
 
 /**
- * Logged-in student's course Q&A assistant (Phase 1, F9/F10): Google AI relay
- * only — no "平台 AI（API）" option because the platform API path is not
- * implemented for students yet. Flow (R22 §4 F10): question -> learning
- * history upsert (syncVersion >= 1, incremented per revision) -> answer intake
- * increments the version and re-upserts -> only after the upsert succeeds is
- * the note converted via /notes/from-history (source stays google-ai-relay).
+ * Logged-in student's course Q&A assistant (R24 Phase 2, dual mode):
+ * - 「Google AI 中繼（免金鑰）」（default）: question -> learning history upsert
+ *   (syncVersion >= 1, incremented per revision) -> relay answer intake
+ *   increments the version and re-upserts -> /notes/from-history (source stays
+ *   google-ai-relay).
+ * - 「平台 AI（伺服器代理）」: the browser only sends the question to
+ *   /api/student/ai-ask; the server picks the model (never a client key),
+ *   writes the answer into learning history and returns { entryId, answer }.
+ *   The same「存為課業筆記」button then converts that entry; 429 surfaces a
+ *   friendly cooldown notice.
  */
 export function StudentAiAssistant({
   prefill,
@@ -103,11 +110,14 @@ export function StudentAiAssistant({
   initialAnswer = null,
   initialEntry = null
 }: StudentAiAssistantProps) {
+  const [mode, setMode] = useState<StudentAiMode>("google-relay");
   const [question, setQuestion] = useState("");
   const [entry, setEntry] = useState<LearningHistoryEntry | null>(initialEntry);
   const [answer, setAnswer] = useState<string | null>(initialAnswer);
   const [relayUrl, setRelayUrl] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<HistorySyncState>(initialEntry?.syncVersion ? "synced" : "idle");
+  const [platformEntryId, setPlatformEntryId] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
   const [noteStatus, setNoteStatus] = useState("");
   const [noteError, setNoteError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -122,6 +132,18 @@ export function StudentAiAssistant({
   useEffect(() => {
     if (initialAnswer && !answer) setAnswer(initialAnswer);
   }, [initialAnswer, answer]);
+
+  function switchMode(next: StudentAiMode) {
+    if (next === mode) return;
+    // Mode switch resets the answer text so relay and platform answers never
+    // mix; each mode keeps its own entry bookkeeping.
+    setMode(next);
+    setAnswer(null);
+    setNoteStatus("");
+    setNoteError("");
+    setRelayUrl(null);
+    setPlatformEntryId(null);
+  }
 
   /**
    * Upsert one revision of `record` into the server learning history.
@@ -175,6 +197,43 @@ export function StudentAiAssistant({
     setRelayUrl(googleAiSearchUrl(trimmed));
   }
 
+  /** Platform-AI (server proxy) submit; the server syncs history for us. */
+  async function askPlatform() {
+    const trimmed = question.trim();
+    if (!trimmed || asking) return;
+    setAsking(true);
+    setAnswer(null);
+    setPlatformEntryId(null);
+    setNoteStatus("");
+    setNoteError("");
+    try {
+      const response = await studentClient.askStudentAi({
+        question: trimmed,
+        category: "auto",
+        bookId: bookId ?? null,
+        chapterId: chapterId ?? null,
+        pageNumber: pageNumber ?? null
+      });
+      setPlatformEntryId(response.entryId);
+      setAnswer(response.answer);
+      setSyncState("synced");
+      setNoteStatus("已收到平台 AI 解答；學習紀錄已由伺服器同步。");
+    } catch (e) {
+      if (e instanceof StudentApiError && e.status === 429) {
+        setNoteError("提問太頻繁，平台 AI 冷卻中；請稍候片刻再試。");
+      } else {
+        setNoteError("平台 AI 提問失敗，請稍後再試。");
+      }
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  function submitQuestion() {
+    if (mode === "platform") void askPlatform();
+    else askGoogleAi();
+  }
+
   function retrySync() {
     if (entry) void syncHistory(entry);
   }
@@ -208,56 +267,77 @@ export function StudentAiAssistant({
     setSaving(true);
     setNoteError("");
     try {
-      // R22 §4 F10: wait for (or retry) the history upsert BEFORE from-history.
-      if (syncState !== "synced") {
-        const syncedNow = pendingSyncRef.current ?? (entry ? syncHistory(entry) : Promise.resolve(false));
-        const ok = await syncedNow;
-        if (!ok) {
-          setNoteError("學習紀錄尚未同步成功，無法轉存為課業筆記；請重試同步。");
-          return;
-        }
-      }
       let note: StudentNote | null = null;
-      const entryId = entry?.id ?? null;
-      try {
-        note = (await studentClient.createNoteFromHistory({
-          entryId: entryId ?? "",
-          bookId: bookId ?? null,
-          chapterId: chapterId ?? null,
-          pageNumber: pageNumber ?? null
-        })).note;
-      } catch (fromHistoryError) {
-        const errorShape = fromHistoryError as { status?: unknown; code?: unknown };
-        const status = fromHistoryError instanceof StudentApiError
-          ? fromHistoryError.status
-          : errorShape.status;
-        const code = fromHistoryError instanceof StudentApiError
-          ? fromHistoryError.code
-          : errorShape.code;
-        const notFound = status === 404 || code === "ENTRY_NOT_FOUND";
-        if (!notFound || !entryId) {
-          // Network/server errors stay explicit and retryable — never silently
-          // rebuilt as a manual note (which would lose google-ai-relay source).
-          setNoteError("存為筆記失敗，請稍後再試。");
+      if (mode === "platform") {
+        const entryId = platformEntryId;
+        if (!entryId) {
+          setNoteError("尚無可轉存的平台 AI 解答；請先提問。");
           return;
         }
-        // Narrow fallback: the history entry genuinely does not exist
-        // server-side. Reported in the status, never silent; the server still
-        // derives `source` (google-ai-relay) from the linked entry metadata.
+        // The server already synced history for this entry in ai-ask, so the
+        // shared button converts it directly.
         try {
-          note = (await studentClient.createStudentNote({
-            type: "ai_answer",
-            title: (entry?.question ?? content).slice(0, 80),
-            content,
+          note = (await studentClient.createNoteFromHistory({
+            entryId,
             bookId: bookId ?? null,
             chapterId: chapterId ?? null,
-            pageNumber: pageNumber ?? null,
-            entryId
+            pageNumber: pageNumber ?? null
           })).note;
-          setNoteStatus("（歷史紀錄未同步到後台，已改以筆記形式保存）");
         } catch {
           setNoteError("存為筆記失敗，請稍後再試。");
           return;
+        }
+      } else {
+        // R22 §4 F10: wait for (or retry) the history upsert BEFORE from-history.
+        if (syncState !== "synced") {
+          const syncedNow = pendingSyncRef.current ?? (entry ? syncHistory(entry) : Promise.resolve(false));
+          const ok = await syncedNow;
+          if (!ok) {
+            setNoteError("學習紀錄尚未同步成功，無法轉存為課業筆記；請重試同步。");
+            return;
+          }
+        }
+        const entryId = entry?.id ?? null;
+        try {
+          note = (await studentClient.createNoteFromHistory({
+            entryId: entryId ?? "",
+            bookId: bookId ?? null,
+            chapterId: chapterId ?? null,
+            pageNumber: pageNumber ?? null
+          })).note;
+        } catch (fromHistoryError) {
+          const errorShape = fromHistoryError as { status?: unknown; code?: unknown };
+          const status = fromHistoryError instanceof StudentApiError
+            ? fromHistoryError.status
+            : errorShape.status;
+          const code = fromHistoryError instanceof StudentApiError
+            ? fromHistoryError.code
+            : errorShape.code;
+          const notFound = status === 404 || code === "ENTRY_NOT_FOUND";
+          if (!notFound || !entryId) {
+            // Network/server errors stay explicit and retryable — never silently
+            // rebuilt as a manual note (which would lose google-ai-relay source).
+            setNoteError("存為筆記失敗，請稍後再試。");
+            return;
+          }
+          // Narrow fallback: the history entry genuinely does not exist
+          // server-side. Reported in the status, never silent; the server still
+          // derives `source` (google-ai-relay) from the linked entry metadata.
+          try {
+            note = (await studentClient.createStudentNote({
+              type: "ai_answer",
+              title: (entry?.question ?? content).slice(0, 80),
+              content,
+              bookId: bookId ?? null,
+              chapterId: chapterId ?? null,
+              pageNumber: pageNumber ?? null,
+              entryId
+            })).note;
+            setNoteStatus("（歷史紀錄未同步到後台，已改以筆記形式保存）");
+          } catch {
+            setNoteError("存為筆記失敗，請稍後再試。");
+            return;
+          }
         }
       }
       setNoteStatus("✅ 已存為課業筆記");
@@ -271,9 +351,31 @@ export function StudentAiAssistant({
     <section className="student-ai-assistant" aria-labelledby="student-ai-heading" data-testid="student-ai-assistant">
       <div className="student-ai-head">
         <span className="public-eyebrow">登入學員專屬</span>
-        <h3 id="student-ai-heading" className="student-ai-title">🚀 Google AI 課業助教</h3>
-        <p className="muted">免 API 金鑰中繼：輸入課業問題後，到開啟的 Google 視窗詢問，再把回答貼回來即可存成課業筆記。</p>
-        <span className="visually-hidden">目前僅提供 Google AI 課業助教模式</span>
+        <h3 id="student-ai-heading" className="student-ai-title">🚀 課業助教</h3>
+        <p className="muted">
+          「Google AI 中繼」免 API 金鑰：提問後到開啟的 Google 視窗詢問，再把回答貼回來即可存成課業筆記；「平台 AI」由伺服器代理提問，無需金鑰。
+        </p>
+      </div>
+
+      <div className="student-ai-modes" role="group" aria-label="解答模式" data-testid="student-ai-modes">
+        <button
+          type="button"
+          className={`student-ai-mode-button${mode === "google-relay" ? " active" : ""}`}
+          data-testid="student-ai-mode-google"
+          aria-pressed={mode === "google-relay"}
+          onClick={() => switchMode("google-relay")}
+        >
+          Google AI 中繼（免金鑰）
+        </button>
+        <button
+          type="button"
+          className={`student-ai-mode-button${mode === "platform" ? " active" : ""}`}
+          data-testid="student-ai-mode-platform"
+          aria-pressed={mode === "platform"}
+          onClick={() => switchMode("platform")}
+        >
+          平台 AI（伺服器代理）
+        </button>
       </div>
 
       <label className="student-ai-label" htmlFor="student-ai-question">課業問題</label>
@@ -286,19 +388,31 @@ export function StudentAiAssistant({
         rows={3}
         onChange={(event) => setQuestion(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) askGoogleAi();
+          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submitQuestion();
         }}
       />
       <div className="student-ai-actions">
-        <button
-          type="button"
-          className="google-ai-ask"
-          data-testid="student-ai-submit"
-          onClick={() => askGoogleAi()}
-          disabled={!question.trim()}
-        >
-          提問並開啟 Google 視窗
-        </button>
+        {mode === "google-relay" ? (
+          <button
+            type="button"
+            className="google-ai-ask"
+            data-testid="student-ai-submit"
+            onClick={() => askGoogleAi()}
+            disabled={!question.trim()}
+          >
+            提問並開啟 Google 視窗
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="platform-ai-ask"
+            data-testid="student-ai-platform-submit"
+            onClick={() => void askPlatform()}
+            disabled={!question.trim() || asking}
+          >
+            {asking ? "平台 AI 回答中…" : "提問（平台 AI）"}
+          </button>
+        )}
         <br />
         {syncState === "failed" ? (
           <button type="button" className="student-ai-retry-sync" data-testid="student-ai-retry-sync" onClick={retrySync}>
@@ -310,8 +424,12 @@ export function StudentAiAssistant({
         ) : null}
       </div>
 
+      {asking ? <p className="student-ai-status" role="status" aria-live="polite">平台 AI 回答中…</p> : null}
       {syncState === "syncing" ? <p className="student-ai-status" role="status" aria-live="polite">正在同步學習紀錄…</p> : null}
       {syncState === "synced" && !noteStatus ? <p className="student-ai-status" role="status" aria-live="polite">已同步學習紀錄</p> : null}
+      {noteError ? (
+        <p className="student-ai-error" role="alert" data-testid="student-ai-note-error">{noteError}</p>
+      ) : null}
 
       {answer ? (
         <div className="student-ai-answer" data-testid="student-ai-answer">
@@ -328,12 +446,15 @@ export function StudentAiAssistant({
             存為課業筆記
           </button>
           {saving ? <p className="student-ai-status" role="status">正在儲存筆記…</p> : null}
-          {noteStatus ? <p className="student-ai-saved" role="status" data-testid="student-ai-note-status">{noteStatus}</p> : null}
-          {noteError ? <p className="student-ai-error" role="alert" data-testid="student-ai-note-error">{noteError}</p> : null}
         </div>
       ) : (
-        <p className="muted" data-testid="student-ai-no-answer">尚未收到解答。貼回 Google AI 的回答後，就能一鍵存為課業筆記。</p>
+        <p className="muted" data-testid="student-ai-no-answer">
+          {mode === "platform"
+            ? "尚未收到解答。送出問題後，平台 AI 會直接回覆，並可一鍵存為課業筆記。"
+            : "尚未收到解答。貼回 Google AI 的回答後，就能一鍵存為課業筆記。"}
+        </p>
       )}
+      {noteStatus ? <p className="student-ai-saved" role="status" data-testid="student-ai-note-status">{noteStatus}</p> : null}
 
       {relayUrl && entry ? (
         <GoogleAiRelaySimulatorModal

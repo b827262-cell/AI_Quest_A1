@@ -13,6 +13,7 @@ import { PublicHomePage } from "./pages/PublicHomePage";
 const KnowledgeAiPage = lazy(async () => ({ default: (await import("./pages/KnowledgeAiPage")).KnowledgeAiPage }));
 const ProfileCompletionPage = lazy(async () => ({ default: (await import("./pages/ProfileCompletionPage")).ProfileCompletionPage }));
 const StudentDashboardPage = lazy(async () => ({ default: (await import("./pages/StudentDashboardPage")).StudentDashboardPage }));
+const StudentNotesPage = lazy(async () => ({ default: (await import("./pages/StudentNotesPage")).StudentNotesPage }));
 import { RequireStudent, StudentAuthProvider } from "./student-auth";
 
 function StudentChrome() {
@@ -48,6 +49,7 @@ export function StudentAppRoutes() {
               <Route path="/knowledge-ai" element={<KnowledgeAiPage />} />
               <Route path="/profile-completion" element={<ProfileCompletionPage />} />
               <Route path="/dashboard" element={<RequireStudent><StudentDashboardPage /></RequireStudent>} />
+              <Route path="/notes" element={<RequireStudent><StudentNotesPage /></RequireStudent>} />
               <Route path="/books" element={<RequireStudent><BooksPage /></RequireStudent>} />
               <Route path="/books/:bookId" element={<RequireStudent><BookReaderPage /></RequireStudent>} />
               <Route path="/books/:bookId/read" element={<RequireStudent><RedirectToReader /></RequireStudent>} />

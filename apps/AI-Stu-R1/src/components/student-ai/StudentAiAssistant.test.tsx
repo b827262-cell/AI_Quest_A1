@@ -11,7 +11,8 @@ const client = vi.hoisted(() => ({
   createStudentNote: vi.fn(),
   createNoteFromHistory: vi.fn(),
   updateStudentNote: vi.fn(),
-  deleteStudentNote: vi.fn()
+  deleteStudentNote: vi.fn(),
+  askStudentAi: vi.fn()
 }));
 
 const authState = vi.hoisted(() => ({
@@ -38,6 +39,7 @@ vi.mock("../../student-auth", () => ({
 
 import { DashboardShell } from "../dashboard/DashboardShell";
 import { applyRelayIntake, StudentAiAssistant } from "./StudentAiAssistant";
+import { StudentApiError } from "../../studentClient";
 import type { LearningHistoryEntry } from "../../learningHistory";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -136,11 +138,12 @@ describe("authenticated dashboard (R23 F9/F10)", () => {
       <DashboardShell profile={{ name: "小明", points: null, authenticated: true }} />
     );
     expect(markup).toContain("已登入學員");
-    expect(markup).toContain("Google AI 課業助教");
+    expect(markup).toContain("課業助教");
     expect(markup).toContain("我的課業筆記");
     expect(markup).not.toContain("訪客剩餘提問");
-    // Phase 1: the unimplemented platform-API option must not be offered.
-    expect(markup).not.toContain("平台 AI");
+    // Phase 2: the platform-AI (server proxy) option is now offered alongside
+    // the default Google AI relay.
+    expect(markup).toContain("平台 AI");
   });
 
   it("keeps the guest metric for unauthenticated profiles", () => {
@@ -189,11 +192,17 @@ describe("authenticated dashboard (R23 F9/F10)", () => {
 });
 
 describe("StudentAiAssistant intake (relay channels, R23 CR fix 1)", () => {
-  it("offers only the Google AI relay mode; no platform-API option anywhere", () => {
+  it("offers both modes by default (Google AI relay active, platform AI available)", () => {
     mount(<StudentAiAssistant />);
     const html = document.body.innerHTML;
-    expect(html).toContain("Google AI 課業助教");
-    expect(html).not.toContain("平台 AI");
+    expect(html).toContain("課業助教");
+    // Both toggles render; the relay is the default (aria-pressed).
+    const googleButton = document.querySelector<HTMLButtonElement>('[data-testid="student-ai-mode-google"]');
+    const platformButton = document.querySelector<HTMLButtonElement>('[data-testid="student-ai-mode-platform"]');
+    expect(googleButton?.getAttribute("aria-pressed")).toBe("true");
+    expect(platformButton?.getAttribute("aria-pressed")).toBe("false");
+    expect(html).toContain("Google AI 中繼（免金鑰）");
+    expect(html).toContain("平台 AI（伺服器代理）");
   });
 
   it("syncs the question with a positive-integer syncVersion and opens the relay modal", async () => {
@@ -340,6 +349,91 @@ describe("StudentAiAssistant note conversion (R23 CR fix 2)", () => {
       content: ANSWER_TEXT
     });
     expect(document.body.innerHTML).toContain("已存為課業筆記");
+  });
+});
+
+describe("StudentAiAssistant platform mode (R24 Phase 2)", () => {
+  const PLATFORM_ANSWER = "畢氏定理：直角三角形兩股平方和等於斜邊平方。";
+  const platformAnswerPayload = {
+    entryId: "entry-plat-1",
+    question: "什麼是畢氏定理？",
+    answer: PLATFORM_ANSWER,
+    strategy: "api" as const,
+    providerMode: "mock" as const,
+    askedAt: "2026-11-10T10:00:00.000Z"
+  };
+
+  function platformNote() {
+    return { ...savedNote, id: "note-plat-1", entryId: "entry-plat-1", content: PLATFORM_ANSWER };
+  }
+
+  async function switchToPlatformAndAsk(): Promise<void> {
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="student-ai-mode-platform"]')?.click();
+    });
+    const textarea = document.querySelector<HTMLTextAreaElement>('[data-testid="student-ai-question"]');
+    expect(textarea).not.toBeNull();
+    act(() => setReactTextareaValue(textarea as HTMLTextAreaElement, "什麼是畢氏定理？"));
+    await act(async () => {
+      findButton("提問（平台 AI）").click();
+    });
+  }
+
+  it("sends the question to the server proxy and renders the plain-text answer", async () => {
+    client.askStudentAi.mockResolvedValue(platformAnswerPayload);
+    mount(<StudentAiAssistant bookId="book-7" chapterId="ch-2" pageNumber={5} />);
+    await switchToPlatformAndAsk();
+    expect(client.askStudentAi).toHaveBeenCalledWith({
+      question: "什麼是畢氏定理？",
+      category: "auto",
+      bookId: "book-7",
+      chapterId: "ch-2",
+      pageNumber: 5
+    });
+    expect(document.querySelector('[data-testid="student-ai-answer"]')?.textContent).toContain(PLATFORM_ANSWER);
+    expect(document.body.innerHTML).toContain("已收到平台 AI 解答");
+    // The relay channel was never engaged in platform mode.
+    expect(client.upsertLearningHistory).not.toHaveBeenCalled();
+  });
+
+  it("saves a platform answer through the shared button via createNoteFromHistory", async () => {
+    client.askStudentAi.mockResolvedValue(platformAnswerPayload);
+    client.createNoteFromHistory.mockResolvedValue({ note: platformNote() });
+    const onNoteSaved = vi.fn();
+    mount(<StudentAiAssistant bookId="book-7" chapterId="ch-2" pageNumber={5} onNoteSaved={onNoteSaved} />);
+    await switchToPlatformAndAsk();
+    await act(async () => {
+      findButton("存為課業筆記").click();
+    });
+    expect(client.createNoteFromHistory).toHaveBeenCalledWith({
+      entryId: "entry-plat-1",
+      bookId: "book-7",
+      chapterId: "ch-2",
+      pageNumber: 5
+    });
+    expect(client.createStudentNote).not.toHaveBeenCalled();
+    expect(onNoteSaved).toHaveBeenCalledTimes(1);
+    expect(document.body.innerHTML).toContain("已存為課業筆記");
+  });
+
+  it("shows a friendly cooldown notice when the platform throttles with 429", async () => {
+    client.askStudentAi.mockRejectedValue(new StudentApiError(429, "RATE_LIMITED", "rate limited"));
+    mount(<StudentAiAssistant />);
+    await switchToPlatformAndAsk();
+    expect(document.querySelector('[data-testid="student-ai-note-error"]')?.textContent).toContain("冷卻");
+    expect(document.querySelector('[data-testid="student-ai-answer"]')).toBeNull();
+  });
+
+  it("switching modes does not mix relay and platform answers", async () => {
+    client.askStudentAi.mockResolvedValue(platformAnswerPayload);
+    mount(<StudentAiAssistant />);
+    await switchToPlatformAndAsk();
+    expect(document.querySelector('[data-testid="student-ai-answer"]')?.textContent).toContain(PLATFORM_ANSWER);
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="student-ai-mode-google"]')?.click();
+    });
+    // Back on the relay channel the platform answer is cleared.
+    expect(document.querySelector('[data-testid="student-ai-answer"]')).toBeNull();
   });
 });
 

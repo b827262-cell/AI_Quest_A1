@@ -86,3 +86,51 @@ export const createStudentNoteFromHistoryInputSchema = z
 export type CreateStudentNoteFromHistoryInput = z.infer<
   typeof createStudentNoteFromHistoryInputSchema
 >;
+
+/**
+ * `GET /api/student/notes` query string. `offset`/`limit` arrive as strings,
+ * so they are coerced; `.strict()` rejects unknown parameters instead of
+ * silently ignoring a typo that would otherwise widen the result set.
+ */
+export const studentNotesQuerySchema = z
+  .object({
+    offset: z.coerce.number().int().min(0).max(100_000).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    includeDeleted: z.boolean().optional(),
+    bookId: z.string().max(128).optional(),
+    tag: z.string().trim().min(1).max(24).optional(),
+    q: z.string().trim().min(1).max(100).optional()
+  })
+  .strict();
+export type StudentNotesQuery = z.infer<typeof studentNotesQuerySchema>;
+
+/** Phase 2 server-side AI proxy body (`POST /api/student/ai-ask`). */
+export const studentAiAskInputSchema = z
+  .object({
+    question: z.string().trim().min(1).max(2_000),
+    category: z
+      .enum(["auto", "programming", "math", "humanities", "cybersecurity", "教材問答"])
+      .optional()
+      .default("auto"),
+    bookId: z.string().max(128).nullable().optional(),
+    chapterId: z.string().max(128).nullable().optional(),
+    pageNumber: z.number().int().min(1).max(100_000).nullable().optional(),
+    followUpNoteId: z.string().max(128).nullable().optional()
+  })
+  .strict();
+export type StudentAiAskInput = z.infer<typeof studentAiAskInputSchema>;
+
+/**
+ * `ai-ask` answer envelope. `strategy` is pinned to `"api"` because the answer
+ * is always written to learning history with that strategy; `providerMode`
+ * tells the client whether the reply came from the mock or Gemini.
+ */
+export const studentAiAskResponseSchema = z.object({
+  entryId: z.string().min(1).max(128),
+  question: z.string(),
+  answer: z.string(),
+  strategy: z.literal("api"),
+  providerMode: z.enum(["mock", "gemini"]),
+  askedAt: z.string()
+});
+export type StudentAiAskResponse = z.infer<typeof studentAiAskResponseSchema>;

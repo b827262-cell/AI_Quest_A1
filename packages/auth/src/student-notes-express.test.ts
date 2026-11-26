@@ -92,6 +92,19 @@ describe("student notes HTTP integration", () => {
     expect(result.body.notes[0].content).toBe("book one");
     expect((await request("/notes?offset=-1", "GET", "alice")).body).toEqual({ error: "INVALID_OFFSET" });
   });
+  it("filters tag and text before pagination and rejects invalid queries", async () => {
+    await request("/notes", "POST", "filter-user", { title: "Gravity", content: "Physics", tags: ["science"], bookId: "one" });
+    await request("/notes", "POST", "filter-user", { title: "Algebra", content: "Math", tags: ["math"], bookId: "one" });
+    const result = await request("/notes?tag=%20science%20&q=GRAV&limit=1", "GET", "filter-user");
+    expect(result.body.notes).toHaveLength(1);
+    expect(result.body.notes[0].title).toBe("Gravity");
+    expect((await request("/notes?tag=math&q=gravity", "GET", "filter-user")).body.notes).toHaveLength(0);
+    for (const query of [`tag=${"x".repeat(25)}`, `q=${"x".repeat(101)}`, "tag=%20", "q=%20"]) {
+      const invalid = await request(`/notes?${query}`, "GET", "filter-user");
+      expect(invalid.status).toBe(400);
+      expect(invalid.body).toEqual({ error: "INVALID_QUERY" });
+    }
+  });
   it("rejects oversized bodies and cross-site writes", async () => {
     const oversized = await request("/NOTES/from-history", "POST", "alice", { entryId: "x".repeat(MAX_STUDENT_NOTE_BODY_BYTES) });
     expect(oversized.status).toBe(413);

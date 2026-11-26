@@ -134,6 +134,69 @@ describe("student note repository", () => {
     });
   });
 
+  it("filters by exact tags and case-insensitive keywords before pagination", () => {
+    withRepos((repos) => {
+      const repo = repos.studentNotes;
+      repo.create("student-a", {
+        title: "ALGEBRA Keyword",
+        tags: ["數學"],
+        bookId: "book-1"
+      });
+      repo.create("student-a", {
+        title: "閱讀筆記",
+        content: "kEyWoRd 在內文",
+        tags: ["數學"],
+        bookId: "book-1"
+      });
+      repo.create("student-a", {
+        title: "Keyword 練習",
+        tags: ["數學", "理科"],
+        bookId: "book-1"
+      });
+      repo.create("student-a", {
+        title: "Keyword 單字",
+        tags: ["數"],
+        bookId: "book-1"
+      });
+      repo.create("student-a", {
+        title: "Keyword 其他書籍",
+        tags: ["數學"],
+        bookId: "book-2"
+      });
+
+      expect(repo.list("student-a", { tag: "數" }).map((note) => note.tags)).toEqual([["數"]]);
+      expect(repo.list("student-a", { tag: " 數學 " })).toHaveLength(4);
+      expect(repo.list("student-a", { q: "keyword" })).toHaveLength(5);
+      expect(repo.list("student-a", { q: "KEYWORD" }).map((note) => note.title)).toContain("閱讀筆記");
+
+      const combined = repo.list("student-a", {
+        tag: "數學",
+        q: "keyword",
+        bookId: "book-1"
+      });
+      expect(combined).toHaveLength(3);
+      expect(repo.list("student-a", {
+        tag: "數學",
+        q: "keyword",
+        bookId: "book-1",
+        offset: 1,
+        limit: 1
+      }).map((note) => note.id)).toEqual(combined.slice(1, 2).map((note) => note.id));
+      expect(repo.list("student-a", {
+        tag: "數學",
+        q: "keyword",
+        bookId: "book-1",
+        offset: 2,
+        limit: 2
+      }).map((note) => note.id)).toEqual(combined.slice(2, 4).map((note) => note.id));
+      expect(repo.list("student-b", {
+        tag: "數學",
+        q: "keyword",
+        bookId: "book-1"
+      })).toHaveLength(0);
+    });
+  });
+
   it("isolates students: B cannot read, update or delete A's note", () => {
     withRepos((repos) => {
       const repo = repos.studentNotes;

@@ -16,6 +16,7 @@ import {
 import type { StudentAuthMeResponse } from "./index";
 import { AccessEmailConflictError, AccessInvalidTokenError, AccessUnavailableError } from "./access";
 export {
+  originGuard,
   createStudentLearningHistoryRouter,
   safeLearningSourceUrl,
   oversizeJsonBodyHandler,

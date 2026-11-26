@@ -126,6 +126,12 @@ export function StudentHeader() {
           <span>{a.studentHeaderHomeButtonLabel}</span>
         </Link>
 
+        {status === "authenticated" ? (
+          <Link className="home-pill notes-pill" to="/notes" data-testid="student-header-notes-link">
+            <span>我的筆記</span>
+          </Link>
+        ) : null}
+
         <div className="student-user-area" ref={menuRef}>
           <span className="student-name" title={studentName}>
             {studentName}

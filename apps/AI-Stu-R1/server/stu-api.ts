@@ -24,6 +24,7 @@ import {
   MAX_STUDENT_NOTE_BODY_BYTES,
   MAX_LEARNING_HISTORY_BODY_BYTES
 } from "@ai-smartbook/auth/express";
+import { createStudentAiAskRouter } from "./student-ai-ask";
 import { createStudentRagRouter, resolveStudentRagEnv } from "./student-rag";
 import { resolveStudentAuthDbPath } from "./student-auth-db-path";
 import { createReadyCheck, registerHealthRoutes } from "./health-routes";
@@ -98,7 +99,9 @@ app.get("/api/appearance-settings", (_req, res) => {
 // Google OAuth and session restore are public auth boundaries. All learning
 // endpoints below them require the same server-side Student session.
 app.use("/api/student/auth", createStudentAuthRouter(studentAuthRuntime.auth, studentAuthConfig));
+app.use("/api/student/ai-ask", (_req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); });
 app.use("/api/student", createStudentSessionMiddleware(studentAuthRuntime.auth, studentAuthConfig));
+app.use("/api/student", createStudentAiAskRouter({ learningHistory: studentAuthRuntime.learningHistory }, studentAuthConfig));
 app.use("/api/student", createStudentNotesRouter({ notes: studentAuthRuntime.notes, learningHistory: studentAuthRuntime.learningHistory }, studentAuthConfig));
 app.use("/api/student", createStudentLearningHistoryRouter(studentAuthRuntime.learningHistory, studentAuthConfig));
 

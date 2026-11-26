@@ -154,17 +154,37 @@ export function makeStudentNoteRepo(db: Db) {
   return {
     list(
       studentId: string,
-      options?: { offset?: number; limit?: number; includeDeleted?: boolean; bookId?: string }
+      options?: {
+        offset?: number;
+        limit?: number;
+        includeDeleted?: boolean;
+        bookId?: string;
+        tag?: string;
+        q?: string;
+      }
     ): StudentNoteRecord[] {
       const predicates: SQL[] = [byStudent(studentId)];
       if (options?.bookId !== undefined) predicates.push(eq(studentNotes.bookId, options.bookId));
       if (!options?.includeDeleted) predicates.push(sql`${studentNotes.deletedAt} IS NULL`);
       const where = and(...predicates);
-      return db.select().from(studentNotes).where(where)
-        .orderBy(desc(studentNotes.createdAt), desc(studentNotes.id))
-        .limit(options?.limit ?? 100)
-        .offset(options?.offset ?? 0)
-        .all().map(publicRecord);
+      const query = db.select().from(studentNotes).where(where)
+        .orderBy(desc(studentNotes.createdAt), desc(studentNotes.id));
+      const tag = options?.tag?.trim();
+      const q = options?.q?.trim().toLowerCase();
+      if (!tag && !q) {
+        return query.limit(options?.limit ?? 100)
+          .offset(options?.offset ?? 0)
+          .all().map(publicRecord);
+      }
+
+      const filtered = query.all().filter((row) => {
+        if (tag && !parseTags(row.tags).includes(tag)) return false;
+        if (q && !row.title.toLowerCase().includes(q) && !row.content.toLowerCase().includes(q)) return false;
+        return true;
+      });
+      const offset = options?.offset ?? 0;
+      const limit = options?.limit ?? 100;
+      return filtered.slice(offset, offset + limit).map(publicRecord);
     },
 
     findById(studentId: string, id: string, includeDeleted?: boolean): StudentNoteRecord | null {

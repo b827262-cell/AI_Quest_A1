@@ -12,6 +12,8 @@ import type {
   CreateStudentNoteInput,
   UpdateStudentNoteInput,
   CreateStudentNoteFromHistoryInput,
+  StudentAiAskInput,
+  StudentAiAskResponse,
   GuestAnswerContent
 } from "@ai-smartbook/schema";
 import type {
@@ -430,12 +432,16 @@ export const studentClient = {
     http<{ settings: AppearanceSettings }>("/api/appearance-settings"),
 
   // ---- Student notes (/api/student/notes, R23 contract) ------------------
-  listStudentNotes: (params?: { bookId?: string; offset?: number; limit?: number; includeDeleted?: boolean }) => {
+  // `tag` and `q` (R24) mirror the server's studentNotesQuerySchema: a tag chip
+  // filter and a keyword search across title/content/tags.
+  listStudentNotes: (params?: { bookId?: string; offset?: number; limit?: number; includeDeleted?: boolean; tag?: string; q?: string }) => {
     const search = new URLSearchParams();
     if (params?.bookId) search.set("bookId", params.bookId);
     if (params?.offset != null) search.set("offset", String(params.offset));
     if (params?.limit != null) search.set("limit", String(params.limit));
     if (params?.includeDeleted) search.set("includeDeleted", "1");
+    if (params?.tag) search.set("tag", params.tag);
+    if (params?.q) search.set("q", params.q);
     const suffix = search.toString() ? `?${search}` : "";
     return http<{ notes: StudentNote[]; nextOffset: number | null }>(`/api/student/notes${suffix}`);
   },
@@ -460,6 +466,18 @@ export const studentClient = {
 
   createNoteFromHistory: (input: CreateStudentNoteFromHistoryInput) =>
     http<{ note: StudentNote }>("/api/student/notes/from-history", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+
+  /**
+   * Phase 2 platform-AI proxy (R24): `POST /api/student/ai-ask`. The server
+   * picks the model, writes the answer to learning history and returns
+   * `{ entryId, answer }`; the browser never sees an API key. A 429 comes back
+   * as a StudentApiError the caller renders as a cooldown notice.
+   */
+  askStudentAi: (input: StudentAiAskInput) =>
+    http<StudentAiAskResponse>("/api/student/ai-ask", {
       method: "POST",
       body: JSON.stringify(input)
     }),
