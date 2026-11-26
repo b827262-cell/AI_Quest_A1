@@ -6,6 +6,7 @@ export * from "./pdfIndex.schema";
 export * from "./readerOutline.schema";
 export * from "./chat.schema";
 export * from "./smartBookNote.schema";
+export * from "./studentNote.schema";
 export * from "./aiJob.schema";
 export * from "./qaLog.schema";
 export * from "./sync.schema";

@@ -455,6 +455,36 @@ export const studentOAuthStates = sqliteTable("student_oauth_states", {
   consumedAt: text("consumed_at")
 });
 
+/**
+ * Student notes. `type` distinguishes manual text, AI-saved answers and canvas
+ * drawings; `source` records provenance. A tombstone preserves deletion across
+ * offline retries. `tags` is a JSON string array. `(student_id, entry_id)` is
+ * unique when entry_id is present, so importing the same learning-history
+ * entry twice never duplicates a note.
+ */
+export const studentNotes = sqliteTable("student_notes", {
+  id: text("id").primaryKey(),
+  studentId: text("student_id").notNull(),
+  entryId: text("entry_id"),
+  bookId: text("book_id"),
+  chapterId: text("chapter_id"),
+  pageNumber: integer("page_number"),
+  /** text | ai_answer | canvas */
+  type: text("type").notNull().default("text"),
+  title: text("title").notNull().default(""),
+  content: text("content").notNull().default(""),
+  canvasData: text("canvas_data"),
+  /** JSON string array */
+  tags: text("tags"),
+  /** manual | google-ai-relay | gemini-api */
+  source: text("source").notNull().default("manual"),
+  sourceDetail: text("source_detail"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  deletedAt: text("deleted_at"),
+  syncVersion: integer("sync_version").notNull().default(1)
+});
+
 /** Safe, offline evaluation run summaries. No question/answer/prompt payloads. */
 export const aiEvaluationRuns = sqliteTable("ai_evaluation_runs", {
   id: text("id").primaryKey(),
@@ -1040,6 +1070,7 @@ export type DbSchema = {
   studentSessions: typeof studentSessions;
   studentLearningHistory: typeof studentLearningHistory;
   studentOAuthStates: typeof studentOAuthStates;
+  studentNotes: typeof studentNotes;
 };
 
 export const schema = {
@@ -1091,5 +1122,6 @@ export const schema = {
   studentPasscodes,
   studentSessions,
   studentLearningHistory,
-  studentOAuthStates
+  studentOAuthStates,
+  studentNotes
 };

@@ -5,7 +5,7 @@ import {
   randomBytes,
   timingSafeEqual
 } from "node:crypto";
-import { createDbHandle, createRepositories, runMigrations, type DbHandle, type StudentLearningHistoryRepo } from "@ai-smartbook/db";
+import { createDbHandle, createRepositories, runMigrations, type DbHandle, type StudentLearningHistoryRepo, type StudentNoteRepo } from "@ai-smartbook/db";
 import { verifyStudentPasscode } from "./passcode";
 import type {
   StudentAuthMeResponse,
@@ -97,6 +97,7 @@ export interface StudentAuthRuntime {
   auth: StudentAuthService;
   dbHandle: DbHandle;
   learningHistory: StudentLearningHistoryRepo;
+  notes: StudentNoteRepo;
 }
 
 function base64Url(value: Buffer): string {
@@ -481,6 +482,7 @@ export function createStudentAuthRuntime(
   return {
     dbHandle,
     learningHistory: repositories.studentLearningHistory,
+    notes: repositories.studentNotes,
     auth: createStudentAuthService(config, {
       passcodes: repositories.studentPasscodes,
       users: repositories.studentUsers,

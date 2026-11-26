@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SmartBookNote, SmartBookNoteType } from "@ai-smartbook/schema";
-import { studentClient } from "../studentClient";
+import type { SmartBookNoteType } from "@ai-smartbook/schema";
+import { studentClient, type LegacySmartBookNote } from "../studentClient";
 import { useConfirm } from "./useConfirm";
 
 const CANVAS_W = 600;
@@ -124,14 +124,14 @@ export function SmartNotesPanel({
   compact?: boolean;
   onCollapse?: () => void;
 }) {
-  const [notes, setNotes] = useState<SmartBookNote[]>([]);
+  const [notes, setNotes] = useState<LegacySmartBookNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [textTitle, setTextTitle] = useState("");
   const [textBody, setTextBody] = useState("");
   const [canvasDirty, setCanvasDirty] = useState(false);
-  const [preview, setPreview] = useState<SmartBookNote | null>(null);
+  const [preview, setPreview] = useState<LegacySmartBookNote | null>(null);
   const confirmAction = useConfirm();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -256,7 +256,7 @@ export function SmartNotesPanel({
     });
   }
 
-  async function onDelete(noteId: string) {
+  async function onDelete(note: LegacySmartBookNote) {
     const confirmed = await confirmAction({
       title: "刪除筆記",
       message: "刪除這則筆記？",
@@ -264,13 +264,21 @@ export function SmartNotesPanel({
     });
     if (!confirmed) return;
     void run(async () => {
-      await studentClient.deleteNote(bookId, noteId);
-      if (preview?.id === noteId) setPreview(null);
+      // Delete must carry the version this panel last saw. `deleted: false`
+      // means a concurrent writer bumped the version (updated or revived row):
+      // the server keeps the note, so reload and tell the learner instead of
+      // pretending the note is gone.
+      const result = await studentClient.deleteNote(bookId, note.id, note.syncVersion);
+      if (!result.deleted) {
+        setError("這則筆記剛被其他裝置更新（版本衝突），已重新載入最新狀態；請再試一次。");
+      } else if (preview?.id === note.id) {
+        setPreview(null);
+      }
       load();
     });
   }
 
-  function contextLabel(note: SmartBookNote): string {
+  function contextLabel(note: LegacySmartBookNote): string {
     const parts: string[] = [];
     if (note.pageNumber != null) parts.push(`p.${note.pageNumber}`);
     if (note.title) parts.push(note.title);
@@ -364,7 +372,7 @@ export function SmartNotesPanel({
                   <button
                     type="button"
                     className="notes-btn small"
-                    onClick={() => void onDelete(note.id)}
+                    onClick={() => void onDelete(note)}
                     disabled={busy}
                   >
                     刪除

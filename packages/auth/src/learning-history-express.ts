@@ -37,7 +37,7 @@ export function oversizeJsonBodyHandler(): ErrorRequestHandler {
     // path classification must be too; otherwise `/API/student/learning-history`
     // reaches the batch parser but is labelled as a generic payload error.
     const isLearningHistory = LEARNING_HISTORY_BODY_PATHS.some((base) => path === base || path.startsWith(`${base}/`));
-    res.status(413).json({ error: isLearningHistory ? "BATCH_TOO_LARGE" : "PAYLOAD_TOO_LARGE" });
+    res.status(413).json({ error: isLearningHistory ? "BATCH_TOO_LARGE" : (path === "/api/student/notes" || path.startsWith("/api/student/notes/")) ? "NOTE_TOO_LARGE" : "PAYLOAD_TOO_LARGE" });
   };
 }
 
@@ -104,7 +104,7 @@ function validRecord(value: unknown): value is LearningHistoryRecord {
   return true;
 }
 
-function originGuard(config: StudentAuthConfig): RequestHandler {
+export function originGuard(config: StudentAuthConfig): RequestHandler {
   return (req, res, next) => {
     if (req.method === "GET" || req.method === "HEAD") return next();
     const origin = req.header("origin");

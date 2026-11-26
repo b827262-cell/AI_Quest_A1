@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useParams } from "react-router-dom";
 import type { BookChapter, ReaderOutlineNode, ReaderOutlineSource } from "@ai-smartbook/schema";
 import { studentClient, type BookDetail } from "../studentClient";
+import { useStudentAuth } from "../student-auth";
 import type { StudentBook } from "../bookDisplay";
+import { StudentAiAssistant } from "../components/student-ai/StudentAiAssistant";
 import { ReaderTopBar } from "../components/ReaderTopBar";
 import { ReaderTabs, READER_TABS, type ReaderTabKey } from "../components/ReaderTabs";
 import { ChapterSidebar } from "../components/ChapterSidebar";
@@ -34,6 +36,8 @@ import { useMobileTouchNavigation } from "./book-reader/useMobileTouchNavigation
 export function BookReaderPage() {
   const { bookId = "" } = useParams();
   const notice = useNotice();
+  const { status: authStatus } = useStudentAuth();
+  const isSignedInStudent = authStatus === "authenticated";
   // Effects 1-2: reader-resizing cleanup and viewport width tracking.
   const { isMobile, isTablet } = useReaderViewport();
   const [book, setBook] = useState<BookDetail | null>(null);
@@ -53,6 +57,9 @@ export function BookReaderPage() {
   const [pageHasText, setPageHasText] = useState(true);
   const [copyNotice, setCopyNotice] = useState("");
   const [aiPrefill, setAiPrefill] = useState<{ text: string; nonce: number } | null>(null);
+  // R23: logged-in students can open the Google AI course assistant (relay,
+  // no API key) directly in the reader and save the answer as a page note.
+  const [studentAssistantOpen, setStudentAssistantOpen] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const chatRef = useRef<HTMLDivElement>(null);
@@ -389,6 +396,22 @@ export function BookReaderPage() {
     });
   }
 
+  // R23: ask the Google AI course assistant about the selection. The assistant
+  // is rendered as an overlay; the saved note carries bookId/chapterId/page
+  // context and refreshes the Smart Notes panel.
+  function onAskGoogleAiAboutSelection() {
+    setStudentAssistantOpen(true);
+    if (selectedText.trim()) {
+      setAiPrefill({ text: selectedText.trim(), nonce: Date.now() });
+    }
+  }
+
+  function onAssistantNoteSaved() {
+    setNotesRefreshKey((key) => key + 1);
+    if (selectedText.trim()) setSelectedText("");
+    void notice({ title: "已存為本頁筆記", message: "已存為本頁筆記，可於「智能筆記」分頁查看。" });
+  }
+
   // Toolbar "加入筆記" button: saves selected text if present, otherwise opens notes panel.
   // TODO: When allowSaveSelectionToNote permission flag is added, gate this here.
   function onToolbarAddToNotes() {
@@ -532,6 +555,7 @@ export function BookReaderPage() {
               onCopySelection={onCopySelection}
               onSelectionToNote={onSelectionToNote}
               onAskAiAboutSelection={onAskAiAboutSelection}
+              onAskGoogleAi={isSignedInStudent ? onAskGoogleAiAboutSelection : undefined}
             />
 
             <div className="reader-main" ref={readerMainRef}>
@@ -658,6 +682,20 @@ export function BookReaderPage() {
         label="調整右側空白與閱讀器寬度"
       />
       <div className="reader-outer-gutter right" aria-hidden="true" />
+      {isSignedInStudent && studentAssistantOpen ? (
+        <div className="student-ai-reader-overlay" role="dialog" aria-modal="true" aria-label="Google AI 課業助教">
+          <div className="student-ai-reader-panel">
+            <StudentAiAssistant
+              bookId={bookId}
+              chapterId={safeActiveChapter}
+              pageNumber={hasPdf ? pdfPage : null}
+              prefill={aiPrefill}
+              onNoteSaved={onAssistantNoteSaved}
+              onClose={() => setStudentAssistantOpen(false)}
+            />
+          </div>
+        </div>
+      ) : null}
       <MobileActionBar
         isMobile={isMobile}
         showMobileControls={showMobileControls}

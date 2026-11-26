@@ -71,6 +71,15 @@ export function makeStudentLearningHistoryRepo(db: Db) {
         .orderBy(desc(studentLearningHistory.askedAt), desc(studentLearningHistory.entryId))
         .limit(limit).offset(offset).all().map(publicRecord);
     },
+    /** Read-only single-entry lookup for the owner (Wave 2 from-history import). */
+    findById(studentId: string, entryId: string) {
+      const row = db.select().from(studentLearningHistory)
+        .where(and(
+          eq(studentLearningHistory.studentId, studentId),
+          eq(studentLearningHistory.entryId, entryId)
+        )).get();
+      return row ? publicRecord(row) : undefined;
+    },
     upsertBatch(studentId: string, entries: LearningHistoryRecord[]) {
       const now = new Date().toISOString();
       return db.transaction((tx) => {

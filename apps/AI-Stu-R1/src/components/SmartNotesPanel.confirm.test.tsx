@@ -40,12 +40,13 @@ beforeEach(() => {
         canvasImageUrl: null,
         sourceMessageId: null,
         createdAt: "2026-10-31T00:00:00.000Z",
-        updatedAt: "2026-10-31T00:00:00.000Z"
+        updatedAt: "2026-10-31T00:00:00.000Z",
+        syncVersion: 3
       }
     ]
   });
-  client.deleteNote.mockResolvedValue(undefined);
-  client.createNote.mockResolvedValue(undefined);
+  client.deleteNote.mockResolvedValue({ deleted: true, note: { syncVersion: 4 } });
+  client.createNote.mockResolvedValue({ note: { syncVersion: 1 } });
 });
 
 afterEach(() => {
@@ -87,6 +88,33 @@ describe("SmartNotesPanel destructive confirmation", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(client.deleteNote).toHaveBeenCalledWith("book-1", "note-1");
+    expect(client.deleteNote).toHaveBeenCalledWith("book-1", "note-1", 3);
+  });
+
+  it("deletes with the note's stored syncVersion and surfaces a conflict when deleted=false", async () => {
+    client.deleteNote.mockResolvedValue({ deleted: false, note: { syncVersion: 4 } });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <SmartNotesPanel bookId="book-1" pageNumber={1} chapterId={null} chapterTitle={null} />
+      );
+    });
+
+    await act(async () => {
+      findButton("刪除", container!).click();
+    });
+    const confirmDialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    await act(async () => {
+      findButton("確定", confirmDialog!).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // The stale panel version (3) is sent — not a hardcoded 1.
+    expect(client.deleteNote).toHaveBeenCalledWith("book-1", "note-1", 3);
+    // A version conflict keeps the note server-side: message shown, list reloaded.
+    expect(container!.textContent).toContain("版本衝突");
+    expect(client.listNotes).toHaveBeenCalledTimes(2);
   });
 });

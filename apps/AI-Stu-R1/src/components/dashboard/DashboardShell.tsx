@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { Book } from "@ai-smartbook/schema";
+import type { Book, StudentNote } from "@ai-smartbook/schema";
 import { Card } from "@ai-smartbook/ui";
 import { GuestAnswerSection } from "./GuestAnswerSection";
 import { MetricCards, type MetricCardData } from "./MetricCards";
 import { SmartBookSection, type DashboardResourceStatus } from "./SmartBookSection";
+import { StudentAiAssistant } from "../student-ai/StudentAiAssistant";
+import { StudentNotesSection } from "../student-ai/StudentNotesSection";
 import {
   askDashboardGuestQuestion,
   dashboardProfileFromSession,
@@ -50,6 +52,10 @@ export function DashboardShell({
   const [guestStatus, setGuestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [guestResponse, setGuestResponse] = useState<GuestAskResponse | null>(null);
   const [guestError, setGuestError] = useState<string | null>(null);
+  // Authenticated learners: personal course notes (R23) instead of guest quota.
+  const [noteCount, setNoteCount] = useState<number | null>(null);
+  const [notesRefreshKey, setNotesRefreshKey] = useState(0);
+  const [notesSavedNotice, setNotesSavedNotice] = useState<string | null>(null);
 
   async function refreshBooks() {
     setBooks((current) => ({ ...current, status: "loading", error: null }));
@@ -94,6 +100,8 @@ export function DashboardShell({
   const profileName = profile.name || "訪客";
   const bookCount = books.status === "success" && books.data ? books.data.length : null;
   const guestRemaining = guestResponse?.remainingGuestQuestions ?? null;
+  // R22 §8 驗收項 14: authenticated learners never see guest-quota metrics —
+  // the「訪客剩餘提問」card is replaced with their own course-note count.
   const metrics = useMemo<MetricCardData[]>(() => [
     {
       id: "books",
@@ -109,13 +117,21 @@ export function DashboardShell({
       description: "來自目前的學員 profile",
       tone: "yellow"
     },
-    {
-      id: "guest-remaining",
-      label: "訪客剩餘提問",
-      value: guestRemaining,
-      description: "此為目前網路（IP）的訪客剩餘次數，不是個人帳號額度；完成公開問答後更新。",
-      tone: "purple"
-    },
+    profile.authenticated
+      ? {
+          id: "note-count",
+          label: "我的課業筆記",
+          value: noteCount,
+          description: "最近 10 筆課業筆記數量，可於下方區塊管理。",
+          tone: "purple"
+        }
+      : {
+          id: "guest-remaining",
+          label: "訪客剩餘提問",
+          value: guestRemaining,
+          description: "此為目前網路（IP）的訪客剩餘次數，不是個人帳號額度；完成公開問答後更新。",
+          tone: "purple"
+        },
     {
       id: "progress",
       label: "閱讀進度",
@@ -123,7 +139,12 @@ export function DashboardShell({
       description: "等待進度 session 契約",
       tone: "green"
     }
-  ], [bookCount, guestRemaining, profile.points]);
+  ], [bookCount, guestRemaining, noteCount, profile.authenticated, profile.points]);
+
+  function handleNoteSaved(note: StudentNote) {
+    setNotesSavedNotice(`已存為課業筆記：${note.title || note.content.slice(0, 20) || "AI 解答"}`);
+    setNotesRefreshKey((key) => key + 1);
+  }
 
   return (
     <div className="dashboard-shell">
@@ -153,13 +174,24 @@ export function DashboardShell({
           error={books.error}
           onRetry={() => void refreshBooks()}
         />
-        <GuestAnswerSection
-          response={guestResponse}
-          status={guestStatus}
-          error={guestError}
-          onAsk={askGuest}
-          onFeedback={sendFeedback}
-        />
+        {profile.authenticated ? (
+          <div className="dashboard-assistant-grid" data-testid="student-assistant">
+            <StudentAiAssistant onNoteSaved={handleNoteSaved} />
+            <StudentNotesSection
+              refreshKey={notesRefreshKey}
+              savedNotice={notesSavedNotice}
+              onCountChange={setNoteCount}
+            />
+          </div>
+        ) : (
+          <GuestAnswerSection
+            response={guestResponse}
+            status={guestStatus}
+            error={guestError}
+            onAsk={askGuest}
+            onFeedback={sendFeedback}
+          />
+        )}
       </div>
     </div>
   );

@@ -5,7 +5,8 @@ export function SelectionBar({
   pageHasText,
   onCopySelection,
   onSelectionToNote,
-  onAskAiAboutSelection
+  onAskAiAboutSelection,
+  onAskGoogleAi
 }: {
   open: boolean;
   selectedText: string;
@@ -14,6 +15,8 @@ export function SelectionBar({
   onCopySelection: () => void;
   onSelectionToNote: () => void;
   onAskAiAboutSelection: () => void;
+  /** R23: shown only for logged-in students — opens the Google AI course assistant. */
+  onAskGoogleAi?: () => void;
 }) {
   if (!open) return null;
 
@@ -33,6 +36,11 @@ export function SelectionBar({
           <button type="button" className="tool-btn ask" onClick={onAskAiAboutSelection}>
             問AI重點
           </button>
+          {onAskGoogleAi ? (
+            <button type="button" className="tool-btn ask google" onClick={onAskGoogleAi} aria-label="用 Google AI 課業助教詢問選取內容">
+              問 Google AI
+            </button>
+          ) : null}
           {copyNotice ? <span className="pdf-select-info">{copyNotice}</span> : null}
         </>
       ) : (

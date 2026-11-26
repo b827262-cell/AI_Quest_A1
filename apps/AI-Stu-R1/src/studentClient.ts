@@ -8,6 +8,10 @@ import type {
   ReaderOutlineResponse,
   SmartBookNote,
   UpdateSmartBookNoteInput,
+  StudentNote,
+  CreateStudentNoteInput,
+  UpdateStudentNoteInput,
+  CreateStudentNoteFromHistoryInput,
   GuestAnswerContent
 } from "@ai-smartbook/schema";
 import type {
@@ -234,6 +238,58 @@ async function httpWithOptionalSession<T>(
   return httpWithSession<T>(path, sessionId, init);
 }
 
+/**
+ * Legacy SmartBookNote view-model plus the R23 `syncVersion`. Deleting or
+ * tombstoning a note sends the stored version; a trailing writer gets
+ * `deleted: false` back and must refresh instead of silently failing.
+ */
+export interface LegacySmartBookNote extends SmartBookNote {
+  syncVersion: number;
+}
+
+/** Map the R23 StudentNote row onto the legacy SmartBookNote view-model. */
+function toLegacySmartBookNote(note: StudentNote): LegacySmartBookNote {
+  return {
+    id: note.id,
+    bookId: note.bookId ?? "",
+    studentId: note.studentId,
+    chapterId: note.chapterId,
+    pageNumber: note.pageNumber,
+    type: note.type,
+    title: note.title || "",
+    content: note.content || null,
+    canvasData: note.canvasData,
+    canvasImageUrl: null,
+    sourceMessageId: note.entryId,
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    syncVersion: note.syncVersion
+  };
+}
+
+/** Legacy create body -> R23 create input (title stays optional). */
+function toCreateStudentNoteInput(input: CreateSmartBookNoteInput): CreateStudentNoteInput {
+  const { canvasImageUrl, sourceMessageId, ...rest } = input;
+  return {
+    type: rest.type,
+    title: rest.title || undefined,
+    content: rest.content ?? "",
+    canvasData: rest.canvasData ?? null,
+    chapterId: rest.chapterId ?? null,
+    pageNumber: rest.pageNumber ?? null,
+    entryId: sourceMessageId ?? null
+  };
+}
+
+/** Legacy update body -> R23 update input. */
+function toUpdateStudentNoteInput(input: UpdateSmartBookNoteInput): UpdateStudentNoteInput {
+  const { canvasImageUrl, content, ...rest } = input;
+  return {
+    ...rest,
+    content: content || undefined
+  };
+}
+
 async function fetchPdfBlob(path: string, sessionId: string): Promise<Blob> {
   const res = await fetch(path, {
     headers: { "X-Student-Session-Id": sessionId },
@@ -373,26 +429,64 @@ export const studentClient = {
   getAppearanceSettings: () =>
     http<{ settings: AppearanceSettings }>("/api/appearance-settings"),
 
-  // ---- Smart Notes -------------------------------------------------------
-  listNotes: (bookId: string) =>
-    http<{ notes: SmartBookNote[] }>(`/api/student/books/${bookId}/notes`),
+  // ---- Student notes (/api/student/notes, R23 contract) ------------------
+  listStudentNotes: (params?: { bookId?: string; offset?: number; limit?: number; includeDeleted?: boolean }) => {
+    const search = new URLSearchParams();
+    if (params?.bookId) search.set("bookId", params.bookId);
+    if (params?.offset != null) search.set("offset", String(params.offset));
+    if (params?.limit != null) search.set("limit", String(params.limit));
+    if (params?.includeDeleted) search.set("includeDeleted", "1");
+    const suffix = search.toString() ? `?${search}` : "";
+    return http<{ notes: StudentNote[]; nextOffset: number | null }>(`/api/student/notes${suffix}`);
+  },
 
-  createNote: (bookId: string, input: CreateSmartBookNoteInput) =>
-    http<{ note: SmartBookNote }>(`/api/student/books/${bookId}/notes`, {
+  createStudentNote: (input: CreateStudentNoteInput) =>
+    http<{ note: StudentNote }>("/api/student/notes", {
       method: "POST",
       body: JSON.stringify(input)
     }),
 
-  updateNote: (bookId: string, noteId: string, input: UpdateSmartBookNoteInput) =>
-    http<{ note: SmartBookNote }>(`/api/student/books/${bookId}/notes/${noteId}`, {
+  updateStudentNote: (noteId: string, input: UpdateStudentNoteInput) =>
+    http<{ note: StudentNote }>(`/api/student/notes/${encodeURIComponent(noteId)}`, {
       method: "PATCH",
       body: JSON.stringify(input)
     }),
 
-  deleteNote: (bookId: string, noteId: string) =>
-    http<{ deleted: boolean }>(`/api/student/books/${bookId}/notes/${noteId}`, {
-      method: "DELETE"
+  deleteStudentNote: (noteId: string, syncVersion: number) =>
+    http<{ deleted: boolean; note: StudentNote }>(
+      `/api/student/notes/${encodeURIComponent(noteId)}?syncVersion=${syncVersion}`,
+      { method: "DELETE" }
+    ),
+
+  createNoteFromHistory: (input: CreateStudentNoteFromHistoryInput) =>
+    http<{ note: StudentNote }>("/api/student/notes/from-history", {
+      method: "POST",
+      body: JSON.stringify(input)
     }),
+
+  // ---- Smart Notes (legacy shape, backed by /api/student/notes) ----------
+  listNotes: (bookId: string) =>
+    studentClient.listStudentNotes({ bookId }).then((r) => ({
+      notes: r.notes.map(toLegacySmartBookNote)
+    })),
+
+  createNote: (bookId: string, input: CreateSmartBookNoteInput) =>
+    studentClient.createStudentNote({ ...toCreateStudentNoteInput(input), bookId }).then((r) => ({
+      note: toLegacySmartBookNote(r.note)
+    })),
+
+  updateNote: (_bookId: string, noteId: string, input: UpdateSmartBookNoteInput) =>
+    studentClient.updateStudentNote(noteId, toUpdateStudentNoteInput(input)).then((r) => ({
+      note: toLegacySmartBookNote(r.note)
+    })),
+
+  // `syncVersion` is required: the caller must send the version it last saw
+  // (which also carries the deleted flag and the freshest row back).
+  deleteNote: (_bookId: string, noteId: string, syncVersion: number) =>
+    studentClient.deleteStudentNote(noteId, syncVersion).then((r) => ({
+      deleted: r.deleted,
+      note: toLegacySmartBookNote(r.note)
+    })),
 
   getBookProgressSummary: (bookId: string, sessionId: string) =>
     httpWithSession<ReaderProgressSummary>(`/api/student/books/${bookId}/progress-summary`, sessionId),

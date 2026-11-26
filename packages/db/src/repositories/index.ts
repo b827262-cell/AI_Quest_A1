@@ -33,6 +33,7 @@ import { makeStudentPasscodeRepo } from "./studentPasscode.repo";
 import { makeStudentUserRepo } from "./studentUser.repo";
 import { makeStudentSessionRepo } from "./studentSession.repo";
 import { makeStudentLearningHistoryRepo } from "./studentLearningHistory.repo";
+import { makeStudentNoteRepo } from "./studentNote.repo";
 import { makeStudentOAuthStateRepo } from "./studentOAuthState.repo";
 
 export * from "./book.repo";
@@ -70,6 +71,7 @@ export * from "./studentUser.repo";
 export * from "./studentPasscode.repo";
 export * from "./studentSession.repo";
 export * from "./studentLearningHistory.repo";
+export * from "./studentNote.repo";
 export * from "./studentOAuthState.repo";
 
 export interface Repositories {
@@ -107,6 +109,7 @@ export interface Repositories {
   studentUsers: ReturnType<typeof makeStudentUserRepo>;
   studentSessions: ReturnType<typeof makeStudentSessionRepo>;
   studentLearningHistory: ReturnType<typeof makeStudentLearningHistoryRepo>;
+  studentNotes: ReturnType<typeof makeStudentNoteRepo>;
   studentOAuthStates: ReturnType<typeof makeStudentOAuthStateRepo>;
 }
 
@@ -147,6 +150,7 @@ export function createRepositories(db: Db): Repositories {
     studentPasscodes: makeStudentPasscodeRepo(db),
     studentSessions: makeStudentSessionRepo(db),
     studentLearningHistory: makeStudentLearningHistoryRepo(db),
+    studentNotes: makeStudentNoteRepo(db),
     studentOAuthStates: makeStudentOAuthStateRepo(db)
   };
 }

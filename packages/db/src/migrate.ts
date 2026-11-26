@@ -815,7 +815,31 @@ const STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_credential_daily_reservations_key ON ai_credential_daily_reservations(reservation_key)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_credential_daily_reservations_credential ON ai_credential_daily_reservations(credential_id, usage_date)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_credential_daily_reservations_request ON ai_credential_daily_reservations(request_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_ai_credential_daily_reservations_status ON ai_credential_daily_reservations(status, usage_date)`
+  `CREATE INDEX IF NOT EXISTS idx_ai_credential_daily_reservations_status ON ai_credential_daily_reservations(status, usage_date)`,
+  // ----- Student notes (R23): owned text / ai_answer / canvas notes. ---------
+  `CREATE TABLE IF NOT EXISTS student_notes (
+    id TEXT PRIMARY KEY NOT NULL,
+    student_id TEXT NOT NULL,
+    entry_id TEXT,
+    book_id TEXT,
+    chapter_id TEXT,
+    page_number INTEGER,
+    type TEXT NOT NULL DEFAULT 'text',
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    canvas_data TEXT,
+    tags TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_detail TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    sync_version INTEGER NOT NULL DEFAULT 1
+  )`,
+  // One note per learning-history entry. Partial: rows without entry_id are exempt.
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_student_notes_entry ON student_notes(student_id, entry_id) WHERE entry_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_student_notes_student ON student_notes(student_id, deleted_at, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_student_notes_book ON student_notes(student_id, book_id, deleted_at, created_at DESC)`
 ];
 
 /**

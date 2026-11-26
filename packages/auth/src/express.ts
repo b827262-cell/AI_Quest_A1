@@ -200,3 +200,5 @@ export function createStudentAuthRouter(
 
   return router;
 }
+
+export { createStudentNotesRouter, MAX_STUDENT_NOTE_BODY_BYTES } from "./student-notes-express";
